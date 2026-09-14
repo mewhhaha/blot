@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+const Input = @effect { .next = Unit -> Int; }
+let values = [1, 2]
+values[Input.next ()] := 3
+return values

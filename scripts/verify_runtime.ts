@@ -7,6 +7,7 @@ const cases = [
   "examples/minimal.blot",
   "examples/relational_observations.blot",
   "examples/literal_rebinding.blot",
+  "examples/deep_rebinding.blot",
   "examples/dynamic_numeric_observations.blot",
   "examples/control_transformers.blot",
   "examples/suspension.blot",

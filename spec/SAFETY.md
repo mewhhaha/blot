@@ -110,6 +110,16 @@ a compiler limit, with remediation to split the relation into a verified helper.
 It does not establish that the program is invalid, and partial proofs never
 authorize access.
 
+Bounded relational evaluation retains the positions and lengths of array
+literals, including nested arrays. A direct read at a known integer position
+selects that position's facts. Copying and freezing preserve the immutable
+contents and length facts. Replacement preserves length, replaces the selected
+position's facts for a known index, and discards position facts for an unknown
+index. These facts also follow top-level lexical bindings in source order;
+rebinding replaces their evidence. They support ordinary array operations,
+including those emitted by indexed rebinding, without relaxing any bounds
+premise or consulting an observed runtime value.
+
 Entailment treats an edge `right -> left` with weight `bound` as the difference
 fact `left - right <= bound`. One proof query runs shortest-path relaxation only
 from the distinct `right` nodes named by its required inequalities; it does not
@@ -205,6 +215,17 @@ Live | Moved | Partial(children)
 Moving a field changes that leaf and its ancestors. Whole-value use requires a
 live root. Aggregates carry the joined obligations of their children, and
 closures carry captured paths.
+
+Record reconstruction merges statically named ownership fields in member
+order. A spread transfers its known live fields into the result; replacing a
+linear field is rejected. Partial moves retain the affected top-level field
+names. A subsequent spread of that binding can reconstruct the record only
+when later members explicitly replace every moved field. Unknown projection
+provenance or ambiguous computed-field overwrites cannot justify that repair.
+The ownership snapshot carries this partial-move state across branches.
+Possible moved fields are joined by union, even for affine records; replacing
+only one branch's moved fields cannot restore whole-record ownership.
+Copying a borrowed array with concrete linear or affine elements is rejected.
 
 An unqualified capture of a symbolic store parameter transfers that parameter's
 ownership authority into the closure. It does not freeze an unknown element type

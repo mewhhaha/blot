@@ -1279,7 +1279,7 @@ function reboundNames(
         if (pattern.tag !== "name" || pattern.qualifier !== "none") {
           fail(
             "BLOT_BAD_REBINDING_TARGET",
-            "`:=` requires one unqualified name. Use `let` to bind a pattern.",
+            "`:=` requires one unqualified root name, optionally followed by fields or array indices. Use `let` to bind a pattern.",
             declaration.span,
           );
         }
@@ -1839,11 +1839,16 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     if (pattern.tag !== "name" || pattern.qualifier !== "none") {
       fail(
         "BLOT_BAD_REBINDING_TARGET",
-        "`:=` requires one unqualified name. Use `let` to bind a pattern.",
+        "`:=` requires one unqualified root name, optionally followed by fields or array indices. Use `let` to bind a pattern.",
         rule.span,
       );
     }
-    return { tag: "shadow", name: pattern.name, value, span: rule.span };
+    return {
+      tag: "shadow",
+      name: pattern.name,
+      value: lowerRebindingPath(rule, pattern, value, context),
+      span: rule.span,
+    };
   }
   if (rule.name === "sequencing") {
     const valueCursor = field(rule, "value");
@@ -2278,7 +2283,124 @@ function lambdaBindingPattern(pattern: Rule): Rule {
   }
 }
 
-function applyTypePrimitive(
+type RebindingProjection =
+  | {
+    readonly kind: "field";
+    readonly target: Expr;
+    readonly name: string;
+    readonly span: Span;
+  }
+  | {
+    readonly kind: "index";
+    readonly target: Expr;
+    readonly index: Expr;
+    readonly span: Span;
+  };
+
+function lowerRebindingPath(
+  rule: Rule,
+  root: Pattern & { readonly tag: "name" },
+  replacement: Expr,
+  context: Context,
+): Expr {
+  const suffixes = fieldList(rule, "suffixes");
+  if (suffixes.length === 0) return replacement;
+  const declarations: Decl[] = [];
+  const prefixes: Decl[] = [];
+  const path: RebindingProjection[] = [];
+  let target: Expr = { tag: "var", name: root.name, span: root.span };
+  for (const [depth, cursor] of suffixes.entries()) {
+    const suffix = asRule(unwrap(cursor), "rebinding suffix");
+    const span = { start: root.span.start, end: suffix.span.end };
+    if (suffix.name === "field_suffix") {
+      const name = tokenOf(required(suffix, "field")).text;
+      path.push({ kind: "field", target, name, span });
+      target = bindRebindingValue(
+        `pathField$${rule.span.start}$${depth}`,
+        { tag: "field", target, name, span },
+        prefixes,
+      );
+      continue;
+    }
+    expect(suffix.name === "index_suffix", "unexpected rebinding suffix");
+    const index = bindRebindingValue(
+      `pathIndex$${rule.span.start}$${depth}`,
+      lowerValue(asRule(required(suffix, "value"), "index"), context),
+      declarations,
+    );
+    path.push({ kind: "index", target, index, span });
+    if (depth + 1 < suffixes.length) {
+      target = bindRebindingValue(
+        `pathElement$${root.span.start}$${depth}`,
+        applyBinaryPrimitive("@array.get", target, index, span),
+        prefixes,
+      );
+    }
+  }
+  let result = bindRebindingValue(
+    `pathReplacement$${rule.span.start}`,
+    replacement,
+    declarations,
+  );
+  declarations.push(...prefixes);
+  for (const projection of path.reverse()) {
+    const { target, span } = projection;
+    if (projection.kind === "field") {
+      result = {
+        tag: "shape",
+        members: [
+          { tag: "spread", value: target },
+          { tag: "field", name: projection.name, value: result },
+        ],
+        span,
+      };
+    } else {
+      const copied: Expr = {
+        tag: "apply",
+        fn: { tag: "intrinsic", name: "@array.copy", span },
+        arg: {
+          tag: "apply",
+          fn: { tag: "intrinsic", name: "@linear.borrow", span },
+          arg: target,
+          span,
+        },
+        span,
+      };
+      result = {
+        tag: "apply",
+        fn: applyBinaryPrimitive("@array.set", copied, projection.index, span),
+        arg: result,
+        span,
+      };
+    }
+  }
+  return {
+    tag: "block",
+    declarations,
+    result,
+    resultEffects: "pure",
+    span: rule.span,
+  };
+}
+
+function bindRebindingValue(
+  name: string,
+  value: Expr,
+  declarations: Decl[],
+): Expr {
+  const span = value.span;
+  declarations.push({
+    tag: "binding",
+    kind: "let",
+    tags: [],
+    pattern: { tag: "name", name, qualifier: "none", span },
+    value,
+    span,
+  });
+  return { tag: "var", name, span };
+}
+
+function applyBinaryPrimitive(
   name: string,
   first: Expr,
   second: Expr,
@@ -2340,9 +2462,14 @@ function annotateLambda(
   }
   let primitive = "@type.arrow";
   if (deferred) primitive = "@type.deferred_arrow";
-  let signature = applyTypePrimitive(primitive, input, output, span);
+  let signature = applyBinaryPrimitive(primitive, input, output, span);
   if (effects !== null) {
-    signature = applyTypePrimitive("@type.performs", signature, effects, span);
+    signature = applyBinaryPrimitive(
+      "@type.performs",
+      signature,
+      effects,
+      span,
+    );
   }
   const tails = effectRowTailUses(parameter);
   const unconstrained = tails.find((tail) => tail.count < 2);

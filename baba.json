@@ -75,6 +75,18 @@
         }
       },
       {
+        "rule": "rebinding_suffix",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "index_suffix",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "sequencing",
         "boundary": {
           "kind": "root"

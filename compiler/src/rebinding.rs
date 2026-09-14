@@ -19,6 +19,26 @@ struct Validation {
     next_frame: u32,
 }
 
+pub(crate) fn target_name(cst: &CompactCst<'_>, rebinding: u32) -> Result<Option<String>, String> {
+    let pattern = field(cst, rebinding, "pattern")?
+        .ok_or_else(|| "a rebinding has no root pattern".to_owned())?;
+    let pattern = rule(pattern)?;
+    if field(cst, pattern, "qualifier")?.is_some() {
+        return Ok(None);
+    }
+    let core = field(cst, pattern, "value")?
+        .ok_or_else(|| "a rebinding root pattern has no value".to_owned())?;
+    let core = cst.unwrap(core)?;
+    let Cursor::Token(token) = core else {
+        return Ok(None);
+    };
+    let kind = cst.token_kind(token)?;
+    if !matches!(kind.as_str(), "IDENT" | "TYPE_IDENT") || cst.text(core)? == "_" {
+        return Ok(None);
+    }
+    Ok(Some(cst.text(core)?))
+}
+
 pub(crate) fn diagnostics(cst: &CompactCst<'_>) -> Result<Vec<Diagnostic>, String> {
     let mut validation = Validation {
         diagnostics: Vec::new(),
@@ -136,13 +156,13 @@ fn visit_statement(
     }
 
     if name == "rebinding" {
+        for suffix in field_list(cst, rule_id, "suffixes")? {
+            visit_cursor(cst, suffix, scope, validation)?;
+        }
         if let Some(value) = field(cst, rule_id, "value")? {
             visit_cursor(cst, value, scope, validation)?;
         }
-        let name = field(cst, rule_id, "name")?
-            .map(|cursor| token_text(cst, cursor))
-            .transpose()?
-            .flatten();
+        let name = target_name(cst, rule_id)?;
         let Some(name) = name else {
             return Ok(());
         };

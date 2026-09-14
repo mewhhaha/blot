@@ -1,0 +1,30 @@
+open import "blot:prelude"
+
+const mixed :: Int -> Int
+const mixed = fn replacement => do:
+  let units :: [{ .x = Int; }]
+  let units = freeze [{ .x = 10; }, { .x = 20; }]
+  let world = { .units = units; .tick = 0; }
+  let previous = world
+  world.units[1].x := replacement
+  world.tick := world.tick + 1
+  return
+    (@array.get previous.units 1).x + (@array.get world.units 1).x + world.tick
+
+const guarded :: (Int, Int) -> Int
+const guarded = fn (index, replacement) => do:
+  let values = [10, 20, 30]
+  if index >= 0 && index < Array.length values:
+    values[index] := replacement
+
+  return Array.fold (values, 0, fn (sum, value) => sum + value)
+
+const counted :: Int -> Int
+const counted = fn count => do:
+  let state = { .position = { .x = 0; .y = 7; }; }
+  for Iter.range (0, count):
+    state.position.x := state.position.x + 1
+
+  return state.position.x + state.position.y
+
+return { .mixed; .guarded; .counted; }

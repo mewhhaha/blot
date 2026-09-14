@@ -718,6 +718,9 @@ the empty row rather than an unwritten one.
 
 ```blot
 name := value
+object.position.x := value
+array[index] := value
+world.units[index].position.x := value
 ```
 
 `:=` is immutable shadowing, not assignment. It advances a lexical binding
@@ -753,13 +756,47 @@ text literals are widened to their stable domains at this boundary. The previous
 polymorphic scheme is retained. Use another `let` or `const` to shadow a name
 with a different type.
 
+For an unannotated record, tuple, or array literal, this widening also applies
+to integer and text literal leaves. Thus `let point = { .x = 0; }` permits
+`point.x := 3`, and an inferred text field can change from `"Ada"` to
+`"Lin"`. Explicit signatures and requirements retain their refinements.
+The initializer's ordinary inferred type remains precise; the wider type
+belongs to its rebinding lineage. A simple alias carries that stable type into
+its new lineage.
+
 A declared `Bool` accumulator initialized with `False` retains `Bool` when a
 runtime loop carries it alongside numeric state. Branches may rebind it to
 either constructor, and both exhaustion and `break` return the current value
 without narrowing the lineage to its initial constructor.
 
-Only a single name may appear to the left of `:=`. A `:=` in a `for` body
-defines one of that loop's accumulator fields only when the target comes from
+The target is an unqualified root name followed by zero or more field or array
+index projections. Each field must already exist. A field update rebuilds the
+records along the path using ordinary spread and replacement:
+
+```blot
+object.position.x := 3
+// The root is rebound to:
+// { ...object; .position = { ...object.position; .x = 3; }; }
+```
+
+An indexed update rebuilds the array with
+`@array.set (@array.copy (&array)) index value`. The copy preserves earlier
+shared values and costs O(length) in source semantics; an existing
+last-reference proof may eliminate its physical copy. Nested paths copy each
+array along the path and rebuild each enclosing record. Ordinary ownership
+rules still apply: sharing an owned array requires `freeze`, and copying or
+spreading cannot duplicate linear resources.
+
+Index expressions are evaluated once, from left to right, followed by the
+replacement once, before reconstruction transfers owned fields. Each path
+prefix is retained once. All are pure value positions, and source expressions
+can read the original root. Every index must be proved
+in bounds under the same rules as direct `@array.get` and `@array.set`;
+out-of-bounds and unproved indices are rejected. Brackets here are update-target
+syntax; indexed reads continue to use the array API.
+
+A path advances only its root's lineage. A `:=` in a `for` body defines that
+root as an accumulator field only when the root comes from
 the enclosing scope, including when the rebinding is written inside a statement
 conditional. A loop-pattern name or a name introduced in the body rebinds only
 its iteration-local lineage. A `:=` inside a nested `for` belongs to the inner
@@ -2703,6 +2740,12 @@ Every branch starts from the same ownership state and must end in an agreeing
 state. A linear binding consumed on only one branch is rejected. An affine
 binding may be consumed on zero or one branch but never twice.
 
+A record spread transfers statically named owned fields into the new record.
+Replacing a linear field is rejected. After moving a field out, a spread may
+reconstruct the record if later members replace every moved field; this rule
+also applies to deep rebinding. A possible move on either branch must be
+accounted for. Ambiguous computed-field overwrites remain rejected.
+
 When both arms of a runtime branch return a successor carrying the same affine
 Store authority, the joined value carries that authority. The arms are
 exclusive, so joining them does not create an alias. If either arm shares or
@@ -2881,7 +2924,7 @@ to the exact binding identity and source occurrence, so one branch's consumption
 cannot authorize another branch's update. This is not mutation in the language:
 the source binding is unavailable after the consuming use. Updating a shared
 Array is rejected rather than implemented by an implicit persistent copy; source
-requests that boundary with `Array.copy`.
+requests that boundary with `Array.copy` or the indexed rebinding syntax (§4.4).
 
 `@[assert.reuse]` asks the compiler to verify that every Store update in that
 function's residual frame used precisely this already-proved path. It does not

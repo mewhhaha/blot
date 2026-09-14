@@ -255,14 +255,20 @@ impl<'a> Inference<'a> {
                 if elements.iter().any(|element| element.spread) {
                     return Err(Refusal::Unsupported);
                 }
-                // Element facts do not establish the array's length or contents.
-                Ok(vec![Outcome {
-                    value: Operand {
-                        length: Some(Term::Literal(elements.len().into())),
-                        ..Operand::default()
-                    },
+                let mut outcomes = self.aggregate(
+                    module,
+                    environment,
+                    elements
+                        .iter()
+                        .enumerate()
+                        .map(|(index, element)| (index.to_string(), element.value))
+                        .collect(),
                     state,
-                }])
+                )?;
+                for outcome in &mut outcomes {
+                    outcome.value.length = Some(Term::Literal(elements.len().into()));
+                }
+                Ok(outcomes)
             }
             Expression::Block {
                 declarations,
@@ -633,7 +639,8 @@ impl<'a> Inference<'a> {
         }
         let first = &arguments["0"];
         let value = match name {
-            "@linear.own" | "@linear.borrow" | "@linear.maybe" => first.clone(),
+            "@linear.own" | "@linear.borrow" | "@linear.maybe" | "@linear.freeze"
+            | "@array.copy" => first.clone(),
             "@array.len" | "@region.length" => {
                 let length = first.length.clone().unwrap_or_else(|| self.fresh_term());
                 state
@@ -745,10 +752,25 @@ impl<'a> Inference<'a> {
                 length: first.length.clone().map(|length| shift(length, 1.into())),
                 ..Operand::default()
             },
-            "@array.set" => Operand {
-                length: first.length.clone(),
-                ..Operand::default()
+            "@array.get" => match &arguments["1"].scalar {
+                Some(Term::Literal(index)) => {
+                    project(first, &index.to_string()).unwrap_or_default()
+                }
+                _ => self.unknown(),
             },
+            "@array.set" => {
+                let mut value = Operand {
+                    length: first.length.clone(),
+                    ..Operand::default()
+                };
+                if let Some(Term::Literal(index)) = &arguments["1"].scalar {
+                    value.fields = first.fields.clone();
+                    value
+                        .fields
+                        .insert(index.to_string(), arguments["2"].clone());
+                }
+                value
+            }
             "@panic" => return Ok(Vec::new()),
             _ => self.unknown(),
         };

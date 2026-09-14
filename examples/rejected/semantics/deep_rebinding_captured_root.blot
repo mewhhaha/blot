@@ -1,0 +1,5 @@
+let point = { .x = 0; }
+let update = fn () => do:
+  point.x := 1
+  return point
+return update

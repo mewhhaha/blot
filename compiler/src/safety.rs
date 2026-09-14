@@ -950,7 +950,11 @@ impl Analysis<'_> {
                 };
                 if matches!(
                     name.as_str(),
-                    "@linear.own" | "@linear.borrow" | "@linear.maybe"
+                    "@linear.own"
+                        | "@linear.borrow"
+                        | "@linear.maybe"
+                        | "@linear.freeze"
+                        | "@array.copy"
                 ) && arguments.len() == 1
                 {
                     return self.array_length(arguments[0], scope);
@@ -1677,7 +1681,7 @@ impl Analysis<'_> {
         expression: ExpressionId,
         scope: &Scope,
     ) -> Option<inference::Outcome> {
-        if !self.infer_relations || scope.top_level {
+        if !self.infer_relations {
             return None;
         }
         let mut inference = Inference::new(self.context, self.next_identity);

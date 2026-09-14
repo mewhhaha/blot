@@ -1,0 +1,5 @@
+let consume = fn !value => @int.add value 1
+let !token = 41
+let values = [fn () => consume (!token)]
+values[0] := fn () => 1
+return values

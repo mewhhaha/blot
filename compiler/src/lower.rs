@@ -18,6 +18,11 @@ enum EscapeBoundary {
     ValueCondition,
 }
 
+enum RebindingProjection {
+    Field { name: String, span: Span },
+    Index { index: ExpressionId, span: Span },
+}
+
 #[derive(Clone)]
 struct LoopControl {
     carried: Vec<String>,
@@ -728,8 +733,9 @@ fn lower_declaration(
                 ..
             } = arena.patterns[pattern.0 as usize].clone()
             else {
-                return Err("BLOT_BAD_REBINDING_TARGET: `:=` requires one unqualified name. Use `let` to bind a pattern.".to_owned());
+                return Err("BLOT_BAD_REBINDING_TARGET: `:=` requires one unqualified root name, optionally followed by fields or array indices. Use `let` to bind a pattern.".to_owned());
             };
+            let value = lower_rebinding_path(cst, rule, &name, value, context, arena)?;
             Ok(arena.declaration(Declaration::Shadow { name, value, span }))
         }
         "sequencing" => {
@@ -2500,8 +2506,8 @@ fn collect_rebound_names(
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
         if cst.rule_name(statement)? == "rebinding" {
-            let Some(name) = unqualified_rebinding_name(cst, statement)? else {
-                return Err("BLOT_BAD_REBINDING_TARGET: `:=` requires one unqualified name. Use `let` to bind a pattern.".to_owned());
+            let Some(name) = crate::rebinding::target_name(cst, statement)? else {
+                return Err("BLOT_BAD_REBINDING_TARGET: `:=` requires one unqualified root name, optionally followed by fields or array indices. Use `let` to bind a pattern.".to_owned());
             };
             if !shadowed.contains(&name) && !rebound.contains(&name) {
                 rebound.push(name);
@@ -2568,24 +2574,163 @@ fn collect_rebound_names(
     Ok(())
 }
 
-fn unqualified_rebinding_name(
+fn lower_rebinding_path(
     cst: &CompactCst<'_>,
-    rebinding: u32,
-) -> Result<Option<String>, String> {
-    let pattern = as_rule(required(cst, rebinding, "pattern")?)?;
-    require_rule(cst, pattern, "binding_pattern")?;
-    if cst.field(pattern, "qualifier")?.is_some() {
-        return Ok(None);
+    rule: u32,
+    name: &str,
+    replacement: ExpressionId,
+    context: &LoweringContext<'_>,
+    arena: &mut AstArena,
+) -> Result<ExpressionId, String> {
+    let suffixes = cst.field_list(rule, "suffixes")?;
+    if suffixes.is_empty() {
+        return Ok(replacement);
     }
-    let core = cst.unwrap(required(cst, pattern, "value")?)?;
-    let Cursor::Token(token) = core else {
-        return Ok(None);
-    };
-    let kind = cst.token_kind(token)?;
-    if !matches!(kind.as_str(), "IDENT" | "TYPE_IDENT") || cst.text(core)? == "_" {
-        return Ok(None);
+    let span = cst.span(Cursor::Rule(rule))?;
+    let root_span = cst.span(required(cst, rule, "pattern")?)?;
+    let mut target = variable(name, root_span, arena);
+    let mut declarations = Vec::new();
+    let mut prefixes = Vec::new();
+    let mut path = Vec::new();
+    for (depth, suffix) in suffixes.iter().enumerate() {
+        let suffix = unwrapped_rule(cst, *suffix)?;
+        let projection_span = Span {
+            start: root_span.start,
+            end: cst.span(Cursor::Rule(suffix))?.end,
+        };
+        let projection = match cst.rule_name(suffix)? {
+            "field_suffix" => {
+                let name = token_text(cst, required(cst, suffix, "field")?)?;
+                let previous = field_expression(target, &name, projection_span, arena);
+                // Checking the old field also rejects a misspelled leaf, even
+                // when record width subtyping would accept the rebuilt record.
+                let next = bind_rebinding_value(
+                    &format!("pathField${}${depth}", span.start),
+                    previous,
+                    &mut prefixes,
+                    arena,
+                );
+                path.push((
+                    target,
+                    RebindingProjection::Field {
+                        name,
+                        span: projection_span,
+                    },
+                ));
+                target = next;
+                continue;
+            }
+            "index_suffix" => {
+                let index = lower_value(cst, required(cst, suffix, "value")?, context, arena)?;
+                let index = bind_rebinding_value(
+                    &format!("pathIndex${}${depth}", span.start),
+                    index,
+                    &mut declarations,
+                    arena,
+                );
+                RebindingProjection::Index {
+                    index,
+                    span: projection_span,
+                }
+            }
+            other => return Err(format!("unexpected rebinding suffix {other}")),
+        };
+        if let RebindingProjection::Index { index, span } = &projection {
+            path.push((
+                target,
+                RebindingProjection::Index {
+                    index: *index,
+                    span: *span,
+                },
+            ));
+            if depth + 1 < suffixes.len() {
+                let previous = apply_binary_primitive("@array.get", target, *index, *span, arena);
+                target = bind_rebinding_value(
+                    &format!("pathElement${}${depth}", root_span.start),
+                    previous,
+                    &mut prefixes,
+                    arena,
+                );
+            }
+        }
     }
-    Ok(Some(cst.text(core)?))
+    // Source expressions may read the original root. Finish those reads
+    // before projections transfer any owned fields for reconstruction.
+    let mut result = bind_rebinding_value(
+        &format!("pathReplacement${}", span.start),
+        replacement,
+        &mut declarations,
+        arena,
+    );
+    declarations.extend(prefixes);
+    for (target, projection) in path.into_iter().rev() {
+        result = match projection {
+            RebindingProjection::Field { name, span } => arena.expression(Expression::Shape {
+                members: vec![
+                    ShapeMember::Spread { value: target },
+                    ShapeMember::Field {
+                        name,
+                        value: result,
+                    },
+                ],
+                span,
+            }),
+            RebindingProjection::Index { index, span } => {
+                let borrow = arena.expression(Expression::Intrinsic {
+                    name: "@linear.borrow".to_owned(),
+                    span,
+                });
+                let borrowed = arena.expression(Expression::Apply {
+                    function: borrow,
+                    argument: target,
+                    span,
+                });
+                let copy = arena.expression(Expression::Intrinsic {
+                    name: "@array.copy".to_owned(),
+                    span,
+                });
+                let copied = arena.expression(Expression::Apply {
+                    function: copy,
+                    argument: borrowed,
+                    span,
+                });
+                let function = apply_binary_primitive("@array.set", copied, index, span, arena);
+                arena.expression(Expression::Apply {
+                    function,
+                    argument: result,
+                    span,
+                })
+            }
+        };
+    }
+    Ok(arena.expression(Expression::Block {
+        declarations,
+        result,
+        result_effects: ResultEffects::Pure,
+        span,
+    }))
+}
+
+fn bind_rebinding_value(
+    name: &str,
+    value: ExpressionId,
+    declarations: &mut Vec<DeclarationId>,
+    arena: &mut AstArena,
+) -> ExpressionId {
+    let span = arena.expression_span(value);
+    let pattern = arena.pattern(Pattern::Name {
+        name: name.to_owned(),
+        qualifier: Qualifier::None,
+        span,
+    });
+    declarations.push(arena.declaration(Declaration::Binding {
+        kind: DeclarationKind::Let,
+        tags: Vec::new(),
+        pattern,
+        value,
+        span,
+    }));
+    variable(name, span, arena)
 }
 
 fn pattern_names_from_cst(
@@ -2910,7 +3055,7 @@ fn lambda_binding_pattern(cst: &CompactCst<'_>, mut cursor: Cursor) -> Result<Cu
     }
 }
 
-fn apply_type_primitive(
+fn apply_binary_primitive(
     name: &str,
     first: ExpressionId,
     second: ExpressionId,
@@ -2997,9 +3142,9 @@ fn annotate_lambda(
     } else {
         "@type.arrow"
     };
-    let mut signature = apply_type_primitive(primitive, input, output, span, arena);
+    let mut signature = apply_binary_primitive(primitive, input, output, span, arena);
     if let Some(effects) = effects {
-        signature = apply_type_primitive("@type.performs", signature, effects, span, arena);
+        signature = apply_binary_primitive("@type.performs", signature, effects, span, arena);
     }
     let tails = effect_row_tail_uses(cst, Cursor::Rule(parameter))?;
     if let Some(tail) = tails.iter().find(|tail| tail.count < 2) {

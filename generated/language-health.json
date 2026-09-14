@@ -244,12 +244,14 @@
     "BLOT_JSON_PARSE",
     "BLOT_LIMIT",
     "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+    "BLOT_LINEAR_ARRAY_COPY",
     "BLOT_LINEAR_ARRAY_OVERWRITE",
     "BLOT_LINEAR_ARRAY_READ",
     "BLOT_LINEAR_ARRAY_SPREAD",
     "BLOT_LINEAR_BRANCH_DISAGREEMENT",
     "BLOT_LINEAR_CLOSURE_ESCAPES",
     "BLOT_LINEAR_CONSUMED_TWICE",
+    "BLOT_LINEAR_FIELD_OVERWRITE",
     "BLOT_LINEAR_FREEZE",
     "BLOT_LINEAR_HANDLER_MAY_ABORT",
     "BLOT_LINEAR_NOT_CONSUMED",
@@ -757,7 +759,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 17790
+      "lines": 18065
     },
     {
       "path": "compiler/src/hir.rs",
@@ -772,20 +774,24 @@
       "lines": 8199
     },
     {
+      "path": "compiler/src/ownership.rs",
+      "lines": 7457
+    },
+    {
       "path": "compiler/src/eval.rs",
       "lines": 7438
     },
     {
-      "path": "compiler/src/ownership.rs",
-      "lines": 7345
-    },
-    {
       "path": "compiler/src/lower.rs",
-      "lines": 4906
+      "lines": 5051
     },
     {
       "path": "compiler/src/frontend_plan.rs",
-      "lines": 3727
+      "lines": 3780
+    },
+    {
+      "path": "src/syntax/lower.ts",
+      "lines": 3678
     },
     {
       "path": "compiler/src/value_capsule.rs",
@@ -794,10 +800,6 @@
     {
       "path": "src/prelude/prelude.blot",
       "lines": 3571
-    },
-    {
-      "path": "src/syntax/lower.ts",
-      "lines": 3551
     },
     {
       "path": "compiler/src/primitives.rs",

@@ -240,6 +240,13 @@ pub enum Type {
 
 pub(crate) fn record_update_type(base: Type, updates: TypeRow) -> Type {
     match base {
+        Type::Bottom => Type::Bottom,
+        Type::Union(members) => join_types(
+            members
+                .into_iter()
+                .map(|member| record_update_type(member, updates.clone()))
+                .collect(),
+        ),
         Type::Record(fields) => {
             let mut fields = fields.into_iter().collect::<Vec<_>>();
             let mut positions = fields
@@ -1248,6 +1255,16 @@ impl TypeEnvironment {
             }
         }
         self.parent.as_ref()?.lookup_stable(name, checker)
+    }
+
+    fn lineage_type(&self, name: &str) -> Option<Typing> {
+        if let Some(typing) = self.stable_names.get(name) {
+            return Some(typing.clone());
+        }
+        if self.names.contains_key(name) || self.opens.iter().any(|opened| opened.contains(name)) {
+            return None;
+        }
+        self.parent.as_ref()?.lineage_type(name)
     }
 
     fn binding_phase(&self, name: &str) -> Option<Phase> {
@@ -5079,8 +5096,15 @@ impl Checker {
                                 Typing::Mono(type_) => type_,
                                 Typing::Scheme { body, .. } => body,
                             };
-                            match self.settle(type_.clone(), true) {
+                            let settled = self.settle(type_.clone(), true);
+                            match &settled {
                                 Type::Variant { cases, open: false } if cases.len() > 1 => {
+                                    Some((name.clone(), typing))
+                                }
+                                Type::Record(_)
+                                    if closed_checked_type(&settled, &mut HashSet::new())
+                                        && !contains_bottom(&settled) =>
+                                {
                                     Some((name.clone(), typing))
                                 }
                                 _ => None,
@@ -5455,11 +5479,50 @@ impl Checker {
                 let exact_record = self.exact_record_expression(module, value, types);
                 let exact_record_order =
                     self.exact_record_order_expression(module, value, types, values);
+                let stable_literal = if !signed
+                    && matches!(
+                        module.arena.patterns[pattern.0 as usize],
+                        Pattern::Name { .. }
+                    )
+                    && matches!(
+                        module.arena.expressions[value.0 as usize],
+                        Expression::Shape { .. }
+                            | Expression::Array { .. }
+                            | Expression::Tuple { .. }
+                    ) {
+                    widen_aggregate_literals(self, path, module, value, &inferred.type_)
+                } else if !signed
+                    && let Expression::Var { name, .. } =
+                        &module.arena.expressions[value.0 as usize]
+                {
+                    types
+                        .lineage_type(name)
+                        .map(|typing| self.instantiate(typing))
+                } else {
+                    None
+                };
+                for name in &names {
+                    Rc::make_mut(&mut types.stable_names).remove(name);
+                }
                 self.bind_pattern(module, pattern, inferred.type_.clone(), types);
                 for (name, typing) in loop_stable_names {
                     Rc::make_mut(&mut types.stable_names).insert(name, typing);
                 }
                 if let Pattern::Name { name, .. } = &module.arena.patterns[pattern.0 as usize] {
+                    if let Some(stable) = stable_literal {
+                        let stable = if generalized {
+                            Typing::Scheme {
+                                level: self.level.get(),
+                                body: substitute_inference_variables(
+                                    self.qualify_type(stable),
+                                    &scheme_replacements,
+                                ),
+                            }
+                        } else {
+                            Typing::Mono(stable)
+                        };
+                        Rc::make_mut(&mut types.stable_names).insert(name.clone(), stable);
+                    }
                     if exact_record {
                         Rc::make_mut(&mut types.exact_records).insert(name.clone());
                     } else {
@@ -5581,6 +5644,12 @@ impl Checker {
                             }) =>
                     {
                         Type::Variant { cases, open: false }
+                    }
+                    stable @ Type::Record(_)
+                        if closed_checked_type(&stable, &mut HashSet::new())
+                            && !contains_bottom(&stable) =>
+                    {
+                        stable
                     }
                     _ => previous,
                 };
@@ -5801,15 +5870,24 @@ impl Checker {
                     .contains(&expression_id))
             && intrinsic_head(module, expression_id) != Some("@import")
         {
+            let type_ = if module
+                .arena
+                .synthetic_runtime_type_expressions
+                .contains(&expression_id)
+            {
+                self.stable_argument_type(module, expression_id, &inferred.type_, environment)
+            } else {
+                inferred.type_.clone()
+            };
             let mut expression_types = self.expression_types.borrow_mut();
             if self.specialization_depth.get() == 0 {
-                expression_types.insert(path.to_owned(), expression_id, inferred.type_.clone());
+                expression_types.insert(path.to_owned(), expression_id, type_);
             } else {
                 // A contextual call must not replace the generic body fact
                 // shared by other instantiations of the same source expression.
                 expression_types
                     .entry(path.to_owned(), expression_id)
-                    .or_insert_with(|| inferred.type_.clone());
+                    .or_insert(type_);
             }
         }
         inferred.map_err(|mut diagnostic| {
@@ -5831,6 +5909,71 @@ impl Checker {
             }
             diagnostic
         })
+    }
+
+    fn stable_argument_type(
+        &self,
+        module: &Module,
+        expression: ExpressionId,
+        type_: &Type,
+        environment: &TypeEnvironment,
+    ) -> Type {
+        match &module.arena.expressions[expression.0 as usize] {
+            Expression::Var { name, .. } => environment
+                .lineage_type(name)
+                .map(|typing| self.instantiate(typing))
+                .unwrap_or_else(|| type_.clone()),
+            Expression::Tuple { elements, .. } => {
+                let Type::Record(fields) = type_ else {
+                    return type_.clone();
+                };
+                Type::Record(
+                    fields
+                        .iter()
+                        .map(|(name, type_)| {
+                            let index = name
+                                .parse::<usize>()
+                                .expect("tuple field has a numeric index");
+                            (
+                                name.clone(),
+                                self.stable_argument_type(
+                                    module,
+                                    elements[index],
+                                    type_,
+                                    environment,
+                                ),
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            Expression::Shape { members, .. } => {
+                let Type::Record(fields) = type_ else {
+                    return type_.clone();
+                };
+                Type::Record(
+                    fields
+                        .iter()
+                        .map(|(name, type_)| {
+                            let value = members.iter().rev().find_map(|member| match member {
+                                ShapeMember::Field { name: field, value } if field == name => {
+                                    Some(*value)
+                                }
+                                _ => None,
+                            });
+                            let type_ = match value {
+                                Some(value) => {
+                                    self.stable_argument_type(module, value, type_, environment)
+                                }
+                                None => type_.clone(),
+                            };
+                            (name.clone(), type_)
+                        })
+                        .collect(),
+                )
+            }
+            _ => type_.clone(),
+        }
     }
 
     fn infer_inner(
@@ -15043,6 +15186,138 @@ fn admits_omission(type_: &Type) -> bool {
         Type::Forall { body, .. } => admits_omission(body),
         Type::Union(members) => members.iter().any(admits_omission),
         _ => false,
+    }
+}
+
+fn widen_aggregate_literals(
+    checker: &Checker,
+    path: &str,
+    module: &Module,
+    expression: ExpressionId,
+    type_: &Type,
+) -> Option<Type> {
+    if matches!(type_, Type::Variable(_)) {
+        return widen_aggregate_literals(
+            checker,
+            path,
+            module,
+            expression,
+            &checker.settle(type_.clone(), true),
+        );
+    }
+    match (&module.arena.expressions[expression.0 as usize], type_) {
+        (
+            Expression::Shape { .. }
+            | Expression::Tuple { .. }
+            | Expression::Array { .. }
+            | Expression::Int { .. }
+            | Expression::Text { .. },
+            Type::Union(members),
+        ) => {
+            let mut widened = false;
+            let members = members
+                .iter()
+                .map(|member| {
+                    match widen_aggregate_literals(checker, path, module, expression, member) {
+                        Some(member) => {
+                            widened = true;
+                            member
+                        }
+                        None => member.clone(),
+                    }
+                })
+                .collect();
+            widened.then(|| join_types(members))
+        }
+        (
+            Expression::Int { .. },
+            Type::Range {
+                domain: Domain::Int,
+                low,
+                high,
+            },
+        ) if low.is_some() || high.is_some() => Some(int_type()),
+        (
+            Expression::Text { .. },
+            Type::Range {
+                domain: Domain::Text,
+                low,
+                high,
+            },
+        ) if low.is_some() || high.is_some() => Some(text_type()),
+        (Expression::Shape { members, .. }, Type::Record(fields)) => {
+            let mut widened = false;
+            let fields = fields.iter().map(|(name, type_)| {
+                let expression = members.iter().rev().find_map(|member| match member {
+                    ShapeMember::Field { name: field, value } if field == name => Some(Some(*value)),
+                    ShapeMember::Computed { name: field, value }
+                        if matches!(&module.arena.expressions[field.0 as usize], Expression::Text { value, .. } if value == name) => Some(Some(*value)),
+                    ShapeMember::Spread { .. } => Some(None),
+                    ShapeMember::Computed { name: field, .. }
+                        if !matches!(&module.arena.expressions[field.0 as usize], Expression::Text { .. }) => Some(None),
+                    _ => None,
+                }).flatten();
+                let replacement = expression.and_then(|expression| widen_aggregate_literals(checker, path, module, expression, type_));
+                let type_ = match replacement {
+                    Some(type_) => { widened = true; type_ }
+                    None => type_.clone(),
+                };
+                (name.clone(), type_)
+            }).collect();
+            widened.then_some(Type::Record(fields))
+        }
+        (Expression::Tuple { elements, .. }, Type::Record(fields)) => {
+            let mut widened = false;
+            let fields = fields
+                .iter()
+                .map(|(name, type_)| {
+                    let replacement = name
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|index| elements.get(index))
+                        .and_then(|expression| {
+                            widen_aggregate_literals(checker, path, module, *expression, type_)
+                        });
+                    let type_ = match replacement {
+                        Some(type_) => {
+                            widened = true;
+                            type_
+                        }
+                        None => type_.clone(),
+                    };
+                    (name.clone(), type_)
+                })
+                .collect();
+            widened.then_some(Type::Record(fields))
+        }
+        (Expression::Array { elements, .. }, Type::Array(_)) => {
+            let mut widened = false;
+            let elements = elements
+                .iter()
+                .map(|element| {
+                    let type_ = checker
+                        .analysis_expression_types
+                        .borrow()
+                        .get(path, &element.value)
+                        .cloned()?;
+                    if element.spread {
+                        return match checker.settle(type_, true) {
+                            Type::Array(element) => Some(Rc::unwrap_or_clone(element)),
+                            _ => None,
+                        };
+                    }
+                    match widen_aggregate_literals(checker, path, module, element.value, &type_) {
+                        Some(type_) => {
+                            widened = true;
+                            Some(type_)
+                        }
+                        None => Some(type_),
+                    }
+                })
+                .collect::<Option<Vec<_>>>()?;
+            widened.then(|| Type::Array(Rc::new(join_types(elements))))
+        }
+        _ => None,
     }
 }
 

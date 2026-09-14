@@ -97,6 +97,8 @@ export const compactRuleNames = [
   "continuing",
   "annotated_pattern",
   "lambda_result",
+  "rebinding_suffix",
+  "index_suffix",
 ] as const;
 
 // Stable field identifiers. Retired names remain here so compiler snapshots do
@@ -273,6 +275,7 @@ export const compactRepeatedFields = [
   "application_argument.suffixes",
   "program.declarations",
   "qualified_name.rest",
+  "rebinding.suffixes",
   "shape.members",
   "shape_pattern.fields",
   "statement_suite.statements",

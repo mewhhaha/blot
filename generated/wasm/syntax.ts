@@ -235,6 +235,8 @@ export type RuleName =
   | "indented_value"
   | "declaration_tag"
   | "rebinding"
+  | "rebinding_suffix"
+  | "index_suffix"
   | "sequencing"
   | "iteration"
   | "iteration_source"
@@ -396,6 +398,16 @@ export interface DeclarationTagCursor extends RuleCursorBase<"declaration_tag"> 
 
 export interface RebindingCursor extends RuleCursorBase<"rebinding"> {
   field(name: "pattern"): BindingPatternCursor;
+  field(name: "suffixes"): ReadonlyArray<RebindingSuffixCursor>;
+  field(name: "value"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface RebindingSuffixCursor extends RuleCursorBase<"rebinding_suffix"> {
+}
+
+export interface IndexSuffixCursor extends RuleCursorBase<"index_suffix"> {
   field(name: "value"): ValueCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
@@ -791,6 +803,8 @@ export type AnyRuleCursor =
   | IndentedValueCursor
   | DeclarationTagCursor
   | RebindingCursor
+  | RebindingSuffixCursor
+  | IndexSuffixCursor
   | SequencingCursor
   | IterationCursor
   | IterationSourceCursor

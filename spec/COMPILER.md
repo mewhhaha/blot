@@ -233,6 +233,18 @@ Surface elaboration is hygienic and preserves source origins. Every function
 application becomes a Core computation; an empty effect row does not create a
 second pure-application artifact.
 
+A rebinding target has one unqualified root and an optional sequence of fields
+and array indices. Elaboration emits one ordinary `Shadow` of that root with
+a pure block as its value. Hygienic bindings evaluate indices in source order,
+then the replacement, then retain each path prefix once. This keeps reads of the
+original root before ownership transfers. Reverse reconstruction uses record
+spreads and saturated
+`@array.set (@array.copy (&prefix)) index replacement` calls. A field projection
+also checks the old leaf, so width subtyping cannot admit a misspelled field.
+The lexical-frame validator checks the root and visits index expressions before
+elaboration. Loop accumulator discovery collects the root. No path-update node
+or backend operation is introduced.
+
 `continue` elaborates to the nearest loop's ordinary accumulator constructor.
 Conditional forwarding preserves rebindings made before departure and skips the
 remaining statements. Lambdas and value conditionals reset the loop target;

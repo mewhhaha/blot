@@ -1,0 +1,5 @@
+let consume = fn !value => @int.add value 1
+let !token = 41
+let holder = { .go = fn () => consume (!token); .count = 0; }
+holder.go := fn () => 1
+return holder.go ()

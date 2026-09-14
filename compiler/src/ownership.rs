@@ -353,7 +353,7 @@ struct Binding {
     value: Option<ExpressionId>,
     moved: Option<Span>,
     last_use: Option<Span>,
-    partial: bool,
+    partial: PartialMove,
     /// The current binding may be live again after `:=`; the function contract
     /// still remembers whether any predecessor authority was consumed.
     ownership_demanded: bool,
@@ -378,6 +378,14 @@ enum Use {
     Borrow,
     Project,
     Share,
+}
+
+#[derive(Clone, Default, PartialEq)]
+enum PartialMove {
+    #[default]
+    None,
+    Fields(BTreeSet<String>),
+    Unknown,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -604,7 +612,7 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
                 value: None,
                 moved: None,
                 last_use: None,
-                partial: false,
+                partial: PartialMove::None,
                 ownership_demanded: false,
                 parameter_authority: Produced::None,
                 function_parameter: false,
@@ -787,7 +795,7 @@ fn use_name(
         return borrowed(binding.borrow().owned.clone());
     }
     if spendable(qualifier) {
-        if binding.borrow().partial {
+        if binding.borrow().partial != PartialMove::None {
             analysis.report(
                 "BLOT_LINEAR_PARTIAL_REUSE",
                 format!("`{name}` has a moved field and cannot be used as a whole value."),
@@ -831,7 +839,7 @@ fn install_capture(
             value: source.value,
             moved: None,
             last_use: source.last_use,
-            partial: source.partial,
+            partial: source.partial.clone(),
             ownership_demanded: source.ownership_demanded,
             parameter_authority: source.parameter_authority.clone(),
             function_parameter: source.function_parameter,
@@ -935,7 +943,7 @@ fn walk_declaration(declaration_id: DeclarationId, scope: &ScopeRef, analysis: &
                 binding.qualifier = inherited(binding.qualifier, &produced);
                 binding.owned = produced;
                 binding.moved = None;
-                binding.partial = false;
+                binding.partial = PartialMove::None;
             }
         }
         Declaration::Open { value, span } => {
@@ -1067,7 +1075,7 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
             value: Some(*value),
             moved: None,
             last_use: None,
-            partial: false,
+            partial: PartialMove::None,
             ownership_demanded: false,
             parameter_authority: Produced::None,
             function_parameter: false,
@@ -1451,15 +1459,46 @@ fn walk_expression(
             let has_spread = members
                 .iter()
                 .any(|member| matches!(member, ShapeMember::Spread { .. }));
-            for member in members {
+            let mut unknown_fields = false;
+            for (position, member) in members.iter().cloned().enumerate() {
                 match member {
                     ShapeMember::Field { name, value } => {
-                        fields.insert(name, walk(value, scope, analysis, Use::Move));
+                        let produced = walk(value, scope, analysis, Use::Move);
+                        insert_owned_field(&mut fields, name, produced, span, analysis);
                     }
                     ShapeMember::Spread { value } => {
-                        spread = combine(spread, walk(value, scope, analysis, Use::Move));
+                        let overwritten = members[position + 1..]
+                            .iter()
+                            .filter_map(|member| match member {
+                                ShapeMember::Field { name, .. } => Some(name.clone()),
+                                ShapeMember::Computed { name, .. } => {
+                                    match &analysis.module.arena.expressions[name.0 as usize] {
+                                        Expression::Text { value, .. } => Some(value.clone()),
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        match walk_record_spread(value, &overwritten, scope, analysis) {
+                            Produced::Shape(source) => {
+                                for (name, produced) in source {
+                                    insert_owned_field(&mut fields, name, produced, span, analysis);
+                                }
+                            }
+                            produced => spread = combine(spread, produced),
+                        }
                     }
                     ShapeMember::Computed { name, value } => {
+                        if let Expression::Text { value: name, .. } =
+                            &analysis.module.arena.expressions[name.0 as usize]
+                        {
+                            let name = name.clone();
+                            let produced = walk(value, scope, analysis, Use::Move);
+                            insert_owned_field(&mut fields, name, produced, span, analysis);
+                            continue;
+                        }
+                        unknown_fields = true;
                         spread = combine(
                             spread,
                             combine(
@@ -1471,7 +1510,8 @@ fn walk_expression(
                 }
             }
             let shape = Produced::Shape(fields);
-            if has_spread && obligation(&combine(spread.clone(), shape.clone())) != Obligation::None
+            if (has_spread && obligation(&spread) != Obligation::None)
+                || (unknown_fields && obligation(&shape) != Obligation::None)
             {
                 analysis.report(
                     "BLOT_LINEAR_SHAPE_SPREAD",
@@ -1743,7 +1783,16 @@ fn project_owned_path(
                 {
                     let mut binding = binding.borrow_mut();
                     binding.owned = projected.1;
-                    binding.partial = true;
+                    match &mut binding.partial {
+                        PartialMove::None => {
+                            binding.partial =
+                                PartialMove::Fields(BTreeSet::from([path[0].clone()]));
+                        }
+                        PartialMove::Fields(fields) => {
+                            fields.insert(path[0].clone());
+                        }
+                        PartialMove::Unknown => {}
+                    }
                 }
                 if !relevant(&binding.borrow().owned) {
                     consume(&binding, span, analysis);
@@ -2385,6 +2434,16 @@ fn walk_apply(
         }
         if name == "@array.copy" && arguments.len() == 1 {
             let source = walk(arguments[0], scope, analysis, Use::Move);
+            if let Produced::Borrow(inner) = &source
+                && let Produced::Store(elements) = inner.as_ref()
+                && obligation_without_stores(elements) != Obligation::None
+            {
+                analysis.report(
+                    "BLOT_LINEAR_ARRAY_COPY",
+                    "Copying this array would duplicate owned elements.",
+                    span,
+                );
+            }
             return match source {
                 Produced::Store(_) => source,
                 Produced::EmptyStore => Produced::Store(Box::new(Produced::Sequence(Vec::new()))),
@@ -3454,7 +3513,7 @@ fn record_store_parameter_authority(
     root.owned = insert_parameter_authority(root.owned.clone(), path, authority);
     root.qualifier = inherited(root.qualifier, &root.owned);
     if !path.is_empty() {
-        root.partial = true;
+        root.partial = PartialMove::Unknown;
     }
 }
 
@@ -4341,6 +4400,49 @@ fn substitute_element_source(
     }
 }
 
+fn walk_record_spread(
+    expression: ExpressionId,
+    overwritten: &BTreeSet<String>,
+    scope: &ScopeRef,
+    analysis: &mut Analysis,
+) -> Produced {
+    if let Expression::Var { name, span } =
+        &analysis.module.arena.expressions[expression.0 as usize]
+        && let Some((binding, None)) = analysis.lookup(scope, name)
+    {
+        let repaired = matches!(&binding.borrow().partial,
+            PartialMove::Fields(fields) if !fields.is_empty() && fields.is_subset(overwritten));
+        if repaired {
+            // Every moved field is replaced later in this same record. Only
+            // its still-live fields transfer through the spread.
+            let mut remaining = binding.borrow_mut();
+            remaining.partial = PartialMove::None;
+            remaining.moved = None;
+            drop(remaining);
+            return use_name(name, *span, scope, analysis, Use::Move);
+        }
+    }
+    walk(expression, scope, analysis, Use::Move)
+}
+
+fn insert_owned_field(
+    fields: &mut BTreeMap<String, Produced>,
+    name: String,
+    produced: Produced,
+    span: Span,
+    analysis: &mut Analysis,
+) {
+    if let Some(previous) = fields.insert(name.clone(), produced)
+        && obligation(&previous) == Obligation::Linear
+    {
+        analysis.report(
+            "BLOT_LINEAR_FIELD_OVERWRITE",
+            format!("Replacing `.{name}` would discard a linear resource."),
+            span,
+        );
+    }
+}
+
 fn select_field(target: Produced, name: &str, span: Span, analysis: &mut Analysis) -> Produced {
     let Produced::Shape(mut fields) = target else {
         return target;
@@ -4387,7 +4489,7 @@ struct BindingSnapshot {
     qualifier: Qualifier,
     moved: Option<Span>,
     owned: Produced,
-    partial: bool,
+    partial: PartialMove,
     ownership_demanded: bool,
 }
 
@@ -4425,7 +4527,7 @@ fn snapshot(scope: &ScopeRef) -> Snapshot {
                     qualifier: binding_state.qualifier,
                     moved: binding_state.moved,
                     owned: binding_state.owned.clone(),
-                    partial: binding_state.partial,
+                    partial: binding_state.partial.clone(),
                     ownership_demanded: binding_state.ownership_demanded,
                 });
             }
@@ -4444,7 +4546,7 @@ fn restore(snapshot: &Snapshot) {
         binding.qualifier = state.qualifier;
         binding.moved = state.moved;
         binding.owned = state.owned.clone();
-        binding.partial = state.partial;
+        binding.partial = state.partial.clone();
         binding.ownership_demanded = state.ownership_demanded;
     }
 }
@@ -4464,11 +4566,11 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
                         (
                             state.moved,
                             &state.owned,
-                            state.partial,
+                            &state.partial,
                             state.ownership_demanded,
                         )
                     })
-                    .unwrap_or((None, &prior.owned, prior.partial, prior.ownership_demanded))
+                    .unwrap_or((None, &prior.owned, &prior.partial, prior.ownership_demanded))
             })
             .collect::<Vec<_>>();
         let some = states.iter().any(|state| state.0.is_some());
@@ -4509,7 +4611,17 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
         binding.qualifier = inherited(prior.qualifier, &owned);
         binding.moved = chosen.0;
         binding.owned = owned;
-        binding.partial = chosen.2;
+        binding.partial = states.iter().fold(PartialMove::None, |partial, state| {
+            match (partial, state.2) {
+                (PartialMove::Unknown, _) | (_, PartialMove::Unknown) => PartialMove::Unknown,
+                (PartialMove::Fields(mut fields), PartialMove::Fields(other)) => {
+                    fields.extend(other.iter().cloned());
+                    PartialMove::Fields(fields)
+                }
+                (PartialMove::None, other) => other.clone(),
+                (partial, PartialMove::None) => partial,
+            }
+        });
         binding.ownership_demanded = states.iter().any(|state| state.3);
     }
 }

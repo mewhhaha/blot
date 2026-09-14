@@ -205,7 +205,7 @@ return ()
   assertEquals(binding.pattern.tag, "wildcard");
 });
 
-Deno.test("stable rebinding still requires one unqualified name", async () => {
+Deno.test("stable rebinding still requires an unqualified root name", async () => {
   const parsed = await parse(`let left = 1
 let right = 2
 (left, right) := (right, left)
@@ -214,6 +214,40 @@ return left
   assert(!parsed.ok);
   if (parsed.ok) return;
   assertEquals(parsed.diagnostics[0]?.code, "BLOT_BAD_REBINDING_TARGET");
+});
+
+Deno.test("deep rebinding lowers mixed paths to ordinary expressions", async () => {
+  const parsed = await parse(
+    "let world = ()\nworld.units[choose 1].position.x := 3\nreturn world\n",
+  );
+  assert(parsed.ok);
+  const update = parsed.module.declarations[1];
+  assert(update.tag === "shadow");
+  assertEquals(update.name, "world");
+  assert(update.value.tag === "block");
+  const indices = update.value.declarations.filter((declaration) =>
+    declaration.tag === "binding" &&
+    declaration.pattern.tag === "name" &&
+    declaration.pattern.name.startsWith("pathIndex$")
+  );
+  assertEquals(indices.length, 1);
+  assertEquals(update.value.result.tag, "shape");
+});
+
+Deno.test("deep rebinding validates the root and index expression frames", async () => {
+  for (
+    const target of [
+      "record.x",
+      "record[0]",
+      "record[do:\n    record := ()\n    return 0\n  ]",
+    ]
+  ) {
+    const parsed = await parse(
+      `let record = ()\nlet update = fn () => do:\n  ${target} := ()\n  return record\nreturn update\n`,
+    );
+    assert(!parsed.ok);
+    assertEquals(parsed.diagnostics[0].code, "BLOT_REBINDING_FRAME");
+  }
 });
 
 Deno.test("a closure cannot rebind a captured outer lineage", async () => {

@@ -95,6 +95,8 @@ pub(crate) const RULE_NAMES: &[&str] = &[
     "continuing",
     "annotated_pattern",
     "lambda_result",
+    "rebinding_suffix",
+    "index_suffix",
 ];
 
 pub(crate) const FIELD_NAMES: &[&str] = &[
@@ -213,6 +215,7 @@ pub(crate) const REPEATED_FIELDS: &[(&str, &str)] = &[
     ("application_argument", "suffixes"),
     ("program", "declarations"),
     ("qualified_name", "rest"),
+    ("rebinding", "suffixes"),
     ("shape", "members"),
     ("shape_pattern", "fields"),
     ("statement_suite", "statements"),

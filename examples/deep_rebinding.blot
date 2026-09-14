@@ -1,0 +1,23 @@
+open import "blot:prelude"
+
+let player = { .position = { .x = 0; .y = 4; }; .name = "Ada"; }
+let original = player
+player.position.x := 3
+player.name := "Lin"
+
+let cells = [{ .height = 0; }, { .height = 1; }]
+cells[1].height := 7
+
+let matrix = [[1, 2], [3, 4]]
+matrix[1][0] := 9
+
+for delta in Array.items [1, 2, 3]:
+  player.position.x := player.position.x + delta
+
+return [
+  original.position.x,
+  player.position.x,
+  (@array.get cells 1).height,
+  @array.get (@array.get matrix 1) 0,
+  @text.len player.name
+]

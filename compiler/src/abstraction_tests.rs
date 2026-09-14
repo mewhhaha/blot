@@ -376,3 +376,126 @@ fn open_export_refusals_name_the_field_and_parameter() {
         },
     );
 }
+
+#[test]
+fn deep_rebinding_preserves_old_values_and_threads_the_root_through_loops() {
+    with_compiler(
+        include_str!("../../examples/deep_rebinding.blot"),
+        |session| {
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let evaluated = session.evaluate_module("main.blot");
+            assert_eq!(evaluated["display"], "[0, 9, 7, 9, 3]", "{evaluated}");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        },
+    );
+}
+
+#[test]
+fn deep_rebinding_uses_existing_field_type_and_bounds_checks() {
+    for (source, code) in [
+        (
+            "let record = { .x = 1; }\nrecord.missing := 2\nreturn record\n",
+            "BLOT_TYPE_ERROR",
+        ),
+        (
+            "let record :: { .x = @type.int; }\nlet record = { .x = 1; }\nrecord.x := \"bad\"\nreturn record\n",
+            "BLOT_TYPE_ERROR",
+        ),
+        (
+            "let record :: { .x = 0; }\nlet record = { .x = 0; }\nrecord.x := 3\nreturn record\n",
+            "BLOT_TYPE_ERROR",
+        ),
+        (
+            "let values = [1, 2]\nvalues[2] := 1\nreturn values\n",
+            "BLOT_OUT_OF_BOUNDS",
+        ),
+        (
+            "let values = [1, 2]\nlet update = fn index => do:\n  let values = values\n  values[index] := 1\n  return values\nreturn update\n",
+            "BLOT_UNPROVEN_INDEX",
+        ),
+    ] {
+        let checked = check(source);
+        assert_eq!(checked["diagnostic"]["code"], code, "{source}\n{checked}");
+    }
+}
+
+#[test]
+fn deep_rebinding_cannot_advance_a_captured_root() {
+    let source = "let record = { .x = 1; }\nlet update = fn () => do:\n  record.x := 1\n  return record\nreturn update\n";
+    let mut session = CompilerSession::default();
+    let crate::session::AddSourceError::Diagnostics(diagnostics) = session
+        .add_source("main.blot".into(), source.encode_utf16().collect())
+        .expect_err("a captured root cannot be rebound")
+    else {
+        panic!("captured root failed without a source diagnostic");
+    };
+    assert_eq!(diagnostics[0].code, "BLOT_REBINDING_FRAME");
+    assert_eq!(
+        source[diagnostics[0].span.start as usize..diagnostics[0].span.end as usize].trim(),
+        "record.x := 1"
+    );
+}
+
+#[test]
+fn deep_rebinding_runtime_paths_have_closed_representations() {
+    with_compiler(
+        include_str!("../../examples/lib/deep_rebinding_runtime.blot"),
+        |session| {
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        },
+    );
+}
+
+#[test]
+fn deep_rebinding_preserves_captures_aliases_and_owned_siblings() {
+    let sources = [
+        (
+            "let state = { .values = [1, 2]; .tick = 0; }\nstate.tick := @int.add state.tick 1\nstate.values[@int.sub (@array.len state.values) 1] := @int.add (@array.get state.values 0) 2\nreturn (@array.get state.values 1, state.tick)\n",
+            "(3, 1)",
+        ),
+        (
+            "let record = { .x = 0; .label = \"Ada\"; }\nlet saved = fn () => record.x\nlet alias = record\nalias.label := \"Lin\"\nrecord.x := 3\nreturn (@int.add (saved ()) record.x, alias.label)\n",
+            "(3, \"Lin\")",
+        ),
+        (
+            "let box = { .nested = { .values = [1, 2]; .keep = [7]; }; .tick = 0; }\nbox.nested.values[0] := 3\nbox.nested.values[1] := 4\nreturn (@array.get box.nested.values 0, @array.get box.nested.values 1, @array.get box.nested.keep 0)\n",
+            "(3, 4, 7)",
+        ),
+        (
+            "let consume = fn !value => @int.add value 1\nlet !token = 41\nlet holder = { .go = fn () => consume (!token); .count = 0; }\nholder.count := 1\nlet count = holder.count\nreturn @int.add (holder.go ()) count\n",
+            "43",
+        ),
+    ];
+    for (source, expected) in sources {
+        with_compiler(source, move |session| {
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let evaluated = session.evaluate_module("main.blot");
+            assert_eq!(evaluated["display"], expected, "{evaluated}");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+}
+
+#[test]
+fn deep_rebinding_rejects_lost_or_copied_resources_and_explicit_refinements() {
+    for source in [
+        "open import \"blot:prelude\"\nlet update = fn (values, replacement) => do:\n  if Array.length values > 0:\n    values[0] := replacement\n  return values\nlet consume = fn !value => value + 1\nlet !token = 41\nlet values = [fn () => consume (!token)]\nreturn update (values, fn () => 1)\n",
+        "let consume = fn !value => @int.add value 1\nlet !token = 41\nlet values = [fn () => consume (!token)]\nvalues[0] := fn () => 1\nreturn values\n",
+        "let update = fn flag => do:\n  let box = { .left = [1]; .right = [2]; }\n  let removed = case flag of\n    #True => box.left\n    #False => box.right\n  let rebuilt = { ...box; .left = [3]; }\n  return (removed, rebuilt)\nreturn update\n",
+        "let record = { .x = @satisfies 0 0; }\nrecord.x := 3\nreturn record\n",
+        "let consume = fn !value => @int.add value 1\nlet !token = 41\nlet holder = { .go = fn () => consume (!token); .count = 0; }\nholder.go := fn () => 1\nreturn holder.go ()\n",
+        "let consume = fn !value => @int.add value 1\nlet !token = 41\nlet values = [fn () => consume (!token)]\nvalues[0] := fn () => 1\nreturn (@array.get values 0) ()\n",
+        "let source = { .values = [1]; .tick = 0; }\nlet moved = source.values\nlet rebuilt = { ...source; .tick = 1; }\nreturn (@array.get moved 0, rebuilt)\n",
+    ] {
+        let checked = check(source);
+        assert_eq!(checked["ok"], false, "{source}\n{checked}");
+        assert!(checked.get("diagnostic").is_some(), "{checked}");
+    }
+}

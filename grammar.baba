@@ -130,10 +130,15 @@ declaration_tag = (
 // type. A new `let` or `const` is how a name is shadowed with another type.
 rebinding = (
   pattern:binding_pattern
+  suffixes:rebinding_suffix*
   ":="
   value:value
   LAYOUT_NEWLINE
 ) ;
+
+rebinding_suffix = field_suffix | index_suffix ;
+
+index_suffix = ("[" value:value "]") ;
 
 // Effect sequencing is a declaration rather than a prefix operator: it orders
 // one computation in the surrounding scope and either binds or discards its

@@ -190,7 +190,7 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "owned_shape_spread": {
-    code: "BLOT_LINEAR_SHAPE_SPREAD",
+    code: "BLOT_LINEAR_NOT_CONSUMED",
     stage: "check",
   },
   "recursive_group_consumed_twice": {
@@ -264,6 +264,32 @@ const REJECTIONS: Record<
   },
   "rebinding_type_change": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "rebinding_unbound": { code: "BLOT_UNBOUND", stage: "check" },
+  "deep_rebinding_missing_field": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "deep_rebinding_refinement": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "deep_rebinding_out_of_bounds": {
+    code: "BLOT_OUT_OF_BOUNDS",
+    stage: "check",
+  },
+  "deep_rebinding_unproved_index": {
+    code: "BLOT_UNPROVEN_INDEX",
+    stage: "check",
+  },
+  "deep_rebinding_effectful_index": {
+    code: "BLOT_UNSEQUENCED_EFFECT",
+    stage: "check",
+  },
+  "deep_rebinding_captured_root": {
+    code: "BLOT_REBINDING_FRAME",
+    stage: "check",
+  },
+  "deep_rebinding_owned_elements": {
+    code: "BLOT_LINEAR_ARRAY_COPY",
+    stage: "check",
+  },
+  "deep_rebinding_owned_field": {
+    code: "BLOT_LINEAR_FIELD_OVERWRITE",
+    stage: "check",
+  },
   // A scope error with its own code, because the name is not missing — it is
   // bound further down the same block, and telling the reader that is the
   // whole difference between this and a typo. It is not a comptime failure:

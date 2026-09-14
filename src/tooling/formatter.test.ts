@@ -2,6 +2,20 @@ import { assertEquals } from "@std/assert";
 import { parse } from "../syntax/parse.ts";
 import { formatSource } from "./formatter.ts";
 
+Deno.test("formatting preserves deep rebinding and index blocks", async () => {
+  for (
+    const source of [
+      "let world = ()\nworld.units[choose 1].position.x := 3\nreturn world\n",
+      "let values = [1, 2]\nvalues[do:\n  let index = 1\n  return index\n] := 3\nreturn values\n",
+    ]
+  ) {
+    const formatted = await formatSource(source);
+    if (!formatted.ok) throw new Error(JSON.stringify(formatted.diagnostics));
+    assertEquals((await parse(formatted.source)).ok, true);
+    assertEquals(await formatSource(formatted.source), formatted);
+  }
+});
+
 Deno.test("formatting preserves computed shape fields", async () => {
   const source = `const name = "count"
 return { .[name] = 1; }

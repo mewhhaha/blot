@@ -114,6 +114,9 @@ function visitStatement(
   }
 
   if (rule.name === "rebinding") {
+    for (const suffix of fieldList(rule, "suffixes")) {
+      visitCursor(suffix, scope, validation);
+    }
     const value = cursorField(rule, "value");
     if (value !== null) visitCursor(value, scope, validation);
     const pattern = cursorField(rule, "pattern");

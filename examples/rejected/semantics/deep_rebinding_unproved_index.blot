@@ -1,0 +1,5 @@
+let update = fn index => do:
+  let values = [1, 2]
+  values[index] := 3
+  return values
+return update
