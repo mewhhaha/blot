@@ -63,7 +63,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
     }
     let arity = match name {
         "@effect" | "@effect.host" | "@forall" | "@handle" | "@import" => 1,
-        "@include" | "@resource.type" => 2,
+        "@include" | "@resource.type" | "@effect.shared" => 2,
         "@continuation.cancel"
         | "@type.of"
         | "@type.open"
