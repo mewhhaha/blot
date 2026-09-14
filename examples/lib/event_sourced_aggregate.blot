@@ -1,0 +1,46 @@
+open import "blot:prelude"
+
+const N = import "./nonempty.blot"
+
+// A successful decision carries at least one event. The same Event parameter
+// connects command decisions, state evolution, returned changes, and replay.
+const Change = fn (state, event) => {
+  .events = N.of event;
+  .state = state;
+}
+
+const Aggregate = fn (state, command, event, error) => {
+  .initial = state;
+  .decide = (state, command) -> Result (N.of event, error);
+  .evolve = (state, event) -> state;
+}
+
+const replay_from :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), State, [Event]) -> State))))
+const replay_from = fn (aggregate, state, events) => fold (
+  events,
+  state,
+  aggregate.evolve
+)
+
+const replay :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), [Event]) -> State))))
+const replay = fn (aggregate, events) => replay_from (
+  aggregate,
+  aggregate.initial,
+  events
+)
+
+const handle :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), State, Command) -> Result (Change (State, Event), Error)))))
+const handle = fn (aggregate, state, command) => case aggregate.decide (state, command) of
+  #Error error => #Error error
+  #Ok events => #Ok {
+    .events = events;
+    .state = N.fold (events, state, aggregate.evolve);
+  }
+
+return {
+  .Aggregate = Aggregate;
+  .Change = Change;
+  .handle = handle;
+  .replay = replay;
+  .replay_from = replay_from;
+  }
