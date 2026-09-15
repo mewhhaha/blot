@@ -1,0 +1,1 @@
+{ .empty = 0; .header = 64909; .header_collision = 141; .layout = { .bits = 16; .bytes = 2; .first_field = { .bit_offset = 0; .bit_width = 3; .mask = 7; .name = "version" }; .last_field = { .bit_offset = 12; .bit_width = 4; .mask = 15; .name = "retries" } }; .maximum = 65535; .window = 141 }
