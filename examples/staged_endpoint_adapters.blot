@@ -6,9 +6,10 @@ const Adapter = import "./lib/endpoint_adapter.blot"
 // result without weakening the payload to a common dynamic representation.
 const Maybe = fn Value => #Found Value | #Missing
 const Checked = fn Value => #Ok Value | #Error Text
-const Observed = fn Value => #Ok { .value = Value; .source = Text; } | #Error Text
+const Observed =
+  fn Value => #Ok { .value = Value; .source = Text; } | #Error Text
 
-const Port = 1..65535
+const Port = refine (Int, fn value => value >= 1 && value <= 65535)
 
 const require :: Adapter.Natural (Maybe, Checked)
 const require = fn candidate => case candidate of
@@ -22,6 +23,10 @@ const observe = fn candidate => case candidate of
 
 // Composition preserves the hidden payload variable across both adapters. The
 // same rank-polymorphic value below is later instantiated at Port and Text.
+// Pain point: spelling the returned Rank-N signature here is currently required
+// to preserve the payload type through later specialization; the pending probe
+// records the otherwise inferred bottom result.
+const require_observed :: Adapter.Natural (Maybe, Observed)
 const require_observed =
   Adapter.compose (Maybe, Checked, Observed) (require, observe)
 
