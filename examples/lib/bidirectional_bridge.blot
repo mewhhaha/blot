@@ -1,0 +1,53 @@
+const P = import "blot:prelude"
+const Type = P.Type
+
+// A compatibility bridge is partial in both directions. The four parameters
+// retain the exact left/right carriers plus the independent failure carrier for
+// each direction.
+const Bridge = fn (Left, Right, ForwardError, BackwardError) => {
+  .to_right = Left -> P.Result (Right, ForwardError);
+  .to_left = Right -> P.Result (Left, BackwardError);
+}
+
+// Pain point: Blot has no surface empty type value, so an infallible identity
+// bridge cannot spell Result (Value, Never). Quantifying the otherwise-unused
+// error carriers keeps identity composable without inventing a fake runtime
+// error constructor.
+const identity :: @forall (fn Value => @forall (fn ForwardError => @forall (fn BackwardError => Bridge (Value, Value, ForwardError, BackwardError))))
+const identity = {
+  .to_right = fn value => #Ok value;
+  .to_left = fn value => #Ok value;
+}
+
+const reverse :: @forall (fn Left => @forall (fn Right => @forall (fn ForwardError => @forall (fn BackwardError => Bridge (Left, Right, ForwardError, BackwardError) -> Bridge (Right, Left, BackwardError, ForwardError)))))
+const reverse = fn bridge => {
+  .to_right = bridge.to_left;
+  .to_left = bridge.to_right;
+}
+
+// Composition preserves which original boundary rejected a value. The same
+// Middle carrier occurs on both adjacent sides. Backward execution visits the
+// second bridge first, but errors keep #First/#Second labels referring to the
+// bridges' declaration order.
+const compose :: @forall (fn Left => @forall (fn Middle => @forall (fn Right => @forall (fn FirstForwardError => @forall (fn FirstBackwardError => @forall (fn SecondForwardError => @forall (fn SecondBackwardError => (Bridge (Left, Middle, FirstForwardError, FirstBackwardError), Bridge (Middle, Right, SecondForwardError, SecondBackwardError)) -> Bridge (Left, Right, #First FirstForwardError | #Second SecondForwardError, #First FirstBackwardError | #Second SecondBackwardError))))))))
+const compose = fn (first, second) => {
+  .to_right = fn left => case first.to_right left of
+    #Error error => #Error (#First error)
+    #Ok middle => case second.to_right middle of
+      #Error error => #Error (#Second error)
+      #Ok right => #Ok right
+  ;
+  .to_left = fn right => case second.to_left right of
+    #Error error => #Error (#Second error)
+    #Ok middle => case first.to_left middle of
+      #Error error => #Error (#First error)
+      #Ok left => #Ok left
+  ;
+}
+
+return {
+  .Bridge;
+  .identity;
+  .reverse;
+  .compose;
+}
