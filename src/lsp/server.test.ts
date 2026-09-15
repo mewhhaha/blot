@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
+import { createDenoLspWorkerHost } from "../deno/lsp_worker_host.ts";
 import { FakeLspWorkerHost } from "./fake_host.ts";
 import type { LspWorkerJob } from "./workers/protocol.ts";
 import type { TraceEvent } from "./scheduler.ts";
@@ -185,6 +186,77 @@ Deno.test("formatting completes while the semantic worker is held", async () => 
   await settleMicrotasks();
   const done = await finish(test);
   assert(responseFor(done, 2) !== undefined);
+});
+
+Deno.test("formatting settles on a real thread while semantic is held", async () => {
+  // The coordinator must serve formatting from the syntax host without
+  // touching the semantic host: here the syntax lane is a real worker
+  // thread and the semantic lane never releases, so a format that
+  // depended on semantic work could never settle.
+  const transport = memoryTransport();
+  const clock = new FakeClock();
+  const syntax = createDenoLspWorkerHost("syntax");
+  const semantic = new FakeLspWorkerHost("semantic");
+  const done = runCoordinatorServer(transport.input, transport.output, {
+    clock,
+    syntaxHost: syntax,
+    semanticHost: semantic,
+    shutdownDrainMs: 0,
+  });
+  const uri = "untitled:held-semantic.blot";
+  try {
+    transport.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {},
+    });
+    transport.send({ jsonrpc: "2.0", method: "initialized", params: {} });
+    transport.send({
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: { uri, version: 1, text: "let   x=1\nreturn x\n" },
+      },
+    });
+    await settleMicrotasks();
+    assertEquals(semantic.heldJobs().length, 1);
+    semantic.releaseNext(null);
+    await settleMicrotasks();
+    transport.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "textDocument/hover",
+      params: { textDocument: { uri }, position: { line: 1, character: 7 } },
+    });
+    transport.send({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "textDocument/formatting",
+      params: { textDocument: { uri }, options: {} },
+    });
+    for (let round = 0; round < 200; round += 1) {
+      await settleMicrotasks();
+      const mid = await decodeCaptured(transport.chunks());
+      if (responseFor(mid, 3) !== undefined) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    const mid = await decodeCaptured(transport.chunks());
+    const formatted = responseFor(mid, 3);
+    assert(formatted !== undefined, "formatting never settled");
+    assertEquals(formatted.result, [{
+      range: {
+        start: { line: 0, character: 4 },
+        end: { line: 0, character: 8 },
+      },
+      newText: "x = ",
+    }]);
+    assert(responseFor(mid, 2) === undefined);
+  } finally {
+    transport.send({ jsonrpc: "2.0", method: "exit", params: null });
+    transport.closeInput();
+    await done;
+  }
 });
 
 Deno.test("cancellation is answered while a worker job runs", async () => {
@@ -882,8 +954,10 @@ Deno.test("code actions omit deferred edits until resolve", async () => {
     },
   });
   await settleMicrotasks();
-  assertEquals(test.syntax.heldJobs().length, 1);
-  test.syntax.releaseNext([
+  // Code actions can reach the compiler through the service replica, so
+  // they run on the semantic lane with every other service method.
+  assertEquals(test.semantic.heldJobs().length, 1);
+  test.semantic.releaseNext([
     {
       title: "deferred",
       kind: "source.fixAll.blot",

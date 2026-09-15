@@ -18,6 +18,7 @@ import {
   parseLintArguments,
 } from "../tooling/lint_command.ts";
 import { runArtifact } from "./run.ts";
+import { createNodeLspWorkerHost } from "./lsp_worker_host.ts";
 import {
   parseExplainArguments,
   renderExplanation,
@@ -230,7 +231,13 @@ async function formatFiles(
 async function runNodeLanguageServer(): Promise<void> {
   const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
   const output = Writable.toWeb(process.stdout) as WritableStream<Uint8Array>;
-  await runCoordinatorServer(input, output);
+  // Worker-backed lanes: analysis blocks only its own thread, so formatting
+  // never waits on the compiler. A worker that fails to boot rejects loudly
+  // through the lane startup path; there is no silent inline fallback.
+  await runCoordinatorServer(input, output, {
+    syntaxHost: createNodeLspWorkerHost("syntax"),
+    semanticHost: createNodeLspWorkerHost("semantic"),
+  });
 }
 
 async function lintFiles(

@@ -68,6 +68,15 @@ Deno.test("the protocol validates every job kind", () => {
     params: {},
   });
   assertEquals(request.kind, "service/request");
+  const format = lspWorkerJob({
+    protocol: 1,
+    job: 7,
+    kind: "syntax/format",
+    uri: "u",
+    source: "return 1\n",
+    params: {},
+  });
+  assertEquals(format.kind, "syntax/format");
 });
 
 Deno.test("the protocol rejects malformed jobs", () => {
@@ -128,6 +137,23 @@ Deno.test("the protocol rejects malformed jobs", () => {
       params: {},
     },
     { protocol: 1, job: 1, kind: "service/request", method: "m", uri: null },
+    { protocol: 1, job: 1, kind: "syntax/format", uri: "u", source: "x" },
+    {
+      protocol: 1,
+      job: 1,
+      kind: "syntax/format",
+      uri: 7,
+      source: "x",
+      params: {},
+    },
+    {
+      protocol: 1,
+      job: 1,
+      kind: "syntax/format",
+      uri: "u",
+      source: 7,
+      params: {},
+    },
   ];
   for (const value of bad) {
     assertThrows(() => lspWorkerJob(value), TypeError);

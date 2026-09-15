@@ -17,6 +17,10 @@ formatting latency through the real server.
 2. The server serialized every request and every background diagnostic pass
    through one in-process queue, so a slow format or a typing burst blocked all
    later requests head-of-line.
+3. Even with lanes, one thread ran everything: the first semantic analysis of a
+   framework graph takes seconds synchronously inside the compiler, and lanes
+   interleave only at await points — a format landing mid-analysis froze with it
+   (measured 5.2 s behind a 6.6 s cold analysis).
 
 ### What changed
 
@@ -30,10 +34,13 @@ formatting latency through the real server.
   comments, matching the delimited width rules — previously the two planners
   disagreed and the layout oscillated between passes.
 - Coordinator language server: text sync applies immediately while requests flow
-  through a syntax lane (compiler-free work) and a semantic lane
-  (analysis-backed work), one active job per worker host, with freshness gates,
-  deadlines, a watchdog, and crash reconstruction. The default configuration
-  runs inline; Deno workers and Node worker threads host the same entries.
+  through a syntax lane (formatting only) and a semantic lane (every other
+  request and diagnostics), one active job per worker host, with freshness
+  gates, deadlines, a watchdog, and crash reconstruction. The shipped entries
+  run worker-backed — Deno workers and Node worker threads, one thread per lane
+  — so analysis blocks only its own thread; format jobs carry their own text to
+  the compiler-free syntax worker and need no service replica. Inline hosts
+  remain for tests and embedders that inject their own lanes.
 - Content-keyed snapshots and caches (frontend revision key, staged overlays,
   scratch validation sessions) replace eager per-request loads.
 - Providers degrade on broken source inputs (check diagnostics, unloadable
@@ -50,15 +57,16 @@ Machine: AMD Ryzen 7 7800X3D, linux-x86_64, Deno 2.9.6. Formatter cases are
 overlong-array sources; LSP burst is didOpen + 10 rapid didChange + one
 formatting request, latency from request send to response.
 
-| Case                           | Before                      | After                        |
-| ------------------------------ | --------------------------- | ---------------------------- |
-| Format 20 arrays (warm)        | 212.3 ms                    | 15.9 ms                      |
-| Format 60 arrays (warm)        | 1578.0 ms                   | 60.2 ms                      |
-| Format 150 arrays (warm)       | 10905.7 ms                  | 151.0 ms                     |
-| Format 500 / 1000 arrays       | not measured (prohibitive)  | 651.9 ms / 1.40 s            |
-| Formatter frontend invocations | unbounded (per applied fix) | exactly 2 (1 when unchanged) |
-| LSP burst, medium doc          | 172.9 ms                    | 105.2 ms                     |
-| LSP burst, large doc (16 KB)   | 69289.2 ms                  | 579.3 ms                     |
+| Case                           | Before                       | After                        |
+| ------------------------------ | ---------------------------- | ---------------------------- |
+| Format 20 arrays (warm)        | 212.3 ms                     | 15.9 ms                      |
+| Format 60 arrays (warm)        | 1578.0 ms                    | 60.2 ms                      |
+| Format 150 arrays (warm)       | 10905.7 ms                   | 151.0 ms                     |
+| Format 500 / 1000 arrays       | not measured (prohibitive)   | 651.9 ms / 1.40 s            |
+| Formatter frontend invocations | unbounded (per applied fix)  | exactly 2 (1 when unchanged) |
+| LSP burst, medium doc          | 172.9 ms                     | 105.2 ms                     |
+| LSP burst, large doc (16 KB)   | 69289.2 ms                   | 579.3 ms                     |
+| Format during cold analysis    | 5167 ms (frozen on 1 thread) | 32 ms (own thread)           |
 
 ### Intentional behavior changes
 

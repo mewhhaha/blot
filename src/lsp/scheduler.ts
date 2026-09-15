@@ -73,20 +73,16 @@ export interface SchedulerOptions {
   readonly onLaneReconstructed?: (lane: LaneName) => void;
 }
 
-/** Assigns a method to its lane. Unknown methods never reach the lanes. */
+/**
+ * Assigns a method to its lane. The syntax lane is the compiler-free thread:
+ * only formatting runs there, carrying its own text so it never waits on
+ * analysis. Every other method can reach the compiler through the service
+ * replica, so all of them run on the semantic lane. Unknown methods never
+ * reach the lanes.
+ */
 export function laneForMethod(method: string): LaneName {
-  switch (method) {
-    case "textDocument/completion":
-    case "textDocument/signatureHelp":
-    case "textDocument/documentSymbol":
-    case "workspace/symbol":
-    case "textDocument/formatting":
-    case "textDocument/inlayHint":
-    case "textDocument/codeAction":
-      return "syntax";
-    default:
-      return "semantic";
-  }
+  if (method === "textDocument/formatting") return "syntax";
+  return "semantic";
 }
 
 /** True for replica-sync jobs, which are never dropped as stale. */

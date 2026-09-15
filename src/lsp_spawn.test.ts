@@ -18,6 +18,7 @@ import {
   cleanServerEnv,
   createToolchainTrap,
   GpuProbe,
+  inspectThreads,
   readTrapMarkers,
   removeToolchainTrap,
   resolveServerCommand,
@@ -66,6 +67,89 @@ Deno.test("the installed command serves a burst session and exits cleanly", asyn
     const stderr = await server.stderrText();
     assertNoToolchainOrGpuTrace(stderr);
     assertEquals(outcome.exitCode, 0);
+  } finally {
+    server.kill();
+    await removeToolchainTrap(trap).catch(() => undefined);
+  }
+});
+
+Deno.test("the installed command runs lanes on worker threads", async () => {
+  // A format that shares the semantic thread freezes behind analysis; the
+  // shipped entry must boot one worker per lane so formatting never waits
+  // on the compiler. Deno names worker threads worker-N, so two such
+  // threads after exercising both lanes proves the deployment. An inline
+  // entry would answer identically with zero worker threads.
+  const repository = dirname(dirname(fromFileUrl(import.meta.url)));
+  const trap = await createToolchainTrap();
+  const installed = installedLspCommand(repository);
+  const server = spawnLspServer(
+    resolveServerCommand(installed.command),
+    installed.args,
+    {
+      cwd: repository,
+      env: cleanServerEnv(trap),
+    },
+  );
+  const seen = new Map<number, InboundMessage>();
+  try {
+    await server.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {},
+    });
+    await server.send({ jsonrpc: "2.0", method: "initialized", params: {} });
+    const uri = "untitled:worker-lanes.blot";
+    await server.send({
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: { uri, version: 1, text: "let   x=1\nreturn x\n" },
+      },
+    });
+    await server.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "textDocument/hover",
+      params: {
+        textDocument: { uri },
+        position: { line: 1, character: 7 },
+      },
+    });
+    await server.send({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "textDocument/formatting",
+      params: { textDocument: { uri }, options: {} },
+    });
+    await collectResponses(server, seen, [1, 2, 3]);
+    assertSettled(seen.get(2), 2);
+    assertFormattingResult(seen.get(3), "let   x=1\nreturn x\n");
+    // Both lanes answered, so both workers booted; their threads persist.
+    const threads = await inspectThreads(server.pid);
+    if (Deno.build.os === "linux") {
+      assert(threads.supported, "thread inspection found no /proc to read");
+    }
+    if (threads.supported) {
+      const workers = threads.names.filter((name) => /^worker-\d+$/.test(name));
+      assert(
+        workers.length >= 2,
+        `expected syntax and semantic worker threads, saw: ${
+          threads.names.join(", ")
+        }`,
+      );
+    }
+    await server.send({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "shutdown",
+      params: null,
+    });
+    await collectResponses(server, seen, [4]);
+    assertShutdownResult(seen.get(4));
+    await server.send({ jsonrpc: "2.0", method: "exit", params: null });
+    await server.finishStdin();
+    assertEquals(await server.wait(), 0);
   } finally {
     server.kill();
     await removeToolchainTrap(trap).catch(() => undefined);

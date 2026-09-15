@@ -14,8 +14,8 @@ import {
   type Range,
 } from "../../language_service.ts";
 import { ErrorCodes, JsonRpcError } from "../errors.ts";
-import { resolveFormattingOptions } from "../../tooling/format/options.ts";
 import type { LspWorkerJob } from "./protocol.ts";
+import { paramsObject, requireFormattingOptions } from "./params.ts";
 
 /** Runs doc and service jobs against one LanguageService. */
 export class ServiceExecutor {
@@ -165,34 +165,6 @@ function requireUri(uri: string | null, method: string): string {
     );
   }
   return uri;
-}
-
-function requireFormattingOptions(
-  params: Record<string, unknown>,
-  method: string,
-): unknown {
-  try {
-    return resolveFormattingOptions(params.options);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new JsonRpcError(
-      ErrorCodes.InvalidParams,
-      `${method} options are invalid: ${detail}`,
-    );
-  }
-}
-
-function paramsObject(
-  params: unknown,
-  method: string,
-): Record<string, unknown> {
-  if (typeof params !== "object" || params === null || Array.isArray(params)) {
-    throw new JsonRpcError(
-      ErrorCodes.InvalidParams,
-      `${method} params must be an object`,
-    );
-  }
-  return params as Record<string, unknown>;
 }
 
 function invalidParams(method: string, what: string): JsonRpcError {

@@ -382,6 +382,10 @@ export class Coordinator {
     if (method === "textDocument/formatting") deadline = this.#formatDeadlineMs;
     const accepted = this.#registry.accept(id, method, uri, deadline);
     if (accepted.state === "settled") return;
+    if (method === "textDocument/formatting") {
+      this.#routeFormatRequest(id, uri, entry, params);
+      return;
+    }
     const shaped = shapeParams(method, params, this.#resolveCodeActionEdits);
     const task: LaneTask = {
       kind: "service/request",
@@ -397,6 +401,48 @@ export class Coordinator {
         uri,
         params: shaped,
       }),
+      settle: (result: LspWorkerResult): void => {
+        if (!result.ok) return;
+        this.#registry.settle(id, {
+          kind: "result",
+          value: shapeValue(method, result.value),
+        });
+      },
+      abandon: (settlement: Settlement): void => {
+        this.#registry.settle(id, settlement);
+      },
+    };
+    this.#scheduler.enqueue(task, laneForMethod(method));
+  }
+
+  #routeFormatRequest(
+    id: RequestId,
+    uri: string | null,
+    entry: DocumentSnapshot | null,
+    params: unknown,
+  ): void {
+    const method = "textDocument/formatting";
+    const task: LaneTask = {
+      kind: "syntax/format",
+      requestId: id,
+      uri,
+      entry,
+      priority: false,
+      build: (jobId: number): LspWorkerJob => {
+        // requestUri never yields null for formatting; the throw keeps the
+        // build total so a future caller cannot format a null document.
+        if (uri === null) throw new Error(`${method} needs a text document`);
+        const live = this.#documents.current(uri);
+        if (live === null) throw new Error(`document ${uri} is not open`);
+        return {
+          protocol: LSP_WORKER_PROTOCOL_VERSION,
+          job: jobId,
+          kind: "syntax/format",
+          uri,
+          source: live.document.source,
+          params,
+        };
+      },
       settle: (result: LspWorkerResult): void => {
         if (!result.ok) return;
         this.#registry.settle(id, {
@@ -773,8 +819,9 @@ function inlineHost(
   executor: ServiceExecutor,
 ): InlineLspWorkerHost {
   const handlers = new Map<LspWorkerJobKind, InlineHandler>();
+  const syntaxKinds = new Set<LspWorkerJobKind>(SYNTAX_WORKER_KINDS);
   for (const kind of SEMANTIC_WORKER_KINDS) {
-    if (kind === "cpu/probe" || kind === "syntax/parse-facts") {
+    if (syntaxKinds.has(kind)) {
       handlers.set(kind, executeSyntaxJob);
     } else {
       handlers.set(kind, (job: LspWorkerJob) => executor.execute(job));

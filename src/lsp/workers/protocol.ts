@@ -13,6 +13,10 @@
 //                         test job for every supported runtime.
 //   syntax/parse-facts .. Baba frontend facts for one source text. Runs where
 //                         no Compiler exists; it never touches semantic state.
+//   syntax/format ....... the minimal formatting edit for one source text.
+//                         Carries its own text, so the syntax lane formats
+//                         without a service replica while analysis blocks the
+//                         semantic lane.
 //   doc/open ............ replica text sync: full text plus version.
 //   doc/change .......... replica text sync: incremental changes plus version.
 //   doc/close ........... replica text sync: release one document.
@@ -33,6 +37,7 @@ export const LSP_WORKER_PROTOCOL_VERSION = 1;
 export type LspWorkerJobKind =
   | "cpu/probe"
   | "syntax/parse-facts"
+  | "syntax/format"
   | "doc/open"
   | "doc/change"
   | "doc/close"
@@ -42,12 +47,14 @@ export type LspWorkerJobKind =
 export const SYNTAX_WORKER_KINDS: readonly LspWorkerJobKind[] = [
   "cpu/probe",
   "syntax/parse-facts",
+  "syntax/format",
 ];
 
 /** The kinds a semantic worker offers. It owns the one Compiler. */
 export const SEMANTIC_WORKER_KINDS: readonly LspWorkerJobKind[] = [
   "cpu/probe",
   "syntax/parse-facts",
+  "syntax/format",
   "doc/open",
   "doc/change",
   "doc/close",
@@ -71,6 +78,12 @@ export type LspWorkerJob =
     readonly kind: "syntax/parse-facts";
     readonly uri: string;
     readonly source: string;
+  })
+  | (JobEnvelope & {
+    readonly kind: "syntax/format";
+    readonly uri: string;
+    readonly source: string;
+    readonly params: unknown;
   })
   | (JobEnvelope & {
     readonly kind: "doc/open";
@@ -201,6 +214,25 @@ export function lspWorkerJob(value: unknown): LspWorkerJob {
         kind: "syntax/parse-facts",
         uri: record.uri,
         source: record.source,
+      };
+    }
+    case "syntax/format": {
+      if (typeof record.uri !== "string") {
+        throw new TypeError("syntax/format job has an invalid uri");
+      }
+      if (typeof record.source !== "string") {
+        throw new TypeError("syntax/format job has an invalid source");
+      }
+      if (!("params" in record)) {
+        throw new TypeError("syntax/format job is missing params");
+      }
+      return {
+        protocol: LSP_WORKER_PROTOCOL_VERSION,
+        job,
+        kind: "syntax/format",
+        uri: record.uri,
+        source: record.source,
+        params: record.params,
       };
     }
     case "doc/open": {
@@ -354,6 +386,7 @@ function isVersion(version: unknown): version is number {
 function isJobKind(kind: unknown): kind is LspWorkerJobKind {
   return kind === "cpu/probe" ||
     kind === "syntax/parse-facts" ||
+    kind === "syntax/format" ||
     kind === "doc/open" ||
     kind === "doc/change" ||
     kind === "doc/close" ||

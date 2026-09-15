@@ -24,7 +24,10 @@ const port: WorkerPort = {
 let executor: ServiceExecutor | undefined = undefined;
 
 runWorkerLoop(port, (job: LspWorkerJob) => {
-  if (job.kind === "cpu/probe" || job.kind === "syntax/parse-facts") {
+  if (
+    job.kind === "cpu/probe" || job.kind === "syntax/parse-facts" ||
+    job.kind === "syntax/format"
+  ) {
     return executeSyntaxJob(job);
   }
   if (executor === undefined) executor = new ServiceExecutor();

@@ -7,6 +7,14 @@
 // Compiler-free.
 
 import { parse } from "../../syntax/parse.ts";
+import { snapshotSource } from "../../syntax/snapshot.ts";
+import type { Range } from "../../text/document.ts";
+import {
+  assertEditReconstructs,
+  deriveEdit,
+} from "../../tooling/format/edits.ts";
+import { formatSource } from "../../tooling/formatter.ts";
+import { paramsObject, requireFormattingOptions } from "./params.ts";
 import type { LspWorkerJob } from "./protocol.ts";
 
 /** Executes the Compiler-free job kinds, rejecting everything else. */
@@ -18,6 +26,8 @@ export function executeSyntaxJob(
       return runCpuProbe(job.iterations, job.seed);
     case "syntax/parse-facts":
       return parseFacts(job.uri, job.source);
+    case "syntax/format":
+      return formatFacts(job.source, job.params);
     default:
       throw new Error(`syntax jobs cannot execute ${job.kind}`);
   }
@@ -92,4 +102,37 @@ export async function parseFacts(
     declarationCount: parsed.module.declarations.length,
     sourceLength: source.length,
   };
+}
+
+/** One formatting edit, shaped exactly like the service answer. */
+export interface FormatEdit {
+  readonly range: Range;
+  readonly newText: string;
+}
+
+/**
+ * Formats one source text without a service replica: the same snapshot,
+ * format, and minimal-edit pipeline the service runs, with the same empty
+ * answers for invalid or unchanged input. Operational failures propagate
+ * so the lane settles an explicit backend failure.
+ */
+export async function formatFacts(
+  source: string,
+  params: unknown,
+): Promise<readonly FormatEdit[]> {
+  const method = "textDocument/formatting";
+  const options = requireFormattingOptions(
+    paramsObject(params, method),
+    method,
+  );
+  const snapshot = await snapshotSource(source);
+  if (!snapshot.ok) return [];
+  const formatted = await formatSource(source, snapshot.snapshot, undefined, {
+    options,
+  });
+  if (!formatted.ok || formatted.source === source) return [];
+  const edit = deriveEdit(source, formatted.source);
+  if (edit === null) return [];
+  assertEditReconstructs(source, formatted.source, edit);
+  return [{ range: edit.range, newText: edit.newText }];
 }

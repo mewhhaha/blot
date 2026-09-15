@@ -315,6 +315,37 @@ export class GpuProbe {
  * interval keeps running while the server works so transient device opens
  * are caught, not just steady-state mappings.
  */
+/** Thread names observed under /proc, plus whether inspection worked. */
+export interface ThreadInspection {
+  readonly supported: boolean;
+  readonly names: readonly string[];
+}
+
+/**
+ * Reads one process's thread names from /proc. Outside Linux /proc the
+ * inspection reports unsupported rather than an empty list.
+ */
+export async function inspectThreads(pid: number): Promise<ThreadInspection> {
+  const names: string[] = [];
+  let supported = false;
+  try {
+    for await (const entry of Deno.readDir(`/proc/${pid}/task`)) {
+      supported = true;
+      try {
+        const comm = await Deno.readTextFile(
+          `/proc/${pid}/task/${entry.name}/comm`,
+        );
+        names.push(comm.trim());
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return { supported: false, names: [] };
+  }
+  return { supported, names };
+}
+
 export async function watchGpu(
   probe: GpuProbe,
   done: Promise<unknown>,

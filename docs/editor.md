@@ -62,24 +62,28 @@ revision as diagnostics and hover.
 
 LSP requests run through a coordinator with two lanes. Text synchronization
 applies immediately in received order, while requests flow into the syntax lane
-(formatting and other compiler-free work) or the semantic lane (analysis-backed
-requests and diagnostics), one active job per worker host. Formatting carries a
-deadline, diagnostics keep one latest debounced job per document, and shutdown
-drains the lanes before exit. `$/cancelRequest` settles a pending request as
-cancelled; a newer document revision settles in-flight work as content-modified
-instead of answering against stale text. Overload, crashes, and backend failures
-settle documented errors rather than hanging or returning silent empty results.
-A cancellation arriving after completion is ignored and cannot cancel a later
-request reusing that ID.
+(formatting only — the one request that never touches the compiler) or the
+semantic lane (every other request and diagnostics), one active job per worker
+host. Formatting carries a deadline, diagnostics keep one latest debounced job
+per document, and shutdown drains the lanes before exit. `$/cancelRequest`
+settles a pending request as cancelled; a newer document revision settles
+in-flight work as content-modified instead of answering against stale text.
+Overload, crashes, and backend failures settle documented errors rather than
+hanging or returning silent empty results. A cancellation arriving after
+completion is ignored and cannot cancel a later request reusing that ID.
 
-The default configuration runs everything inline in the server process behind
-one language service. Threaded worker hosts are available for both runtimes:
-Deno workers through `src/deno/lsp_worker_host.ts` and Node worker threads
-through `src/node/lsp_worker_host.ts`, with the syntax and semantic worker
-entries beside them under `src/lsp/workers/`. Workers run one job at a time per
-thread; the semantic worker owns its compiler replica, and document
-synchronization reaches it through priority lane jobs, so the replica never
-serves a revision the coordinator has moved past.
+The shipped entries run worker-backed: one thread per lane, so analysis blocks
+only its own thread and formatting never waits on the compiler. Deno workers
+through `src/deno/lsp_worker_host.ts` and Node worker threads through
+`src/node/lsp_worker_host.ts`, with the syntax and semantic worker entries
+beside them under `src/lsp/workers/`. Workers run one job at a time per thread;
+the semantic worker owns its compiler replica, and document synchronization
+reaches it through priority lane jobs, so the replica never serves a revision
+the coordinator has moved past. The syntax worker is compiler-free by
+construction: format jobs carry their own text and need no service replica. A
+worker that fails to boot rejects loudly through the lane startup path; there is
+no silent inline fallback. Inline hosts remain for tests and embedders that
+inject their own lanes.
 
 Closing a document invalidates its pending requests, drops its lane work,
 releases its root, and clears its overlay and diagnostics. Shared dependencies

@@ -208,18 +208,18 @@ pair.
 ## Editor runtime
 
 The language server is a coordinator over two lanes and worker hosts; the full
-contract lives in [editor support](editor.md). The syntax lane serves
-compiler-free requests (formatting, completion, signature help, symbols, inlay
-hints, code actions) and the semantic lane serves analysis-backed requests and
-diagnostics, one active job per host. Text synchronization applies immediately;
-freshness gates at dispatch and at result arrival settle stale work as
-content-modified instead of answering against old text. A watchdog gives
+contract lives in [editor support](editor.md). The syntax lane serves formatting
+only — the one compiler-free request — and the semantic lane serves every other
+request and diagnostics, one active job per host. Text synchronization applies
+immediately; freshness gates at dispatch and at result arrival settle stale work
+as content-modified instead of answering against old text. A watchdog gives
 obsolete work a bounded grace before terminating and reconstructing its host;
 crashes fail the active job explicitly, hold the queue, resync open documents,
-and resume. The default configuration runs everything inline behind one language
-service; Deno workers and Node worker threads host the same syntax/semantic
-entries, each owning its replica (the semantic replica owns a compiler) fed by
-priority sync jobs.
+and resume. The shipped entries run worker-backed by default — Deno workers and
+Node worker threads — so analysis blocks only its own thread; only the semantic
+replica owns a compiler, fed by priority sync jobs, while format jobs carry
+their own text to the compiler-free syntax worker. Inline hosts remain for tests
+and embedders that inject their own lanes.
 
 The formatter is fixed-cost and syntax-only: one buffer snapshot builds a
 formatting IR, the IR prints once, and changed output validates with a single

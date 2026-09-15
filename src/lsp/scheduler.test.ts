@@ -574,10 +574,18 @@ Deno.test("dropping a uri settles queued work but spares the active job", async 
 });
 
 Deno.test("methods split across syntax and semantic lanes", () => {
-  assertEquals(laneForMethod("textDocument/completion"), "syntax");
+  // Only formatting runs on the compiler-free syntax thread; every other
+  // method can reach the compiler through the service replica, so all of
+  // them run on the semantic lane. An earlier split put completion-style
+  // methods on the syntax lane, which would strand them on a host that
+  // cannot run service jobs once lanes became threads.
   assertEquals(laneForMethod("textDocument/formatting"), "syntax");
-  assertEquals(laneForMethod("textDocument/codeAction"), "syntax");
-  assertEquals(laneForMethod("workspace/symbol"), "syntax");
+  assertEquals(laneForMethod("textDocument/completion"), "semantic");
+  assertEquals(laneForMethod("textDocument/signatureHelp"), "semantic");
+  assertEquals(laneForMethod("textDocument/documentSymbol"), "semantic");
+  assertEquals(laneForMethod("textDocument/inlayHint"), "semantic");
+  assertEquals(laneForMethod("textDocument/codeAction"), "semantic");
+  assertEquals(laneForMethod("workspace/symbol"), "semantic");
   assertEquals(laneForMethod("textDocument/hover"), "semantic");
   assertEquals(laneForMethod("textDocument/definition"), "semantic");
   assertEquals(laneForMethod("codeAction/resolve"), "semantic");

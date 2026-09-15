@@ -13,7 +13,11 @@ import type {
   LspWorkerJobKind,
   LspWorkerResult,
 } from "./workers/protocol.ts";
-import { workerFailureResult, workerSuccess } from "./workers/protocol.ts";
+import {
+  SEMANTIC_WORKER_KINDS,
+  workerFailureResult,
+  workerSuccess,
+} from "./workers/protocol.ts";
 
 /** How the fake resolves jobs: by handler, or by manual release. */
 export type FakeBehavior =
@@ -50,14 +54,8 @@ export class FakeLspWorkerHost implements LspWorkerHost {
     let label = `${role} fake host`;
     if (options.label !== undefined) label = options.label;
     this.label = label;
-    this.#kinds = options.kinds || new Set<LspWorkerJobKind>([
-      "cpu/probe",
-      "syntax/parse-facts",
-      "doc/open",
-      "doc/change",
-      "doc/close",
-      "service/request",
-    ]);
+    this.#kinds = options.kinds ||
+      new Set<LspWorkerJobKind>(SEMANTIC_WORKER_KINDS);
     this.#behavior = options.behavior || { mode: "manual" };
   }
 
