@@ -1,0 +1,111 @@
+open import "blot:prelude"
+const J = import "./lib/journal.blot"
+
+const ReplicaCount = range (1, 16)
+const Port = range (1, 65535)
+
+const Service =
+  {
+    .name = Text;
+    .region = Text;
+    .port = Port;
+    .replicas = ReplicaCount;
+  }
+
+const Placement =
+  {
+    .name = Text;
+    .zone = Text;
+    .port = Port;
+    .replicas = ReplicaCount;
+  }
+
+const PlacementEvent =
+  #Placed { .service = Text; .zone = Text; }
+
+const CapacityEvent =
+  #Capacity { .service = Text; .replicas = ReplicaCount; }
+
+const AuditEvent = PlacementEvent | CapacityEvent
+
+const choose_zone :: Service -> J.Journal (PlacementEvent, Placement)
+const choose_zone = fn service => do:
+  let zone = case service.region == "eu" of
+    #True => "eu-primary"
+    #False => "global-primary"
+  return {
+    .entries = [#Placed { .service = service.name; .zone; }];
+    .value = {
+      .name = service.name;
+      .zone;
+      .port = service.port;
+      .replicas = service.replicas;
+    };
+  }
+
+const record_capacity :: Placement -> J.Journal (CapacityEvent, Placement)
+const record_capacity = fn placement => {
+  .entries = [
+    #Capacity { .service = placement.name; .replicas = placement.replicas; }
+  ];
+  .value = placement;
+}
+
+// Each step owns a narrow local event vocabulary. `and_then` joins those
+// covariant carriers to `AuditEvent` while the Placement value shared between
+// stages occurs in opposite variance positions and therefore stays related.
+const plan :: Service -> J.Journal (AuditEvent, Placement)
+const plan = fn service => J.and_then (choose_zone service, record_capacity)
+
+const describe :: Placement -> Text
+const describe = fn placement => placement.name <> "@" <> placement.zone
+
+const render_event :: AuditEvent -> Text
+const render_event = fn event => case event of
+  #Placed placed => "placed:" <> placed.service <> ":" <> placed.zone
+  #Capacity capacity => "capacity:" <> capacity.service
+
+const main = fn _ => do:
+  const api :: Service
+  const api =
+    {
+      .name = "api-🐱";
+      .region = "eu";
+      .port = 443;
+      .replicas = 4;
+    }
+
+  const worker :: Service
+  const worker =
+    {
+      .name = "worker";
+      .region = "us";
+      .port = 8080;
+      .replicas = 16;
+    }
+
+  let api_plan = plan api
+  let api_summary = J.map (api_plan, describe)
+  let worker_plan = plan worker
+  let combined =
+    J.zip_with (
+      api_summary,
+      worker_plan,
+      fn (api_text, worker_value) => {
+        .api = api_text;
+        .worker = describe worker_value;
+      }
+    )
+  let rendered = J.map_entries (plan api, render_event)
+
+  const empty :: J.Journal (AuditEvent, Text)
+  const empty = J.pure "no-op"
+
+  return {
+    .api = api_summary;
+    .combined;
+    .rendered;
+    .empty;
+  }
+
+return main Unit

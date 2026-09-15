@@ -24,6 +24,7 @@ const suites = [
   "src/node/structural_readers.test.ts",
   "src/node/typed_validation.test.ts",
   "src/node/effect_row_middleware.test.ts",
+  "src/node/typed_journals.test.ts",
   "src/node/composable_reducers.test.ts",
   "src/node/typed_semiring_matrices.test.ts",
   "src/node/nominal_keyed_index.test.ts",

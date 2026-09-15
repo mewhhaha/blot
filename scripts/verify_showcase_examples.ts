@@ -43,6 +43,7 @@ const abstractionExamples = [
   "structural_readers.blot",
   "typed_validation.blot",
   "effect_row_middleware.blot",
+  "typed_journals.blot",
   "composable_reducers.blot",
   "typed_semiring_matrices.blot",
   "nominal_keyed_index.blot",

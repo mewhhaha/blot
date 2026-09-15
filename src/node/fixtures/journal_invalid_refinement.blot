@@ -1,0 +1,14 @@
+open import "blot:prelude"
+const J = import "../../../examples/lib/journal.blot"
+
+const ReplicaCount = range (1, 16)
+const Event = #Capacity ReplicaCount
+
+const invalid :: J.Journal (Event, ReplicaCount)
+const invalid =
+  {
+    .entries = [#Capacity 17];
+    .value = 17;
+  }
+
+return invalid

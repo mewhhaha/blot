@@ -1,0 +1,13 @@
+open import "blot:prelude"
+const J = import "../../../examples/lib/journal.blot"
+
+const source :: J.Journal (#Count Int, Int)
+const source =
+  {
+    .entries = [#Count 3];
+    .value = 3;
+  }
+
+const wrong_mapper :: #Name Text -> Text
+const wrong_mapper = fn #Name value => value
+return J.map_entries (source, wrong_mapper)

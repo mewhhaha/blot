@@ -1,0 +1,17 @@
+open import "blot:prelude"
+const J = import "../../../examples/lib/journal.blot"
+
+const first :: J.Journal (#Seen Int, Int)
+const first =
+  {
+    .entries = [#Seen 1];
+    .value = 2;
+  }
+
+const next :: Text -> J.Journal (#Named Text, Text)
+const next = fn value => {
+  .entries = [#Named value];
+  .value = value;
+}
+
+return J.and_then (first, next)

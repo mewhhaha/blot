@@ -1,0 +1,59 @@
+const { .Array; .Unit; } = import "blot:prelude"
+
+// A Journal keeps an ordered, typed event vocabulary next to a result. Blot's
+// algebraic subtyping lets `and_then` and `zip_with` infer a common event union
+// when independently authored steps emit different structural variants.
+const Journal = fn (Entry, Value) => {
+  .entries = [Entry];
+  .value = Value;
+}
+
+const pure :: @forall (fn Entry => @forall (fn Value => Value -> Journal (Entry, Value)))
+const pure = fn value => {
+  .entries = [];
+  .value;
+}
+
+const emit :: @forall (fn Entry => Entry -> Journal (Entry, Unit))
+const emit = fn entry => {
+  .entries = [entry];
+  .value = Unit;
+}
+
+const map :: @forall (fn Entry => @forall (fn Input => @forall (fn Output => (Journal (Entry, Input), (Input -> Output)) -> Journal (Entry, Output))))
+const map = fn (journal, transform) => {
+  .entries = journal.entries;
+  .value = transform journal.value;
+}
+
+const map_entries :: @forall (fn Entry => @forall (fn MappedEntry => @forall (fn Value => (Journal (Entry, Value), (Entry -> MappedEntry)) -> Journal (MappedEntry, Value))))
+const map_entries = fn (journal, transform) => {
+  .entries = Array.map (journal.entries, transform);
+  .value = journal.value;
+}
+
+// Pain point: repeated covariant `Entry` occurrences infer a common supertype,
+// not nominal equality. Journals intentionally use that join to combine event vocabularies.
+const and_then :: @forall (fn Entry => @forall (fn Input => @forall (fn Output => (Journal (Entry, Input), (Input -> Journal (Entry, Output))) -> Journal (Entry, Output))))
+const and_then = fn (journal, next) => do:
+  let following = next journal.value
+  return {
+    .entries = Array.append journal.entries following.entries;
+    .value = following.value;
+  }
+
+const zip_with :: @forall (fn Entry => @forall (fn Left => @forall (fn Right => @forall (fn Output => (Journal (Entry, Left), Journal (Entry, Right), ((Left, Right) -> Output)) -> Journal (Entry, Output)))))
+const zip_with = fn (left, right, combine) => {
+  .entries = Array.append left.entries right.entries;
+  .value = combine (left.value, right.value);
+}
+
+return {
+  .Journal;
+  .pure;
+  .emit;
+  .map;
+  .map_entries;
+  .and_then;
+  .zip_with;
+}
