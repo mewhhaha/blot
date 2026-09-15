@@ -50,7 +50,7 @@ jobs:
                       jobs = json.loads(subprocess.check_output(['gh', 'api', run['jobs_url']]))
                       for job in jobs['jobs']:
                           if job['conclusion'] == 'failure':
-                              log = subprocess.check_output(['gh', 'api', 'repos/mewhhaha/blot/actions/jobs/' + str(job['id']) + '/logs'])
+                              log = subprocess.check_output(['gh', 'api', '--allow-escape-sequences', 'repos/mewhhaha/blot/actions/jobs/' + str(job['id']) + '/logs'])
                               (root / ('failure-' + str(job['id']) + '.log.gz')).write_bytes(gzip.compress(log))
           (root / 'statuses.json').write_text(json.dumps(statuses, indent=2) + '\n')
           PY
