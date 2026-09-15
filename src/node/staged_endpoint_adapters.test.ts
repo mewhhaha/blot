@@ -12,6 +12,7 @@ const monomorphicPath =
 const wrongTransformPath =
   "src/node/fixtures/endpoint_adapter_wrong_transform.blot";
 const wrongOutputPath = "src/node/fixtures/endpoint_adapter_wrong_output.blot";
+const pendingPath = "examples/pending/endpoint_adapter_inferred_composition.blot";
 
 const expectedType =
   "{ .default = { .required_api = #Ok 1..65535 | #Error Text; .required_missing = #Ok 1..65535 | #Error Text; .observed_admin = #Ok { .value = 1..65535; .source = Text } | #Error Text; .observed_owner = #Ok { .value = Text; .source = Text } | #Error Text; .observed_owner_missing = #Ok { .value = Text; .source = Text } | #Error Text } }";
@@ -22,6 +23,7 @@ const blotPaths = [
   monomorphicPath,
   wrongTransformPath,
   wrongOutputPath,
+  pendingPath,
 ] as const;
 
 test("staged endpoint adapters preserve payload types in both executions", async () => {
@@ -70,6 +72,24 @@ test("staged endpoint adapters reject broken payload relationships", async () =>
     ) {
       await assert.rejects(() => compiler.check(fixture), /BLOT_TYPE_ERROR/);
     }
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("staged endpoint adapters record current inferred-composition type loss", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const checked = await compiler.check(pendingPath);
+    assert.deepEqual(
+      { type: checked.type, effects: checked.effects },
+      { type: "⊥", effects: "" },
+    );
+    const evaluated = await compiler.evaluate(pendingPath);
+    assert.equal(
+      evaluated.display,
+      "#Ok { .value = \"Żaneta\"; .source = \"registry\"; }",
+    );
   } finally {
     compiler.destroy();
   }
