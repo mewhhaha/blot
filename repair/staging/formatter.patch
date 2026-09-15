@@ -1,0 +1,67 @@
+diff --git a/src/tooling/formatter.test.ts b/src/tooling/formatter.test.ts
+index 73dbc5d4..1b72224f 100644
+--- a/src/tooling/formatter.test.ts
++++ b/src/tooling/formatter.test.ts
+@@ -875,3 +875,24 @@ return build ()
+     }
+   }
+ });
++
++Deno.test("formatting many signatures shares layout without changing their trees", async () => {
++  const declarations = Array.from(
++    { length: 32 },
++    (_, index) =>
++      `const step${index} ::
++  @forall (fn T => @forall (fn S => do:
++      return ([T], S, (S, T) -> S) -> S
++    ))
++const step${index} = fn value => value
++`,
++  );
++  const source = `${declarations.join("\n")}return step31\n`;
++  const formatted = await formatSource(source);
++  if (!formatted.ok) throw new Error("signature corpus did not format");
++  assertEquals(
++    semanticTree(await parse(formatted.source)),
++    semanticTree(await parse(source)),
++  );
++  assertEquals(await formatSource(formatted.source), formatted);
++});
+diff --git a/src/tooling/formatter.ts b/src/tooling/formatter.ts
+index 77350fa6..c2026398 100644
+--- a/src/tooling/formatter.ts
++++ b/src/tooling/formatter.ts
+@@ -250,6 +250,13 @@ async function formatOneStatementValue(
+   collectRules(root, "binding", statements);
+   collectRules(root, "result", statements);
+   statements.sort((left, right) => left.span.start - right.span.start);
++  // Every candidate in this pass shares one source/CST snapshot. Recomputing
++  // structural indentation for each signature makes large modules quadratic.
++  let signatureLayout: {
++    lineStarts: readonly number[];
++    sourceLines: readonly string[];
++    indentedLines: readonly string[];
++  } | undefined;
+   for (const statement of statements) {
+     let introducer = directToken(statement, "return");
+     if (statement.name === "signature") {
+@@ -310,9 +317,16 @@ async function formatOneStatementValue(
+       statement.name === "signature" && !valueStartsOnIntroducerLine &&
+       valueIsMultiline
+     ) {
+-      const lineStarts = sourceLineStarts(source);
+-      const sourceLines = source.split("\n");
+-      const indentedLines = structurallyIndentedLines(source, root, lineStarts);
++      if (signatureLayout === undefined) {
++        const lineStarts = sourceLineStarts(source);
++        signatureLayout = {
++          lineStarts,
++          sourceLines: source.split("\n"),
++          indentedLines: structurallyIndentedLines(source, root, lineStarts),
++        };
++      }
++      const { lineStarts, indentedLines } = signatureLayout;
++      const sourceLines = [...signatureLayout.sourceLines];
+       const startsAtLine = lineAtOffset(lineStarts, statement.span.start);
+       const endsAtLine = lineAtOffset(
+         lineStarts,
