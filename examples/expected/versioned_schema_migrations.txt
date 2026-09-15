@@ -1,0 +1,1 @@
+{ .default = { .valid = { .status = "ok"; .timeout_ms = 30000; .retry_limit = 3; }; .invalid_seconds = { .status = "seconds"; .timeout_ms = 90; .retry_limit = 0; }; .invalid_retry = { .status = "retry"; .timeout_ms = 0; .retry_limit = 8; }; .boundary = { .status = "ok"; .timeout_ms = 60000; .retry_limit = 5; }; }; }
