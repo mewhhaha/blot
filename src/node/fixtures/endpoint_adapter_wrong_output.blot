@@ -1,0 +1,19 @@
+open import "blot:prelude"
+const Adapter = import "../../../examples/lib/endpoint_adapter.blot"
+
+const Maybe = fn Value => #Found Value | #Missing
+const Checked = fn Value => #Ok Value | #Error Text
+const Port = refine (Int, fn value => value >= 1 && value <= 65535)
+
+const require :: Adapter.Natural (Maybe, Checked)
+const require = fn candidate => case candidate of
+  #Found value => #Ok value
+  #Missing => #Error "missing"
+
+const lookup_name :: Int -> Maybe Text
+const lookup_name = fn _ => #Found "edge"
+const hoist = Adapter.hoist (Maybe, Checked)
+
+const invalid :: Int -> Checked Port
+const invalid = hoist (require, lookup_name)
+return invalid 1
