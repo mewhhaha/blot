@@ -187,8 +187,8 @@ semantic identity.
 
 ### 5.1 Ordinary effects
 
-Ordinary source effects are generative. Evaluating a declaration allocates
-under:
+Source effects created by `@effect` are generative. Evaluating a declaration
+allocates under:
 
 ```text
 (module instance, declaration node, compile-time scope, signature)
@@ -223,6 +223,22 @@ instantiation, not resident-result sharing.
 A reusable cache entry containing an ordinary effect is valid only when the
 complete owning instance identity and revision are preserved. A module path or
 declaration spelling alone is insufficient.
+
+`@effect.shared` is applicative in a nonempty text key and the complete
+normalized operation contract, including exact alpha-equivalent signatures,
+ownership, suspension, and referenced effect atoms. Its identity excludes the
+import occurrence, source revision, and local binding name. It remains a source
+effect handled by the normal effect machinery; it supplies neither shared state
+nor host authority.
+
+The resident interner records every live occurrence of a shared contract.
+Invalidation removes occurrence provenance and retires an atom only when no
+occurrence remains. Removing one declaring module must retain another module's
+declaration of that atom. Snapshot staging clones this table transactionally;
+committing a snapshot publishes the staged table with the corresponding effect
+values. Shared effects and their constructors remain subject to the existing
+conservative effect-capsule admission checks and are reconstructed in the
+consumer's resident interner.
 
 ### 5.2 Seals
 
