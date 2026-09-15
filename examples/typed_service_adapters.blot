@@ -1,0 +1,80 @@
+open import "blot:prelude"
+
+const A = import "./lib/service_adapter.blot"
+
+const Port = range (1, 65535)
+const Status = #Ready | #Degraded Text
+const CoreRequest = { .service = Text; .port = Port; }
+const CoreResponse = { .endpoint = Text; .status = Status; }
+const ApiRequest = { .service = Text; .port = Port; .trace = Text; }
+const ApiResponse = #Service CoreResponse
+const WireRequest = #Resolve ApiRequest
+const WireResponse = #Resolved ApiResponse
+
+let api_request =
+  fn request => { .service = request.service; .port = request.port; }
+let api_response = fn response => #Service response
+let api_to_core ::
+  A.Adapter (ApiRequest, CoreRequest, CoreResponse, ApiResponse)
+let api_to_core = A.dimap (api_request, api_response)
+
+let wire_request = fn request => case request of
+  #Resolve value => value
+let wire_response = fn response => #Resolved response
+let wire_to_api ::
+  A.Adapter (WireRequest, ApiRequest, ApiResponse, WireResponse)
+let wire_to_api = A.dimap (wire_request, wire_response)
+
+let wire_to_core ::
+  A.Adapter (WireRequest, CoreRequest, CoreResponse, WireResponse)
+let wire_to_core = A.compose (wire_to_api, api_to_core)
+
+let render_endpoint =
+  fn request => request.service <> ":" <> Text.of_int request.port
+
+let pure_core :: CoreRequest -> CoreResponse
+let pure_core = fn request => {
+  .endpoint = render_endpoint request;
+  .status = #Ready;
+}
+
+let pure_wire :: WireRequest -> WireResponse
+let pure_wire = A.adapt (wire_to_core, pure_core)
+
+const Health = @effect { .probe = Text -> Status; }
+
+let checked_core :: CoreRequest -> CoreResponse ~ { Health }
+let checked_core = fn request => do:
+  use status <- Health.probe request.service
+  return { .endpoint = render_endpoint request; .status; }
+
+let checked_wire :: WireRequest -> WireResponse ~ { Health }
+let checked_wire = A.adapt (wire_to_core, checked_core)
+
+const health_handler =
+  {
+    .probe = fn (service, ?resume) => do:
+      use result <- resume (#Degraded (service <> ": cache warmup"))
+      return result
+    ;
+    .return = fn value => value;
+  }
+
+let unicode = #Resolve { .service = "db-🐱"; .port = 65535; .trace = "żółć"; }
+let ordinary = #Resolve { .service = "api"; .port = 443; .trace = "r-42"; }
+let effectful_program :: Unit -> WireResponse ~ { Health }
+let effectful_program = fn () => checked_wire unicode
+let effectful = effectful_program |> @handle (Health, health_handler)
+use checked <- effectful
+
+// Pain point: adapter transforms are deliberately pure. Open effect-row tails
+// are signature-local, so a reusable type-valued Adapter cannot store request or
+// response arrows parameterized by arbitrary rows. `adapt` can still preserve
+// the wrapped service row because that relationship lives in its own signature.
+return {
+  .default = {
+    .pure = pure_wire ordinary;
+    .effectful = checked;
+    .identity = A.adapt (A.identity, pure_core) { .service = "id"; .port = 1; };
+  };
+}

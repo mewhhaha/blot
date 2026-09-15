@@ -1,0 +1,9 @@
+open import "blot:prelude"
+const A = import "../../../examples/lib/service_adapter.blot"
+
+let outer :: A.Adapter (Int, Text, Text, Int)
+let outer = A.dimap (Text.of_int, Text.length)
+let inner :: A.Adapter (Int, Int, Int, Text)
+let inner = A.dimap (fn value => value, Text.of_int)
+
+return A.compose (outer, inner)
