@@ -63,6 +63,7 @@ shared array snapshots, guarded runtime indices, and large record-update folds.
 | [`typed_relational_join.blot`](typed_relational_join.blot)       | Typed key projections connect two row domains and preserve grouped matches                                                           | duplicates, unmatched rows, empty sides, flipped relations          |
 | [`typed_traversals.blot`](typed_traversals.blot)                 | Composable zero-or-more focuses preserve the relationship between whole values and their parts                                       | nested arrays, empty waves, Unicode labels, incompatible modifiers  |
 | [`typed_record_projections.blot`](typed_record_projections.blot) | A staged field selection derives a shared shape for typed observation and replacement                                                | refinements, unselected fields, empty selections, unknown names     |
+| [`typed_resource_leases.blot`](typed_resource_leases.blot)       | A type-valued lease effect couples linear acquisition with exact consuming close receipts                                            | nested leases, two live resources, leaks/double-close rejected      |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
