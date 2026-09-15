@@ -15,12 +15,12 @@ const FetchRetry = Retry.bounded (2, retryable_fetch)
 
 let fetch :: (Text, Int) -> Result (Int, FetchError) ~ { Remote }
 let fetch = fn (key, attempt) => Remote.fetch {
-  .key = key;
-  .attempt = attempt;
+  .key;
+  .attempt;
 }
 
-let simulate :: Request -> Result (Int, FetchError)
-let simulate = fn request => do:
+const simulate :: Request -> Result (Int, FetchError)
+const simulate = fn request => do:
   if request.key == "flaky":
     if request.attempt < 2:
       return #Error (#Transient "temporarily unavailable")
@@ -32,13 +32,14 @@ let simulate = fn request => do:
 
   return #Ok 200
 
-const remote_handler = {
-  .fetch = fn (request, ?resume) => do:
-    use result <- resume (simulate request)
-    return result
-  ;
-  .return = fn result => result;
-}
+let remote_handler =
+  {
+    .fetch = fn (request, ?resume) => do:
+      use result <- resume (simulate request)
+      return result
+    ;
+    .return = fn result => result;
+  }
 
 let remote_program :: Text -> Result (Int, FetchError) ~ { Remote }
 let remote_program = fn key => Retry.run (FetchRetry, fetch, key)
@@ -94,8 +95,8 @@ return {
     .flaky = flaky_result;
     .rejected = rejected_result;
     .stable = stable_result;
-    .pure_retry = pure_retry;
-    .pure_stop = pure_stop;
-    .zero_budget = zero_budget;
+    .pure_retry;
+    .pure_stop;
+    .zero_budget;
   };
 }
