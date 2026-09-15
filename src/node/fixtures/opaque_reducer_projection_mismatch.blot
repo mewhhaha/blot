@@ -1,0 +1,11 @@
+open import "blot:prelude"
+const R = import "../../../examples/lib/opaque_reducer.blot"
+
+const Sample = { .latency_ms = Int; .route = Text; }
+const total :: R.Reducer (Int, Int)
+const total = R.make { .initial = 0; .step = fn (state, value) => state + value; .finish = fn value => value; }
+
+const invalid :: R.Reducer (Sample, Int)
+const invalid = R.contramap (total, fn sample => sample.route)
+
+return invalid
