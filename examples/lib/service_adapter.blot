@@ -1,0 +1,26 @@
+const Adapter = fn (OuterInput, InnerInput, InnerOutput, OuterOutput) => {
+  .request = OuterInput -> InnerInput;
+  .response = InnerOutput -> OuterOutput;
+}
+
+const identity :: @forall (fn Input => @forall (fn Output => Adapter (Input, Input, Output, Output)))
+const identity = {
+  .request = fn value => value;
+  .response = fn value => value;
+}
+
+const dimap :: @forall (fn OuterInput => @forall (fn InnerInput => @forall (fn InnerOutput => @forall (fn OuterOutput => (OuterInput -> InnerInput, InnerOutput -> OuterOutput) -> Adapter (OuterInput, InnerInput, InnerOutput, OuterOutput)))))
+const dimap = fn (request, response) => { .request; .response; }
+
+const compose :: @forall (fn OuterInput => @forall (fn MiddleInput => @forall (fn InnerInput => @forall (fn InnerOutput => @forall (fn MiddleOutput => @forall (fn OuterOutput => (Adapter (OuterInput, MiddleInput, MiddleOutput, OuterOutput), Adapter (MiddleInput, InnerInput, InnerOutput, MiddleOutput)) -> Adapter (OuterInput, InnerInput, InnerOutput, OuterOutput)))))))
+const compose = fn (outer, inner) => {
+  .request = fn input => inner.request (outer.request input);
+  .response = fn output => outer.response (inner.response output);
+}
+
+const adapt :: @forall (fn OuterInput => @forall (fn InnerInput => @forall (fn InnerOutput => @forall (fn OuterOutput => (Adapter (OuterInput, InnerInput, InnerOutput, OuterOutput), InnerInput -> InnerOutput ~ { ..e }) -> OuterInput -> OuterOutput ~ { ..e }))))
+const adapt = fn (adapter, service) => fn input => do:
+  use output <- service (adapter.request input)
+  return adapter.response output
+
+return { .Adapter; .identity; .dimap; .compose; .adapt; }
