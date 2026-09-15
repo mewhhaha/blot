@@ -1,9 +1,9 @@
 # Staged bounded integer domains
 
-`staged_bounded_domains.blot` turns one pair of compile-time integer bounds into
-a reusable runtime boundary API. `Domain.bounded (low, high)` computes
-`range (low, high)` once, then returns `contains`, `admit`, and `clamp`
-operations whose signatures are tied to that exact refinement.
+`staged_bounded_domains.blot` turns one concrete compile-time integer range type
+into a reusable runtime boundary API. `Domain.bounded Type` reflects that type's
+endpoints once, then returns `contains`, `admit`, and `clamp` operations whose
+signatures are tied to the exact same refinement.
 
 The concrete program uses the same generator for deployment percentages, a
 narrower canary percentage, scheduling priority, and an allowed temperature
@@ -15,17 +15,24 @@ containment; the reverse direction is rejected.
 
 Without the descriptor, a program commonly repeats the same numeric bounds in a
 type declaration, a runtime validator, and a clamping function. Those copies can
-drift. Blot's types are compile-time values, so the descriptor factors that
-relationship directly: the bounds construct the output type, and branch
-narrowing proves that the successful runtime paths return values inside it. No
-cast or unchecked escape hatch is needed.
+drift. Blot's types are compile-time values and `Reflect.of` exposes a range's
+ordered-domain metadata, so the refinement itself becomes the single source of
+truth. Branch narrowing proves that successful runtime paths return values
+inside it. No cast or unchecked escape hatch is needed.
 
 The compiler enforces the generated range membership, the return type of
 `admit`/`clamp`, ordinary refinement subtyping, and the `Int` input carrier. It
 does not attach domain meaning to equal numeric ranges. Two independently
-generated `-40..85` types are structurally the same even if an application
+constructed `-40..85` types are structurally the same even if an application
 informally calls one Celsius and the other Fahrenheit; semantic units need a
 distinct data model or nominal representation.
+
+The reflected design also records a staging boundary discovered while building
+the natural alternative. A generic `bounded (low, high)` can compute
+`range (low, high)` as a value, but that computed value is not accepted as a
+type in a local signature: the checker reports `BLOT_SIGNATURE_NOT_A_TYPE`.
+Taking an already-concrete range type avoids weakening the public API and keeps
+the source-of-truth relationship intact.
 
 ## Run it
 
@@ -40,9 +47,9 @@ node --import tsx --test src/node/staged_bounded_domains.test.ts
 ```
 
 The focused test also checks canonical formatting, the evaluator golden,
-independently emitted Wasm output, and three rejection fixtures: widening a
-`0..100` value into `5..25`, constructing `1..5` with `6`, and passing text to
-an integer domain.
+independently emitted Wasm output, and three rejection fixtures: narrowing a
+general `0..100` value into `5..25`, constructing `1..5` with `6`, and passing
+text to an integer domain.
 
 ## Edge cases
 
