@@ -117,7 +117,10 @@ checking the literal expression: once a value has been bound as `Int`, `F64`, or
 `F32`, crossing to another numeric domain still requires an explicit conversion.
 A surrounding function result signature can constrain literals inside a generic
 iterator callback. Checking a nested declaration does not default unrelated
-literals from the enclosing expression before that context reaches them.
+literals from the enclosing expression before that context reaches them. A
+higher-order application may resolve a literal before specializing its result
+only when the checked argument constraints leave one numeric representation.
+That is not defaulting: ambiguous literals remain open for enclosing context.
 
 Floats are IEEE 754 values: `F64` is double precision and `F32` is single
 precision. They do not trap: an operation that overflows produces an infinity
@@ -1189,7 +1192,10 @@ compile-time field names. The selected fields may contain type values or runtime
 values. This is an explicit projection for constructing restricted record views.
 If an imported compile-time projection generator requests a missing field, its
 diagnostic identifies the caller's application and retains the originating
-implementation span in the explanation.
+implementation span in the explanation. An argument-pattern mismatch discovered
+while evaluating an imported generic call follows the same rule: its primary
+span is the caller's argument, with the originating implementation span retained
+as context.
 
 ```blot
 let original :: { .name = Text; .count = Int; }
@@ -2713,7 +2719,12 @@ The constraint graph may itself be cyclic: recursive functions and recursive
 flows are checked by revisiting ordered constraints at most once. That internal
 graph recursion is not an equi-recursive source type constructor. Rank-N types
 are explicit and predicative through `@forall`. Higher-kinded abstraction is
-compile-time function application rather than a kind system.
+compile-time function application rather than a kind system. A function that
+explicitly returns a quantified function preserves that scheme through
+application and an ordinary binding. The returned value is instantiated at its
+own calls; its caller does not repeat the producing function's result signature
+to keep the payload relationship. This does not allow impredicative
+instantiation of an ordinary inference variable.
 
 There is no record row variable, and there is not going to be one. The lattice
 has width subtyping, which says what a function may _read_ from a record, and
