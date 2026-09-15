@@ -1,0 +1,1 @@
+{ .default = { .full = { .total_ms = 60320; .sample_count = 4; .average_ms = #Some 15080; .server_errors = 1; .has_server_error = #True; }; .empty = { .total_ms = 0; .sample_count = 0; .average_ms = #None; .server_errors = 0; .has_server_error = #False; }; .boundary = { .total_ms = 0; .sample_count = 1; .average_ms = #Some 0; .server_errors = 1; .has_server_error = #True; }; }; }
