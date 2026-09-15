@@ -14,7 +14,7 @@ const wrongTransformPath =
 const wrongOutputPath = "src/node/fixtures/endpoint_adapter_wrong_output.blot";
 
 const expectedType =
-  '{ .default = { .required_api = #Ok 1..65535 | #Error Text; .required_missing = #Ok 1..65535 | #Error Text; .observed_admin = #Ok { .value = 1..65535; .source = Text } | #Error Text; .observed_owner = #Ok { .value = Text; .source = Text } | #Error Text; .observed_owner_missing = #Ok { .value = Text; .source = Text } | #Error Text } }';
+  "{ .default = { .required_api = #Ok 1..65535 | #Error Text; .required_missing = #Ok 1..65535 | #Error Text; .observed_admin = #Ok { .value = 1..65535; .source = Text } | #Error Text; .observed_owner = #Ok { .value = Text; .source = Text } | #Error Text; .observed_owner_missing = #Ok { .value = Text; .source = Text } | #Error Text } }";
 
 const blotPaths = [
   libraryPath,
@@ -65,7 +65,9 @@ test("staged endpoint adapters preserve payload types in both executions", async
 test("staged endpoint adapters reject broken payload relationships", async () => {
   const compiler = await Compiler.create();
   try {
-    for (const fixture of [monomorphicPath, wrongTransformPath, wrongOutputPath]) {
+    for (
+      const fixture of [monomorphicPath, wrongTransformPath, wrongOutputPath]
+    ) {
       await assert.rejects(() => compiler.check(fixture), /BLOT_TYPE_ERROR/);
     }
   } finally {
