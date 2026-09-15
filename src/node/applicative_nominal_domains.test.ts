@@ -16,7 +16,7 @@ const carrierDriftPath = "src/node/fixtures/nominal_domain_carrier_drift.blot";
 const collisionPath = "src/node/fixtures/nominal_domain_name_collision.blot";
 
 const principalType =
-  '{ .default = { .first = Int; .next = Int; .invoice = Int; .reconstructed = Int; .alias = Text } }';
+  "{ .default = { .first = Int; .next = Int; .invoice = Int; .reconstructed = Int; .alias = Text } }";
 
 const blotPaths = [
   domainPath,
