@@ -1,5 +1,3 @@
-open import "blot:prelude"
-
 // A natural adapter changes only the outer result constructor. The quantified
 // Value is shared by source and target, so an adapter cannot inspect or replace
 // the payload type it is carrying across an architectural boundary.
@@ -32,10 +30,10 @@ const hoist = fn (Source, Target) => do:
   return implementation
 
 return {
-  .Natural = Natural;
-  .Endpoint = Endpoint;
-  .Compose = Compose;
-  .Hoist = Hoist;
-  .compose = compose;
-  .hoist = hoist;
+  .Natural;
+  .Endpoint;
+  .Compose;
+  .Hoist;
+  .compose;
+  .hoist;
 }
