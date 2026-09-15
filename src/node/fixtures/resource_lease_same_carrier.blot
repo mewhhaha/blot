@@ -1,0 +1,26 @@
+open import "blot:prelude"
+const Resources = import "../../../examples/lib/resource_lease.blot"
+const Token = #Token Int
+const LeftReceipt = #LeftClosed
+const RightReceipt = #RightClosed
+const left_handler =
+  {
+    .acquire = fn ((), ?resume) => resume (#Token 1);
+    .close = fn (!token, ?resume) => case token of
+      #Token _ => resume #LeftClosed
+    ;
+  }
+const right_handler =
+  {
+    .acquire = fn ((), ?resume) => resume (#Token 2);
+    .close = fn (!token, ?resume) => case token of
+      #Token _ => resume #RightClosed
+    ;
+  }
+const Left = Resources.Lease (Token, LeftReceipt)
+const Right = Resources.Lease (Token, RightReceipt)
+let program = fn () => do:
+  use token <- Left.acquire ()
+  return Right.close (!token)
+let handled_right = fn () => @handle (Right, program, right_handler)
+return { .default = @handle (Left, handled_right, left_handler); }
