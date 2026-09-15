@@ -117,7 +117,10 @@ checking the literal expression: once a value has been bound as `Int`, `F64`, or
 `F32`, crossing to another numeric domain still requires an explicit conversion.
 A surrounding function result signature can constrain literals inside a generic
 iterator callback. Checking a nested declaration does not default unrelated
-literals from the enclosing expression before that context reaches them.
+literals from the enclosing expression before that context reaches them. A
+higher-order application may resolve a literal before specializing its result
+only when the checked argument constraints leave one numeric representation.
+That is not defaulting: ambiguous literals remain open for enclosing context.
 
 Floats are IEEE 754 values: `F64` is double precision and `F32` is single
 precision. They do not trap: an operation that overflows produces an infinity
@@ -1189,7 +1192,10 @@ compile-time field names. The selected fields may contain type values or runtime
 values. This is an explicit projection for constructing restricted record views.
 If an imported compile-time projection generator requests a missing field, its
 diagnostic identifies the caller's application and retains the originating
-implementation span in the explanation.
+implementation span in the explanation. An argument-pattern mismatch discovered
+while evaluating an imported generic call follows the same rule: its primary
+span is the caller's argument, with the originating implementation span retained
+as context.
 
 ```blot
 let original :: { .name = Text; .count = Int; }
@@ -2713,7 +2719,12 @@ The constraint graph may itself be cyclic: recursive functions and recursive
 flows are checked by revisiting ordered constraints at most once. That internal
 graph recursion is not an equi-recursive source type constructor. Rank-N types
 are explicit and predicative through `@forall`. Higher-kinded abstraction is
-compile-time function application rather than a kind system.
+compile-time function application rather than a kind system. A function that
+explicitly returns a quantified function preserves that scheme through
+application and an ordinary binding. The returned value is instantiated at its
+own calls; its caller does not repeat the producing function's result signature
+to keep the payload relationship. This does not allow impredicative
+instantiation of an ordinary inference variable.
 
 There is no record row variable, and there is not going to be one. The lattice
 has width subtyping, which says what a function may _read_ from a record, and
@@ -3157,8 +3168,8 @@ payloads, and resource payloads. Passing those values to the host preserves the
 checked aggregate type, including every admitted constructor.
 
 Effects created by `@effect` are generative by semantic occurrence. Two written
-calls of an effect-producing function create distinct effect values even when their
-arguments print alike, while aliasing one result preserves its identity.
+calls of an effect-producing function create distinct effect values even when
+their arguments print alike, while aliasing one result preserves its identity.
 Re-evaluating the same written occurrence in the same source and dependency
 revision recovers that occurrence's identity. A changed operation signature,
 source revision, observable dependency revision, or module-import occurrence
@@ -3169,8 +3180,8 @@ nonempty compile-time text key and its complete normalized operation contract.
 The same key and contract yield the same effect across factory calls and module
 imports, regardless of the local binding names. Operation types compare exactly,
 including alpha-equivalence of quantified variables. A different key, operation
-type, ownership contract, or suspension contract denotes a different effect.
-Use qualified keys to distinguish independently defined interfaces.
+type, ownership contract, or suspension contract denotes a different effect. Use
+qualified keys to distinguish independently defined interfaces.
 
 Shared effects use ordinary source handlers and effect inference. Sharing an
 effect identity creates no global state or host authority: separate handlers can
@@ -3427,18 +3438,18 @@ Everything not listed here belongs in source, normally the prelude.
 
 ### 13.1 Control, files, and effects
 
-| primitive      | meaning                                                                   |
-| -------------- | ------------------------------------------------------------------------- |
-| `@include`     | parse a dependency-tracked file at compile time                           |
-| `@json.parse`  | decode JSON under an explicit compile-time inference policy               |
-| `@effect`      | create a fresh source effect from operation types                         |
-| `@effect.host` | create a fresh host effect                                                |
-| `@effect.shared` | construct a source effect from a shared text key and operation contract |
-| `@handle`      | discharge one effect from a nullary computation                           |
-| `@forall`      | evaluate a type function with a fresh rigid variable                      |
-| `@satisfies`   | refine an open value by a type, or prove its closed type with a predicate |
-| `@fail`        | refuse compile-time evaluation with a diagnostic                          |
-| `@panic`       | trap with a text message                                                  |
+| primitive        | meaning                                                                   |
+| ---------------- | ------------------------------------------------------------------------- |
+| `@include`       | parse a dependency-tracked file at compile time                           |
+| `@json.parse`    | decode JSON under an explicit compile-time inference policy               |
+| `@effect`        | create a fresh source effect from operation types                         |
+| `@effect.host`   | create a fresh host effect                                                |
+| `@effect.shared` | construct a source effect from a shared text key and operation contract   |
+| `@handle`        | discharge one effect from a nullary computation                           |
+| `@forall`        | evaluate a type function with a fresh rigid variable                      |
+| `@satisfies`     | refine an open value by a type, or prove its closed type with a predicate |
+| `@fail`          | refuse compile-time evaluation with a diagnostic                          |
+| `@panic`         | trap with a text message                                                  |
 
 ### 13.2 Numeric and text operations
 

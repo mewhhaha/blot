@@ -1,0 +1,15 @@
+open import "blot:prelude"
+const A = import "../../../examples/lib/event_aggregate.blot"
+
+const CounterCommand = #Step Int
+const CounterEvent = #Changed Int
+const CounterError = #Rejected
+const counter :: A.Aggregate (Int, CounterCommand, CounterEvent, CounterError)
+const counter =
+  {
+    .initial = 0;
+    .decide = fn (_, #Step amount) => Ok [#Changed amount];
+    .evolve = fn (state, #Changed amount) => state + amount;
+  }
+
+return A.replay (counter, [#Opened])
