@@ -405,6 +405,7 @@
     "@continuation.cancel",
     "@effect",
     "@effect.host",
+    "@effect.shared",
     "@f32",
     "@f32.add",
     "@f32.cmp",
@@ -780,7 +781,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 18237
+      "lines": 18238
     },
     {
       "path": "compiler/src/hir.rs",
@@ -795,12 +796,12 @@
       "lines": 8199
     },
     {
-      "path": "compiler/src/ownership.rs",
-      "lines": 7466
+      "path": "compiler/src/eval.rs",
+      "lines": 7621
     },
     {
-      "path": "compiler/src/eval.rs",
-      "lines": 7438
+      "path": "compiler/src/ownership.rs",
+      "lines": 7466
     },
     {
       "path": "compiler/src/lower.rs",
