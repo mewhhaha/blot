@@ -1,0 +1,8 @@
+open import "blot:prelude"
+const PackedKey = import "../../../examples/lib/packed_key.blot"
+
+const Header = { .kind = U 5; }
+const HeaderKey = PackedKey.derive ("example.header.v1", Header)
+let invalid :: Header
+let invalid = { .kind = 32; }
+return HeaderKey.raw (HeaderKey.pack invalid)
