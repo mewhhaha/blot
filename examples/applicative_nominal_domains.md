@@ -6,11 +6,13 @@ two independently authored modules need to agree that an integer is a
 remain distinct from another integer-backed domain such as `InvoiceId`.
 
 `lib/nominal_domain.blot` builds a descriptor with four compile-time members:
-`.type`, `.of`, `.value`, and `.name`. The `.type` member is `seal (name,
-Carrier)`. Because seals are applicative, their identity is the public name plus
-invariant carrier. Reconstructing `("example.customer-id.v1", Int)` in the
-customer module, billing module, or application therefore yields the same
-nominal type. Changing either the name or the carrier yields a different type.
+`.type`, `.of`, `.value`, and `.name`. The `.type` member is
+`seal (name,
+Carrier)`. Because seals are applicative, their identity is the
+public name plus invariant carrier. Reconstructing
+`("example.customer-id.v1", Int)` in the customer module, billing module, or
+application therefore yields the same nominal type. Changing either the name or
+the carrier yields a different type.
 
 The descriptor keeps the representation relationship explicit without dynamic
 tags, a registry, casts, or unchecked escapes. `.of` accepts exactly the carrier
@@ -56,8 +58,8 @@ fixture is supported rather than rejected: two locally reconstructed descriptors
 with the exact same public name and `Int` carrier interoperate, preserving the
 applicative-identity boundary as executable evidence.
 
-`examples/pending/nominal_domain_projected_eliminator.blot` is different: it is a
-pressure test for a natural direct projection that is not currently principal.
+`examples/pending/nominal_domain_projected_eliminator.blot` is different: it is
+a pressure test for a natural direct projection that is not currently principal.
 Calling `Domain.value x` specializes to the concrete seal/carrier pair, but
 assigning the projected member directly to `Domain.type -> Int` retains an extra
 `⊤ -> ⊥` arrow and is rejected. The supported modules use a one-call forwarding
