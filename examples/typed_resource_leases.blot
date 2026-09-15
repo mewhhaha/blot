@@ -1,0 +1,68 @@
+const { .Int; .Text; .Unit; } = import "blot:prelude"
+const Resources = import "./lib/resource_lease.blot"
+
+const FileHandle = #FileHandle { .path = Text; .generation = Int; }
+const FileReceipt = #FileClosed { .path = Text; .generation = Int; }
+const LockToken = #LockToken Text
+const LockReceipt = #Unlocked Text
+
+const Files = Resources.Lease (FileHandle, FileReceipt)
+const Locks = Resources.Lease (LockToken, LockReceipt)
+
+const file_handler =
+  {
+    .acquire = fn ((), ?resume) => resume (#FileHandle {
+      .path = "build/🐱.wasm";
+      .generation = 7;
+    });
+    .close = fn (!handle, ?resume) => case handle of
+      #FileHandle info => resume (#FileClosed info)
+    ;
+  }
+
+const lock_handler =
+  {
+    .acquire = fn ((), ?resume) => resume (#LockToken "deploy:prod");
+    .close = fn (!token, ?resume) => case token of
+      #LockToken name => resume (#Unlocked name)
+    ;
+  }
+
+let one_file :: Unit -> FileReceipt ~ { Files }
+let one_file = fn () => do:
+  use file <- Files.acquire ()
+  return Files.close (!file)
+
+let deploy ::
+  Unit -> { .file = FileReceipt; .lock = LockReceipt; } ~ { Files, Locks }
+let deploy = fn () => do:
+  use file <- Files.acquire ()
+  use lock <- Locks.acquire ()
+  use unlocked <- Locks.close (!lock)
+  use closed <- Files.close (!file)
+  return { .file = closed; .lock = unlocked; }
+
+let two_files :: Unit -> (FileReceipt, FileReceipt) ~ { Files }
+let two_files = fn () => do:
+  use first <- Files.acquire ()
+  use second <- Files.acquire ()
+  use second_closed <- Files.close (!second)
+  use first_closed <- Files.close (!first)
+  return (first_closed, second_closed)
+
+// Pain point: ownership proves that a produced value is consumed exactly once;
+// it does not remember which effect occurrence produced a structurally identical
+// resource type. Distinct resource carriers are therefore part of the public
+// lease design whenever producer provenance matters.
+let run_deploy =
+  deploy
+    |> @handle (Locks, lock_handler)
+    |> @handle (Files, file_handler)
+
+return {
+  .default = {
+    .single = @handle (Files, one_file, file_handler);
+    .nested = run_deploy ();
+    .two_files = @handle (Files, two_files, file_handler);
+  };
+}
