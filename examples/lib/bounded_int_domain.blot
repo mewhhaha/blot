@@ -1,0 +1,41 @@
+open import "blot:prelude"
+
+// Build one runtime admission/clamping API from the same compile-time bounds
+// that define the output refinement. Callers name the bounds once; the generated
+// operations cannot drift away from the type they promise to return.
+const bounded = fn (low, high) => do:
+  const Type = range (low, high)
+
+  let contains :: Int -> Bool
+  let contains = fn value => value >= low && value <= high
+
+  let admit :: Int -> Option Type
+  let admit = fn value => do:
+    if value < low:
+      return None
+
+    if value > high:
+      return None
+
+    return Some value
+
+  let clamp :: Int -> Type
+  let clamp = fn value => do:
+    if value < low:
+      return low
+
+    if value > high:
+      return high
+
+    return value
+
+  return {
+    .lower = low;
+    .upper = high;
+    .Type;
+    .contains;
+    .admit;
+    .clamp;
+  }
+
+return { .bounded; }
