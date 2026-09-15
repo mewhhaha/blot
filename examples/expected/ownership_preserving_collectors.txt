@@ -1,0 +1,1 @@
+{ .default = { .lifted = #Stopped [10, 20]; .complete = #Exhausted [0, 100]; .immediate = #Stopped []; .empty = #Exhausted []; }; }

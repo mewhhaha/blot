@@ -1,0 +1,1 @@
+{ .complete = #Exhausted [0, 100]; .empty = #Exhausted []; .immediate = #Stopped []; .lifted = #Stopped [10, 20] }

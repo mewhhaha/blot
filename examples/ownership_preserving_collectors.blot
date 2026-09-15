@@ -1,0 +1,50 @@
+// Ownership-preserving collectors combine a typed input adapter with an
+// early-stopping owned output buffer. The collector cannot silently replace or
+// drop the buffer Store: `run`'s higher-order ownership contract requires every
+// callback result alternative to return the handed-off authority.
+
+open import "blot:prelude"
+const Collect = import "./lib/owned_collector.blot"
+
+const Score = range (0, 100)
+const Command = #Sample Score | #End Text
+const Envelope = { .command = Command; .source = Text; }
+
+const collect_scores :: Collect.Collector (Command, Score)
+const collect_scores = fn (?scores, command) => case command of
+  #Sample score => #Continue (Array.push (?scores, score))
+  #End _ => #Stop scores
+
+// The same collector is lifted to a wider transport envelope. The projection
+// must produce exactly Command, while the Score output type remains unchanged.
+const collect_envelopes :: Collect.Collector (Envelope, Score)
+const collect_envelopes =
+  Collect.contramap (fn envelope => envelope.command, collect_scores)
+
+const run_commands = Collect.run collect_scores
+const run_envelopes = Collect.run collect_envelopes
+
+let lifted =
+  run_envelopes [
+    { .command = #Sample 10; .source = "edge-a"; },
+    { .command = #Sample 20; .source = "münchen"; },
+    { .command = #End "flush"; .source = "control"; },
+    // Early stop makes this trailing sample unobservable to the collector.
+    { .command = #Sample 99; .source = "late"; }
+  ]
+
+let complete = run_commands [#Sample 0, #Sample 100]
+let immediate = run_commands [#End "maintenance", #Sample 50]
+
+let empty :: [Command]
+let empty = []
+let no_input = run_commands empty
+
+return {
+  .default = {
+    .lifted;
+    .complete;
+    .immediate;
+    .empty = no_input;
+  };
+}

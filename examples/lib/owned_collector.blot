@@ -1,0 +1,46 @@
+const { .Logic; .Op; .Type; } = import "blot:prelude"
+
+// A collector owns exactly one output buffer while it consumes inputs. The
+// ordinary type connects Input to Output; Blot's separate ownership contract
+// proves that each step returns the same affine Store authority it receives.
+const Step = fn Output => #Continue [Output] | #Stop [Output]
+const Outcome = fn Output => #Exhausted [Output] | #Stopped [Output]
+const Collector = fn (Input, Output) => ([Output], Input) -> Step Output
+
+// Input adaptation leaves both the output carrier and its Store authority
+// untouched. The shared Inner in this signature makes an incompatible
+// projection a type error before ownership analysis runs.
+const contramap :: @forall (fn Outer => @forall (fn Inner => @forall (fn Output => ((Outer -> Inner), Collector (Inner, Output)) -> Collector (Outer, Output))))
+const contramap = fn (project, collector) => fn (?values, input) => case collector (?values, project input) of
+  #Continue ?next => #Continue next
+  #Stop ?next => #Stop next
+
+// Partial application is useful here: `run collector` is a reusable runner for
+// one collection policy. The recursive worker then threads the fresh output
+// Store through every callback result, stopping without visiting later inputs.
+const run :: @forall (fn Input => @forall (fn Output => Collector (Input, Output) -> [Input] -> Outcome Output))
+const run = fn collector => do:
+  let rec loop = fn (?values, inputs, index) => do:
+    if index < 0 || index >= @array.len inputs:
+      return #Exhausted values
+
+    let input = @array.get inputs index
+    return case collector (?values, input) of
+      #Continue ?next => loop (?next, inputs, index + 1)
+      #Stop ?next => #Stopped next
+
+  return fn inputs => do:
+    let values = []
+    return loop (?values, inputs, 0)
+
+// Pain point: a natural richer step such as
+// `#Stop ([Output], Reason)` currently fails higher-order ownership-contract
+// matching even when the callback returns the exact same buffer authority.
+// `src/node/fixtures/owned_collector_stop_payload_pathology.blot` keeps that pressure test.
+return {
+  .Step;
+  .Outcome;
+  .Collector;
+  .contramap;
+  .run;
+}

@@ -1,0 +1,22 @@
+// Pathology reproduction: an ownership-transforming callback should be able to
+// return the handed-off Store alongside unrelated stop metadata.
+//
+// Today `forward step` is rejected with BLOT_HIGHER_ORDER_OWNERSHIP_CONTRACT
+// even though both result alternatives return the same `values` authority.
+
+open import "blot:prelude"
+
+const forward = fn transition => fn (?state, input) => do:
+  return case transition (?state, input) of
+    #Continue ?next => #Continue next
+    #Stop (?next, reason) => #Stop (next, reason)
+
+const step = fn (?values, input) => do:
+  if input < 0:
+    return #Stop (values, #Negative input)
+
+  return #Continue (Array.push (?values, input))
+
+let values = []
+let input = 1
+return forward step (?values, input)

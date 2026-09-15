@@ -1,0 +1,13 @@
+open import "blot:prelude"
+const Collect = import "../../../examples/lib/owned_collector.blot"
+
+const Score = range (0, 100)
+const Command = #Sample Score | #End Text
+const collect_scores :: Collect.Collector (Command, Score)
+const collect_scores = fn (?scores, command) => case command of
+  #Sample score => #Continue (Array.push (?scores, score))
+  #End _ => #Stop scores
+
+const bad :: Collect.Collector (Text, Score)
+const bad = Collect.contramap (fn text => text, collect_scores)
+return 0

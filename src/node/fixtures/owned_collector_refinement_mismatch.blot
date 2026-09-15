@@ -1,0 +1,11 @@
+open import "blot:prelude"
+const Collect = import "../../../examples/lib/owned_collector.blot"
+
+const Score = range (0, 100)
+const Command = #Sample Score | #End Text
+const collect_scores :: Collect.Collector (Command, Score)
+const collect_scores = fn (?scores, command) => case command of
+  #Sample score => #Continue (Array.push (?scores, score))
+  #End _ => #Stop scores
+
+return Collect.run collect_scores [#Sample 101]
