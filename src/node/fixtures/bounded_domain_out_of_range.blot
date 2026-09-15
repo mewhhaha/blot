@@ -1,7 +1,7 @@
 open import "blot:prelude"
 const Domain = import "../../../examples/lib/bounded_int_domain.blot"
 
-const Priority = Domain.bounded (1, 5)
+const Priority = Domain.bounded (range (1, 5))
 
 let invalid :: Priority.Type
 let invalid = 6
