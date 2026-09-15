@@ -1,0 +1,49 @@
+const { .Result; .fold; } = import "blot:prelude"
+
+const StateMachine = fn (State, Input, Output) => {
+  .initial = State;
+  .step = (State, Input) -> State;
+  .finish = State -> Output;
+}
+
+// Church-encoded existential: consumers can choose a result type, but they
+// must work for every possible private State.
+const Reducer = fn (Input, Output) => @forall (fn Result => @forall (fn State => StateMachine (State, Input, Output) -> Result) -> Result)
+
+const make :: @forall (fn State => @forall (fn Input => @forall (fn Output => StateMachine (State, Input, Output) -> Reducer (Input, Output))))
+const make = fn machine => fn consumer => consumer machine
+
+const run :: @forall (fn Input => @forall (fn Output => (Reducer (Input, Output), [Input]) -> Output))
+// Pain point: forwarding owned `values` through a separate higher-rank helper
+// currently fails ownership analysis. Capturing an explicit borrow preserves
+// the same API without weakening the reducer or its input relation.
+const run = fn (reducer, &values) => reducer (fn machine => machine.finish (fold ((&values), machine.initial, machine.step)))
+
+const map_output :: @forall (fn Input => @forall (fn Output => @forall (fn Mapped => (Reducer (Input, Output), (Output -> Mapped)) -> Reducer (Input, Mapped))))
+const map_output = fn (reducer, transform) => reducer (fn machine => fn consumer => consumer {
+  .initial = machine.initial;
+  .step = machine.step;
+  .finish = fn state => transform (machine.finish state);
+})
+
+const contramap :: @forall (fn Outer => @forall (fn Input => @forall (fn Output => (Reducer (Input, Output), (Outer -> Input)) -> Reducer (Outer, Output))))
+const contramap = fn (reducer, project) => reducer (fn machine => fn consumer => consumer {
+  .initial = machine.initial;
+  .step = fn (state, outer) => machine.step (state, project outer);
+  .finish = machine.finish;
+})
+
+const zip_with :: @forall (fn Input => @forall (fn Left => @forall (fn Right => @forall (fn Output => (Reducer (Input, Left), Reducer (Input, Right), ((Left, Right) -> Output)) -> Reducer (Input, Output)))))
+const zip_with = fn (left, right, combine) => left (fn left_machine => right (fn right_machine => fn consumer => consumer {
+  .initial = { .left = left_machine.initial; .right = right_machine.initial; };
+  .step = fn (state, value) => {
+    .left = left_machine.step (state.left, value);
+    .right = right_machine.step (state.right, value);
+  };
+  .finish = fn state => combine (
+    left_machine.finish state.left,
+    right_machine.finish state.right
+  );
+}))
+
+return { .StateMachine; .Reducer; .make; .run; .map_output; .contramap; .zip_with; }
