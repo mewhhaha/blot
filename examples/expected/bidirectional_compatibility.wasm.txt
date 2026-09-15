@@ -1,0 +1,1 @@
+{ .admin = #Ok #Owner "Ada 🐱"; .blocked_rejected_first = #Error #First #NotLegacyRole "Lin"; .bot_rejected_second = #Error #Second #PartnerRejectsService "build-bot"; .guest_rejected_first = #Error #First #UnsupportedGuest "Grace"; .identity = #Ok #Member "Edsger"; .reverse_owner = #Ok #Admin "Ada 🐱"; .unknown_rejected_second = #Error #Second #UnknownPartnerRole "mystery" }
