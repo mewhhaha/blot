@@ -1,8 +1,8 @@
 # Typed service adapters
 
-A service often has a small domain-facing function while transport and API layers
-wrap both its input and its output. `lib/service_adapter.blot` factors that
-boundary into one reusable value:
+A service often has a small domain-facing function while transport and API
+layers wrap both its input and its output. `lib/service_adapter.blot` factors
+that boundary into one reusable value:
 
 ```blot
 Adapter (OuterInput, InnerInput, InnerOutput, OuterOutput)
