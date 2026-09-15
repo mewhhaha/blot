@@ -1,0 +1,41 @@
+open import "blot:prelude"
+
+// A natural adapter changes only the outer result constructor. The quantified
+// Value is shared by source and target, so an adapter cannot inspect or replace
+// the payload type it is carrying across an architectural boundary.
+const Natural = fn (Source, Target) => @forall (fn Value => Source Value -> Target Value)
+
+const Endpoint = fn (Wrapper, Input, Output) => Input -> Wrapper Output
+
+// Blot deliberately has no higher-kinded inference variables. Constructor
+// parameters are ordinary compile-time values, so constructor-polymorphic API
+// generation is staged with const functions and the resulting runtime arrows
+// remain fully rank-polymorphic in their ordinary payload types.
+const Compose = fn (First, Middle, Last) => (
+  Natural (First, Middle),
+  Natural (Middle, Last)
+) -> Natural (First, Last)
+
+const compose = fn (First, Middle, Last) => do:
+  let implementation :: Compose (First, Middle, Last)
+  let implementation = fn (left, right) => fn wrapped => right (left wrapped)
+  return implementation
+
+const Hoist = fn (Source, Target) => @forall (fn Input => @forall (fn Output => (
+  Natural (Source, Target),
+  Endpoint (Source, Input, Output)
+) -> Endpoint (Target, Input, Output)))
+
+const hoist = fn (Source, Target) => do:
+  let implementation :: Hoist (Source, Target)
+  let implementation = fn (transform, endpoint) => fn input => transform (endpoint input)
+  return implementation
+
+return {
+  .Natural = Natural;
+  .Endpoint = Endpoint;
+  .Compose = Compose;
+  .Hoist = Hoist;
+  .compose = compose;
+  .hoist = hoist;
+}
