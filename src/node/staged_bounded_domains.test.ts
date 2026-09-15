@@ -66,9 +66,18 @@ test("staged bounded domains derive one checked runtime boundary", async () => {
 test("staged bounded domains reject invalid carriers and narrowing", async () => {
   const compiler = await Compiler.create();
   try {
-    await assert.rejects(() => compiler.check(wrongNarrowingPath), isTypeError);
-    await assert.rejects(() => compiler.check(outOfRangePath), isTypeError);
-    await assert.rejects(() => compiler.check(wrongInputPath), isTypeError);
+    await assert.rejects(
+      () => compiler.check(wrongNarrowingPath),
+      isTypeError,
+    );
+    await assert.rejects(
+      () => compiler.check(outOfRangePath),
+      isTypeError,
+    );
+    await assert.rejects(
+      () => compiler.check(wrongInputPath),
+      isTypeError,
+    );
   } finally {
     compiler.destroy();
   }
