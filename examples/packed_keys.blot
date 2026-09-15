@@ -1,0 +1,88 @@
+const { .Array; .U; } = import "blot:prelude"
+const PackedKey = import "./lib/packed_key.blot"
+
+const Header =
+  {
+    .version = U 3;
+    .kind = U 5;
+    .encrypted = U 1;
+    .priority = U 3;
+    .retries = U 4;
+  }
+
+const Window =
+  {
+    .channel = U 8;
+    .sequence = U 8;
+  }
+
+const HeaderKey = PackedKey.derive ("example.packet-header.v1", Header)
+const WindowKey = PackedKey.derive ("example.window.v1", Window)
+
+let header :: Header
+let header =
+  {
+    .version = 5;
+    .kind = 17;
+    .encrypted = 1;
+    .priority = 6;
+    .retries = 15;
+  }
+
+let collision :: Header
+let collision =
+  {
+    .version = 5;
+    .kind = 17;
+    .encrypted = 0;
+    .priority = 0;
+    .retries = 0;
+  }
+
+let maximum :: Header
+let maximum =
+  {
+    .version = 7;
+    .kind = 31;
+    .encrypted = 1;
+    .priority = 7;
+    .retries = 15;
+  }
+
+let empty :: Header
+let empty =
+  {
+    .version = 0;
+    .kind = 0;
+    .encrypted = 0;
+    .priority = 0;
+    .retries = 0;
+  }
+
+// This distinct 16-bit domain deliberately encodes to the same raw integer as
+// another legal header could. Its singleton domain label keeps the key types
+// separate even when representation and total width coincide.
+let window :: Window
+let window = { .channel = 141; .sequence = 0; }
+
+let header_key = HeaderKey.pack header
+let collision_key = HeaderKey.pack collision
+let maximum_key = HeaderKey.pack maximum
+let empty_key = HeaderKey.pack empty
+let window_key = WindowKey.pack window
+
+return {
+  .default = {
+    .layout = {
+      .bits = HeaderKey.bit_size;
+      .bytes = HeaderKey.byte_size;
+      .first_field = Array.expect_get (HeaderKey.fields, 0);
+      .last_field = Array.expect_get (HeaderKey.fields, 4);
+    };
+    .header = HeaderKey.raw header_key;
+    .header_collision = HeaderKey.raw collision_key;
+    .maximum = HeaderKey.raw maximum_key;
+    .empty = HeaderKey.raw empty_key;
+    .window = WindowKey.raw window_key;
+  };
+}

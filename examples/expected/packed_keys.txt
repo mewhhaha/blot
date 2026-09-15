@@ -1,0 +1,1 @@
+{ .default = { .layout = { .bits = 16; .bytes = 2; .first_field = { .name = "version"; .bit_offset = 0; .bit_width = 3; .mask = 7; }; .last_field = { .name = "retries"; .bit_offset = 12; .bit_width = 4; .mask = 15; }; }; .header = 64909; .header_collision = 141; .maximum = 65535; .empty = 0; .window = 141; }; }

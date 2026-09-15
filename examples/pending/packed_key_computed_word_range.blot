@@ -1,0 +1,36 @@
+open import "blot:prelude"
+
+const rec pow2 = fn value => do:
+  if value <= 0:
+    return 1
+
+  return 2 * pow2 (value - 1)
+
+// Natural pressure test for a stronger packed-key API: derive the exact raw
+// word range from a packed schema width, validate a runtime Int against that
+// computed maximum, then publish the refined range at the boundary.
+const make_word = fn bits => do:
+  const Word = U bits
+  let maximum = pow2 bits - 1
+
+  let narrow :: Int -> Word
+  let narrow = fn value => do:
+    if value < 0:
+      return @panic "negative word"
+
+    if value > maximum:
+      return @panic "word too wide"
+
+    return @satisfies value Word
+
+  return narrow
+
+const Header =
+  {
+    .version = U 3;
+    .kind = U 5;
+    .flags = U 8;
+  }
+const HeaderLayout = packed Header
+const narrow_header_word = make_word HeaderLayout.bit_size
+return narrow_header_word 42

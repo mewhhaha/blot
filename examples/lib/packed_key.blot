@@ -1,0 +1,82 @@
+open import "blot:prelude"
+
+// Generate a typed compact integer key from a record of unsigned fixed-width
+// fields. The public key carrier includes a singleton domain label so unrelated
+// schemas cannot exchange keys even when their packed integer happens to match.
+const rec pow2 = fn value => do:
+  if value <= 0:
+    return 1
+
+  return 2 * pow2 (value - 1)
+
+const field_width = fn field_type => do:
+  let namespace = @type.members field_type
+  if not (@shape.has namespace "bit_width"):
+    return @fail "packed key fields require U width types"
+
+  let width = @shape.get namespace "bit_width"
+  if not (type_equal (field_type, U width)):
+    return @fail "packed key fields require unsigned U width types"
+
+  return width
+
+const derive = fn (domain, schema) => do:
+  let names = @shape.names schema
+  if Int.eq (@array.len names) 0:
+    return @fail "packed key requires at least one field"
+
+  let layout = packed schema
+  if layout.bit_size > 62:
+    return @fail "packed key supports at most 62 bits"
+
+  for name in Iter.items (@array.copy (&names)):
+    let _ = field_width (@shape.get schema name)
+
+  // Pain point: the field refinements mathematically bound the encoded integer
+  // to `U layout.bit_size`, but a computed runtime range proof cannot currently
+  // be materialized at this generic boundary. Keep the representation honest as
+  // `Int`; the pending pressure test records the stronger natural signature.
+  const Key =
+    #PackedKey {
+      .domain;
+      .bits = layout.bit_size;
+      .raw = Int;
+    }
+
+  let encode = fn _ => 0
+  let offset = 0
+
+  for name in Iter.items (@array.copy (&names)):
+    let field_type = @shape.get schema name
+    let width = field_width field_type
+    let scale = pow2 offset
+    let previous_encode = encode
+
+    encode := fn value => do:
+      let checked = @satisfies value schema
+      let field = @satisfies (@shape.get checked name) field_type
+      return previous_encode checked + field * scale
+
+    offset := offset + width
+
+  let pack :: schema -> Key
+  let pack = fn value => #PackedKey {
+    .domain;
+    .bits = layout.bit_size;
+    .raw = encode value;
+  }
+
+  let raw :: Key -> Int
+  let raw = fn key => case key of
+    #PackedKey payload => payload.raw
+
+  return {
+    .type = Key;
+    .bit_size = layout.bit_size;
+    .byte_size = layout.byte_size;
+    .fields = layout.fields;
+    .pack;
+    .raw;
+  }
+
+return { .derive; }
