@@ -7,10 +7,10 @@ const Natural = fn (Source, Target) => @forall (fn Value => Source Value -> Targ
 
 const Endpoint = fn (Wrapper, Input, Output) => Input -> Wrapper Output
 
-// Blot deliberately has no higher-kinded inference variables. Constructor
-// parameters are ordinary compile-time values, so constructor-polymorphic API
-// generation is staged with const functions and the resulting runtime arrows
-// remain fully rank-polymorphic in their ordinary payload types.
+// Pain point: Blot deliberately has no higher-kinded inference variables.
+// Constructor parameters are ordinary compile-time values, so
+// constructor-polymorphic API generation is staged with const functions and the
+// resulting runtime arrows remain fully rank-polymorphic in ordinary payloads.
 const Compose = fn (First, Middle, Last) => (
   Natural (First, Middle),
   Natural (Middle, Last)
