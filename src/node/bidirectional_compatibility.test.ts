@@ -65,11 +65,13 @@ test("bidirectional compatibility bridges compose directional failures", async (
 test("bidirectional bridges reject incompatible carriers and directions", async () => {
   const compiler = await Compiler.create();
   try {
-    for (const path of [
-      compositionMismatchPath,
-      wrongDirectionPath,
-      resultMismatchPath,
-    ]) {
+    for (
+      const path of [
+        compositionMismatchPath,
+        wrongDirectionPath,
+        resultMismatchPath,
+      ]
+    ) {
       await assert.rejects(
         () => compiler.check(path),
         (error: unknown) => {
