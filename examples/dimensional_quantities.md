@@ -38,9 +38,10 @@ entire domain.
 Blot's ordinary structural type constructors do not have a separate phantom
 parameter mechanism. If a constructor accepts `Dimension` but never mentions it
 in the resulting carrier, two applications with different dimensions are the
-same structural type. `src/node/fixtures/dimensional_quantity_phantom_erasure.blot`
-records that behavior directly: a value built at the time specialization flows
-into a length consumer because both reduce to `{ .value = Int; }`.
+same structural type.
+`src/node/fixtures/dimensional_quantity_phantom_erasure.blot` records that
+behavior directly: a value built at the time specialization flows into a length
+consumer because both reduce to `{ .value = Int; }`.
 
 The supported abstraction therefore stores the singleton exponent record in the
 quantity carrier. This is honest about the static distinction instead of
