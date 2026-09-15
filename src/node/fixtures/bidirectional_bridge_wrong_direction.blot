@@ -1,0 +1,15 @@
+open import "blot:prelude"
+const B = import "../../../examples/lib/bidirectional_bridge.blot"
+
+const Left = #Left Text
+const Right = #Right Text
+const E = #Failure Text
+
+const bridge :: B.Bridge (Left, Right, E, E)
+const bridge =
+  {
+    .to_right = fn #Left value => #Ok (#Right value);
+    .to_left = fn #Right value => #Ok (#Left value);
+  }
+
+return bridge.to_left (#Left "wrong side")
