@@ -1,0 +1,10 @@
+open import "blot:prelude"
+const Resources = import "../../../examples/lib/resource_lease.blot"
+const Handle = #Handle Int
+const Receipt = #Closed
+const Resource = Resources.Lease (Handle, Receipt)
+let close_twice = fn () => do:
+  use handle <- Resource.acquire ()
+  use Resource.close (!handle)
+  return Resource.close (!handle)
+return close_twice
