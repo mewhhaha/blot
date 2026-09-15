@@ -1,0 +1,12 @@
+open import "blot:prelude"
+const P = import "../../../examples/lib/interpretable_policy.blot"
+
+const Profile = { .region = Text; }
+const Request = { .profile = Profile; }
+
+let profile :: P.Policy Profile
+let profile = P.check (fn value => value.region == "eu", "region")
+
+let invalid :: P.Policy Request
+let invalid = P.contramap (fn request => request.profile.region, profile)
+return invalid

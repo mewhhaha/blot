@@ -1,0 +1,37 @@
+const { .Bool; .Result; .Text; } = import "blot:prelude"
+
+const Algebra = fn Result => {
+  .pass = Text -> Result;
+  .fail = Text -> Result;
+  .both = (Result, Result) -> Result;
+  .either = (Result, Result) -> Result;
+}
+
+const Policy = fn Subject => @forall (fn Result => (Algebra Result, Subject) -> Result)
+
+const check :: @forall (fn Subject => ((Subject -> Bool), Text) -> Policy Subject)
+const check = fn (predicate, label) => fn (algebra, subject) => case predicate subject of
+  #True => algebra.pass label
+  #False => algebra.fail label
+
+const both :: @forall (fn Subject => (Policy Subject, Policy Subject) -> Policy Subject)
+const both = fn (left, right) => fn (algebra, subject) => algebra.both (left (algebra, subject), right (algebra, subject))
+
+const either :: @forall (fn Subject => (Policy Subject, Policy Subject) -> Policy Subject)
+const either = fn (left, right) => fn (algebra, subject) => algebra.either (left (algebra, subject), right (algebra, subject))
+
+const contramap :: @forall (fn Outer => @forall (fn Inner => ((Outer -> Inner), Policy Inner) -> Policy Outer))
+const contramap = fn (project, policy) => fn (algebra, outer) => policy (algebra, project outer)
+
+const run :: @forall (fn Subject => @forall (fn Result => (Algebra Result, Policy Subject, Subject) -> Result))
+const run = fn (algebra, policy, subject) => policy (algebra, subject)
+
+return {
+  .Algebra;
+  .Policy;
+  .check;
+  .both;
+  .either;
+  .contramap;
+  .run;
+}
