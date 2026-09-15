@@ -11,6 +11,7 @@ export const recordReconstruction: LintRule = {
   name: "record-reconstruction",
   code: "BLOT_LINT_RECORD_RECONSTRUCTION",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     return {
       expression(path) {

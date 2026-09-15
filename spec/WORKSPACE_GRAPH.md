@@ -28,6 +28,27 @@ staged graph state. A rejected update must not advance the automatic sequence or
 replace the committed source. Closing an overlay permits a new version sequence
 for that path.
 
+## Staged overlays and refresh
+
+`stageOverlays` records unsaved overlays without loading or analyzing anything:
+staged paths are marked dirty and take effect on the next refresh or analysis of
+an affected root, so one batch stages N documents with one later load instead of
+N eager loads. An identical restage (same source, absent or equal version) is a
+no-op; a changed restage takes an explicit version or the next automatic
+sequence number, and a version regression with changed content throws like
+`updateOverlay`. Staged paths join the root set; overlay text still wins over
+disk on the next load.
+
+`refreshDiskInputs` re-reads cached disk inputs (sources, capsules, includes)
+without loading any root. Open overlays keep shadowing disk; other roots observe
+changed resolutions on their next request. Editors call it once per batch of
+out-of-band disk or configuration changes.
+
+`workspaceClosure` reports the root-inclusive closure the last analysis of one
+root observed: the root plus its transitive import, include, and package-capsule
+inputs from the retained graph. Unknown roots yield just the root. It reports
+graph facts and resolves nothing new.
+
 ## Traversal and refresh
 
 Rebinding a retained graph expands each completed reachable node at most once

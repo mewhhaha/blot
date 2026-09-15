@@ -6,6 +6,7 @@ export const discardedBooleanCase: LintRule = {
   name: "discarded-boolean-case",
   code: "BLOT_LINT_DISCARDED_BOOLEAN_CASE",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       declaration(path) {

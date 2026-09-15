@@ -5,6 +5,7 @@ export const identityHandlerReturn: LintRule = {
   name: "identity-handler-return",
   code: "BLOT_LINT_IDENTITY_HANDLER_RETURN",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression({ node }) {
