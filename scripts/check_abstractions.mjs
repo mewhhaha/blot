@@ -25,6 +25,7 @@ const suites = [
   "src/node/typed_validation.test.ts",
   "src/node/effect_row_middleware.test.ts",
   "src/node/composable_reducers.test.ts",
+  "src/node/opaque_reducer_summaries.test.ts",
   "src/node/typed_semiring_matrices.test.ts",
   "src/node/nominal_keyed_index.test.ts",
   "src/node/composable_parser.test.ts",
