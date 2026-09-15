@@ -89,7 +89,7 @@ test("staged endpoint adapters record current inferred-composition type loss", a
     const evaluated = await compiler.evaluate(inferredPath);
     assert.equal(
       evaluated.display,
-      "#Ok { .value = \"Żaneta\"; .source = \"registry\"; }",
+      '#Ok { .value = "Żaneta"; .source = "registry"; }',
     );
   } finally {
     compiler.destroy();
