@@ -1,14 +1,14 @@
 // Generate runtime smart constructors and total clamping functions from one
-// compile-time integer range. The same abstraction is reused for deployment,
-// scheduling, and sensor domains without duplicating each refinement's bounds.
+// compile-time integer range type. The same abstraction is reused for
+// deployment, scheduling, and sensor domains without duplicating bounds.
 
 open import "blot:prelude"
 const Domain = import "./lib/bounded_int_domain.blot"
 
-const Percent = Domain.bounded (0, 100)
-const CanaryPercent = Domain.bounded (5, 25)
-const Priority = Domain.bounded (1, 5)
-const TemperatureC = Domain.bounded (-40, 85)
+const Percent = Domain.bounded (range (0, 100))
+const CanaryPercent = Domain.bounded (range (5, 25))
+const Priority = Domain.bounded (range (1, 5))
+const TemperatureC = Domain.bounded (range (-40, 85))
 
 // The narrower generated carrier is an ordinary subtype of the wider one.
 // No conversion or unchecked cast is required.
