@@ -1,0 +1,245 @@
+diff --git a/LANGUAGE.md b/LANGUAGE.md
+index 2c3f7014..37e9e5b1 100644
+--- a/LANGUAGE.md
++++ b/LANGUAGE.md
+@@ -117,7 +117,10 @@ checking the literal expression: once a value has been bound as `Int`, `F64`, or
+ `F32`, crossing to another numeric domain still requires an explicit conversion.
+ A surrounding function result signature can constrain literals inside a generic
+ iterator callback. Checking a nested declaration does not default unrelated
+-literals from the enclosing expression before that context reaches them.
++literals from the enclosing expression before that context reaches them. A
++higher-order application may resolve a literal before specializing its result
++only when the checked argument constraints leave one numeric representation.
++That is not defaulting: ambiguous literals remain open for enclosing context.
+ 
+ Floats are IEEE 754 values: `F64` is double precision and `F32` is single
+ precision. They do not trap: an operation that overflows produces an infinity
+@@ -1189,7 +1192,10 @@ compile-time field names. The selected fields may contain type values or runtime
+ values. This is an explicit projection for constructing restricted record views.
+ If an imported compile-time projection generator requests a missing field, its
+ diagnostic identifies the caller's application and retains the originating
+-implementation span in the explanation.
++implementation span in the explanation. An argument-pattern mismatch discovered
++while evaluating an imported generic call follows the same rule: its primary
++span is the caller's argument, with the originating implementation span retained
++as context.
+ 
+ ```blot
+ let original :: { .name = Text; .count = Int; }
+@@ -2713,7 +2719,12 @@ The constraint graph may itself be cyclic: recursive functions and recursive
+ flows are checked by revisiting ordered constraints at most once. That internal
+ graph recursion is not an equi-recursive source type constructor. Rank-N types
+ are explicit and predicative through `@forall`. Higher-kinded abstraction is
+-compile-time function application rather than a kind system.
++compile-time function application rather than a kind system. A function that
++explicitly returns a quantified function preserves that scheme through
++application and an ordinary binding. The returned value is instantiated at its
++own calls; its caller does not repeat the producing function's result signature
++to keep the payload relationship. This does not allow impredicative
++instantiation of an ordinary inference variable.
+ 
+ There is no record row variable, and there is not going to be one. The lattice
+ has width subtyping, which says what a function may _read_ from a record, and
+diff --git a/examples/composable_event_aggregates.blot b/examples/composable_event_aggregates.blot
+index 0f0d971c..dd7e01d1 100644
+--- a/examples/composable_event_aggregates.blot
++++ b/examples/composable_event_aggregates.blot
+@@ -45,30 +45,17 @@ const gate =
+     ;
+   }
+ 
+-const SystemCommand = A.ProductCommand (CounterCommand, GateCommand)
+ const SystemEvent = A.ProductEvent (CounterEvent, GateEvent)
+-const SystemError = A.ProductError (CounterError, GateError)
+-const SystemState = (Int, GateState)
+ 
+-const system ::
+-  A.Aggregate (SystemState, SystemCommand, SystemEvent, SystemError)
+ const system = A.product (counter, gate)
+ 
+-const system_left ::
+-  Result (A.Execution (SystemState, SystemEvent), SystemError)
+ const system_left = A.execute (system, system.initial, #Left (#Deposit 8))
+ 
+-const system_right ::
+-  Result (A.Execution (SystemState, SystemEvent), SystemError)
+ const system_right = A.execute (system, (8, #Closed), #Right #OpenGate)
+ 
+-const system_left_error ::
+-  Result (A.Execution (SystemState, SystemEvent), SystemError)
+ const system_left_error =
+   A.execute (system, (2, #Closed), #Left (#Withdraw 5))
+ 
+-const system_right_error ::
+-  Result (A.Execution (SystemState, SystemEvent), SystemError)
+ const system_right_error =
+   A.execute (system, (0, #Open), #Right #OpenGate)
+ 
+diff --git a/examples/composable_event_aggregates.md b/examples/composable_event_aggregates.md
+index 263aac6d..ef704262 100644
+--- a/examples/composable_event_aggregates.md
++++ b/examples/composable_event_aggregates.md
+@@ -17,7 +17,9 @@ aggregate with tuple state and tagged command, event, and error sums. A left
+ command can only produce left events or a left error, and replay can only
+ consume the product event carrier. The concrete program composes a bounded
+ counter with an open/closed gate, then exercises both sides independently and by
+-replaying a mixed history.
++replaying a mixed history. The product and execution bindings infer their
++carriers from the library signatures; callers do not repeat concrete signatures
++for those results.
+ 
+ The compiler enforces carrier compatibility, the `Amount = 1..100` refinement,
+ and the left/right wrappers exposed by the product. It does **not** prove event-
+diff --git a/spec/TYPECHECKING.md b/spec/TYPECHECKING.md
+index 62d2f9e5..a168e2d2 100644
+--- a/spec/TYPECHECKING.md
++++ b/spec/TYPECHECKING.md
+@@ -1773,3 +1773,28 @@ that signature when used as a value, including immediate re-export. Direct
+ application is not required to recover its parameter, result, or effect types.
+ Polymorphic signatures instantiate at the use site; unresolved attached members
+ retain their existing specialization obligations.
++
++### Generic argument diagnostic provenance
++
++An imported closure's compile-time argument-pattern mismatch remains a source
++diagnostic. When it propagates through a non-synthetic application, the checker
++reports the caller's argument span and preserves the original module and span in
++its context. This changes neither pattern acceptance nor the inferred type; it
++must not relabel target refusals or compiler invariants as source errors.
++
++### Preserving checked application results
++
++A higher-order application's result selection must not freeze an unresolved
++numeric literal as bottom. Argument constraints may settle a numeric literal
++before result selection only when exactly one representation is admissible.
++Candidate probes remain transactional; multiple admissible representations leave
++the literal pending until the enclosing expected type or the existing defaulting
++boundary resolves it.
++
++An explicitly quantified result of a checked function is retained as that result
++scheme, not constrained into a fresh monotype hole. A plain binding preserves
++this closed scheme even when closure capture rechecking produces a less
++informative monotype. This preserves an already checked Rank-N result; it does
++not add impredicative inference or invent a polymorphic type from a monotype.
++Source argument checking, effect accumulation, and residual validation still run
++before the result is published.
+diff --git a/src/node/composable_event_aggregates.test.ts b/src/node/composable_event_aggregates.test.ts
+index af0dc9df..5ee7c8ec 100644
+--- a/src/node/composable_event_aggregates.test.ts
++++ b/src/node/composable_event_aggregates.test.ts
+@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
+ import { readFile } from "node:fs/promises";
+ import test from "node:test";
+ import { Compiler } from "../compiler.ts";
++import { BlotError } from "../diagnostic.ts";
+ import { formatSource } from "../tooling/formatter.ts";
+ import { runArtifact } from "./run.ts";
+ 
+ const path = "examples/composable_event_aggregates.blot";
+ const expectedType =
+-  "{ .default = { .deposit = #Ok { .state = Int; .events = [#Deposited 1..100 | #Withdrawn 1..100] } | #Error #Insufficient 1..100; .withdraw = #Ok { .state = Int; .events = [#Deposited 1..100 | #Withdrawn 1..100] } | #Error #Insufficient 1..100; .insufficient = #Ok { .state = Int; .events = [#Deposited 1..100 | #Withdrawn 1..100] } | #Error #Insufficient 1..100; .opened = #Ok { .state = #Closed | #Open; .events = [#Opened | #ClosedEvent] } | #Error (#AlreadyOpen | #AlreadyClosed); .duplicate_open = #Ok { .state = #Open | #Closed; .events = [#Opened | #ClosedEvent] } | #Error (#AlreadyOpen | #AlreadyClosed); .system_left = #Ok { .state = { .0 = Int; .1 = #Closed | #Open }; .events = [#Left (#Deposited 1..100 | #Withdrawn 1..100) | #Right (#Opened | #ClosedEvent)] } | #Error (#Left #Insufficient 1..100 | #Right (#AlreadyOpen | #AlreadyClosed)); .system_right = #Ok { .state = { .0 = Int; .1 = #Closed | #Open }; .events = [#Left (#Deposited 1..100 | #Withdrawn 1..100) | #Right (#Opened | #ClosedEvent)] } | #Error (#Left #Insufficient 1..100 | #Right (#AlreadyOpen | #AlreadyClosed)); .system_left_error = #Ok { .state = { .0 = Int; .1 = #Closed | #Open }; .events = [#Left (#Deposited 1..100 | #Withdrawn 1..100) | #Right (#Opened | #ClosedEvent)] } | #Error (#Left #Insufficient 1..100 | #Right (#AlreadyOpen | #AlreadyClosed)); .system_right_error = #Ok { .state = { .0 = Int; .1 = #Closed | #Open }; .events = [#Left (#Deposited 1..100 | #Withdrawn 1..100) | #Right (#Opened | #ClosedEvent)] } | #Error (#Left #Insufficient 1..100 | #Right (#AlreadyOpen | #AlreadyClosed)); .replayed = { .0 = Int; .1 = #Closed | #Open }; .empty = { .0 = Int; .1 = #Closed | #Open } } }";
++  "{ .default = { .deposit = #Ok { .state = Int; .events = [#Deposited 1..100 | #Withdrawn 1..100] } | #Error #Insufficient 1..100; .withdraw = #Ok { .state = Int; .events = [#Deposited 1..100 | #Withdrawn 1..100] } | #Error #Insufficient 1..100; .insufficient = #Ok { .state = Int; .events = [#Deposited 1..100 | #Withdrawn 1..100] } | #Error #Insufficient 1..100; .opened = #Ok { .state = #Closed | #Open; .events = [#Opened | #ClosedEvent] } | #Error (#AlreadyOpen | #AlreadyClosed); .duplicate_open = #Ok { .state = #Open | #Closed; .events = [#Opened | #ClosedEvent] } | #Error (#AlreadyOpen | #AlreadyClosed); .system_left = #Ok { .state = { .0 = 8; .1 = #Closed }; .events = [#Left #Deposited 8] }; .system_right = #Ok { .state = { .0 = 8; .1 = #Open }; .events = [#Right #Opened] }; .system_left_error = #Error #Left #Insufficient 5; .system_right_error = #Error #Right #AlreadyOpen; .replayed = { .0 = Int; .1 = #Closed | #Open }; .empty = { .0 = Int; .1 = #Closed | #Open } } }";
+ 
+ const blotSources = [
+   "examples/lib/event_aggregate.blot",
+@@ -15,6 +16,7 @@ const blotSources = [
+   "src/node/fixtures/event_aggregate_wrong_event.blot",
+   "src/node/fixtures/event_aggregate_wrong_command_side.blot",
+   "src/node/fixtures/event_aggregate_unannotated_right.blot",
++  "src/node/fixtures/higher_order_numeric_context.blot",
+ ] as const;
+ 
+ test("composable event aggregates preserve state, command, event, and error carriers", async () => {
+@@ -68,9 +70,76 @@ test("event aggregate boundaries reject foreign events and wrong product command
+         compiler.check(
+           "src/node/fixtures/event_aggregate_wrong_command_side.blot",
+         ),
+-      /BLOT_ARGUMENT_MISMATCH/,
++      (error: unknown) => {
++        assert(error instanceof BlotError);
++        assert.equal(error.diagnostic.code, "BLOT_ARGUMENT_MISMATCH");
++        assert(error.origin !== null);
++        assert.match(
++          error.origin.path,
++          /event_aggregate_wrong_command_side\.blot$/,
++        );
++        const { start, end } = error.diagnostic.span;
++        const callerArgument = error.origin.source.slice(start, end);
++        assert.equal(callerArgument, "(system, (0, #False), #Right (#Add 1))");
++        assert.match(
++          error.diagnostic.message,
++          /Required by .*event_aggregate\.blot/,
++        );
++        return true;
++      },
+     );
+   } finally {
+     compiler.destroy();
+   }
+ });
++
++test("unannotated aggregate execution retains its inferred result and runtime values", async () => {
++  const fixture = "src/node/fixtures/event_aggregate_unannotated_right.blot";
++  const compiler = await Compiler.create();
++  try {
++    const checked = await compiler.check(fixture);
++    assert.deepEqual(
++      { type: checked.type, effects: checked.effects },
++      {
++        type:
++          "{ .value = #Ok { .state = { .0 = 0; .1 = #False } | { .0 = Int; .1 = #True | #False }; .events = [#Left #Added Int | #Right #Enabled] } | #Error (#Left #LeftRejected | #Right #RightRejected) }",
++        effects: "",
++      },
++    );
++    const evaluated = await compiler.evaluate(fixture);
++    assert.deepEqual(evaluated.writes, []);
++    assert.equal(
++      evaluated.display,
++      "{ .value = #Ok { .state = (0, #True); .events = [#Right #Enabled]; }; }",
++    );
++    assert.equal(
++      await runArtifact(await compiler.compile(fixture)),
++      "#Ok { .events = [#Right #Enabled]; .state = { .0 = 0; .1 = true } }",
++    );
++  } finally {
++    compiler.destroy();
++  }
++});
++
++test("higher-order literal resolution preserves an enclosing floating-point requirement", async () => {
++  const fixture = "src/node/fixtures/higher_order_numeric_context.blot";
++  const compiler = await Compiler.create();
++  try {
++    const checked = await compiler.check(fixture);
++    assert.deepEqual(
++      { type: checked.type, effects: checked.effects },
++      { type: "F64", effects: "" },
++    );
++    const evaluated = await compiler.evaluate(fixture);
++    assert.deepEqual(evaluated.writes, []);
++    assert.equal(evaluated.display, "1");
++    assert.deepEqual(evaluated.value, {
++      tag: "float",
++      value: 1,
++      bits: "3ff0000000000000",
++    });
++    assert.equal(await runArtifact(await compiler.compile(fixture)), "1");
++  } finally {
++    compiler.destroy();
++  }
++});
+diff --git a/src/node/fixtures/higher_order_numeric_context.blot b/src/node/fixtures/higher_order_numeric_context.blot
+new file mode 100644
+index 00000000..929248c2
+--- /dev/null
++++ b/src/node/fixtures/higher_order_numeric_context.blot
+@@ -0,0 +1,9 @@
++open import "blot:prelude"
++
++const apply = fn (function, value) => function value
++const identity = fn value => value
++
++// The higher-order call must leave an ambiguous literal for the enclosing type.
++let value :: F64
++let value = apply (identity, 1)
++return value
