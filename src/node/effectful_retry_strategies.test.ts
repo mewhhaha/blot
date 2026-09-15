@@ -6,6 +6,8 @@ import { formatSource } from "../tooling/formatter.ts";
 import { runArtifact } from "./run.ts";
 
 const path = "examples/effectful_retry_strategies.blot";
+const expectedType =
+  "{ .default = { .flaky = #Ok Int | #Error (#Transient Text | #Rejected Text); .rejected = #Ok Int | #Error (#Transient Text | #Rejected Text); .stable = #Ok Int | #Error (#Transient Text | #Rejected Text); .pure_retry = #Ok Int | #Error (#Incomplete Text | #Invalid Text); .pure_stop = #Ok Int | #Error (#Incomplete Text | #Invalid Text); .zero_budget = #Ok Int | #Error (#Incomplete Text | #Invalid Text) } }";
 const blotSources = [
   "examples/lib/retry_strategy.blot",
   path,
@@ -26,7 +28,10 @@ test("typed retry strategies preserve callback effects and both executions", asy
     }
 
     const checked = await compiler.check(path);
-    assert.equal(checked.effects, "");
+    assert.deepEqual({ type: checked.type, effects: checked.effects }, {
+      type: expectedType,
+      effects: "",
+    });
 
     const evaluated = await compiler.evaluate(path);
     assert.deepEqual(evaluated.writes, []);
