@@ -3,7 +3,8 @@ const Adapter = import "../../../examples/lib/endpoint_adapter.blot"
 
 const Maybe = fn Value => #Found Value | #Missing
 const Checked = fn Value => #Ok Value | #Error Text
-const Observed = fn Value => #Ok { .value = Value; .source = Text; } | #Error Text
+const Observed =
+  fn Value => #Ok { .value = Value; .source = Text; } | #Error Text
 
 const observe :: Adapter.Natural (Checked, Observed)
 const observe = fn candidate => case candidate of
