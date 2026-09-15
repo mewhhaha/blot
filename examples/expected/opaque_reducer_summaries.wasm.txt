@@ -1,0 +1,1 @@
+{ .boundary = { .average_ms = #Some 0; .has_server_error = true; .sample_count = 1; .server_errors = 1; .total_ms = 0 }; .empty = { .average_ms = #None; .has_server_error = false; .sample_count = 0; .server_errors = 0; .total_ms = 0 }; .full = { .average_ms = #Some 15080; .has_server_error = true; .sample_count = 4; .server_errors = 1; .total_ms = 60320 } }
