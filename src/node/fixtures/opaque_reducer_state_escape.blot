@@ -1,0 +1,10 @@
+open import "blot:prelude"
+const R = import "../../../examples/lib/opaque_reducer.blot"
+
+const reducer :: R.Reducer (Int, Int)
+const reducer = R.make { .initial = 0; .step = fn (state, value) => state + value; .finish = fn value => value; }
+
+const assume_int :: R.StateMachine (Int, Int, Int) -> Int
+const assume_int = fn machine => machine.initial
+
+return reducer assume_int
