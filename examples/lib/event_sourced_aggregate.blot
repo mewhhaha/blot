@@ -1,0 +1,69 @@
+open import "blot:prelude"
+
+// A command handler may choose only events. The reusable executor derives the
+// next state by applying the same `evolve` function used for replay.
+const Aggregate = fn (State, Command, Event, Error) => {
+  .initial = State;
+  .decide = (State, Command) -> Result ([Event], Error);
+  .evolve = (State, Event) -> State;
+}
+
+const Outcome = fn (State, Event) => {
+  .state = State;
+  .events = [Event];
+}
+
+const execute :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), State, Command) -> Result (Outcome (State, Event), Error)))))
+const execute = fn (aggregate, state, command) => case aggregate.decide (state, command) of
+  #Error error => #Error error
+  #Ok events => #Ok {
+    .state = fold (events, state, aggregate.evolve);
+    .events;
+  }
+
+const replay :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), [Event]) -> State))))
+const replay = fn (aggregate, events) => fold (events, aggregate.initial, aggregate.evolve)
+
+const ProductState = fn (Left, Right) => (Left, Right)
+const ProductCommand = fn (Left, Right) => #Left Left | #Right Right
+const ProductEvent = fn (Left, Right) => #Left Left | #Right Right
+const ProductError = fn (Left, Right) => #Left Left | #Right Right
+
+// Independent aggregates compose without sharing a dynamic registry. The
+// outer tags retain which component owns each command, event, and error.
+// Pain point: the @forall names in the signature constrain this binding but do
+// not enter its lexical compile-time scope, so the implementation cannot name
+// `LeftState`/`RightState` for local aliases. The signature still checks the
+// inferred local functions without weakening their types.
+const product :: @forall (fn LeftState => @forall (fn LeftCommand => @forall (fn LeftEvent => @forall (fn LeftError => @forall (fn RightState => @forall (fn RightCommand => @forall (fn RightEvent => @forall (fn RightError => (Aggregate (LeftState, LeftCommand, LeftEvent, LeftError), Aggregate (RightState, RightCommand, RightEvent, RightError)) -> Aggregate (ProductState (LeftState, RightState), ProductCommand (LeftCommand, RightCommand), ProductEvent (LeftEvent, RightEvent), ProductError (LeftError, RightError))))))))))
+const product = fn (left, right) => do:
+  let decide = fn ((left_state, right_state), command) => case command of
+    #Left value => case left.decide (left_state, value) of
+      #Error error => #Error (#Left error)
+      #Ok events => #Ok (map (events, fn event => #Left event))
+
+    #Right value => case right.decide (right_state, value) of
+      #Error error => #Error (#Right error)
+      #Ok events => #Ok (map (events, fn event => #Right event))
+
+  let evolve = fn ((left_state, right_state), event) => case event of
+    #Left value => (left.evolve (left_state, value), right_state)
+    #Right value => (left_state, right.evolve (right_state, value))
+
+  return {
+    .initial = (left.initial, right.initial);
+    .decide;
+    .evolve;
+  }
+
+return {
+  .Aggregate
+  .Outcome
+  .execute
+  .replay
+  .ProductState
+  .ProductCommand
+  .ProductEvent
+  .ProductError
+  .product
+}
