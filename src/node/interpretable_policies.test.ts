@@ -16,7 +16,10 @@ const invalidQuotaPath =
 
 const principalType =
   "{ .default = { .admin = { .allowed = #True | #False; .trace = { .allowed = #True | #False; .notes = [Text] } }; .member = { .allowed = #True | #False; .trace = { .allowed = #True | #False; .notes = [Text] } }; .over_limit = { .allowed = #True | #False; .trace = { .allowed = #True | #False; .notes = [Text] } }; .wrong_region = { .allowed = #True | #False; .trace = { .allowed = #True | #False; .notes = [Text] } } } }";
-const interfaceType = principalType.replaceAll("#True | #False", "#False | #True");
+const interfaceType = principalType.replaceAll(
+  "#True | #False",
+  "#False | #True",
+);
 
 const blotPaths = [
   libraryPath,

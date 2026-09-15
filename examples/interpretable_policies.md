@@ -19,24 +19,25 @@ admission decision, while `Algebra Trace` records every leaf result and the same
 composed Boolean outcome. No dynamic tag registry, cast, or host-language AST is
 needed.
 
-`check` turns a typed predicate into a leaf. `both` and `either` combine policies
-only when their `Subject` types agree, while `contramap` lifts a policy through a
-projection such as `Request -> Profile`. The application therefore defines its
-profile rules once and reuses them under the wider request type. `Quota = 1..100`
-remains a real compiler-enforced refinement at construction boundaries.
+`check` turns a typed predicate into a leaf. `both` and `either` combine
+policies only when their `Subject` types agree, while `contramap` lifts a policy
+through a projection such as `Request -> Profile`. The application therefore
+defines its profile rules once and reuses them under the wider request type.
+`Quota = 1..100` remains a real compiler-enforced refinement at construction
+boundaries.
 
 The compiler enforces the shared subject carrier, the projection result required
-by `contramap`, and refined request data. It does not prove application laws such
-as whether a label accurately describes its predicate, nor Boolean-algebra laws
-for arbitrary user-supplied `Algebra` implementations.
+by `contramap`, and refined request data. It does not prove application laws
+such as whether a label accurately describes its predicate, nor Boolean-algebra
+laws for arbitrary user-supplied `Algebra` implementations.
 
 ## Strict composition tradeoff
 
 `both` and `either` call both child policies before passing their results to the
 algebra. That is intentional for the tracing interpreter: an administrator with
 an invalid profile is admitted, but its trace still records `+admin`, `-region`,
-and `-quota<=80`. It also means this API does not promise short-circuiting.
-Blot has an explicit affine deferred arrow (`~>`) when call-by-name demand is the
+and `-quota<=80`. It also means this API does not promise short-circuiting. Blot
+has an explicit affine deferred arrow (`~>`) when call-by-name demand is the
 actual contract; changing this policy representation to use deferral would be a
 different abstraction with different ownership/effect behavior.
 
