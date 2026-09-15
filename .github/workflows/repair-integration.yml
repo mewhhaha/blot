@@ -1,0 +1,81 @@
+name: Repair integration staging
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/repair-integration.yml
+
+permissions:
+  contents: read
+
+jobs:
+  format-main:
+    if: github.repository == 'mewhhaha/blot' && github.event.pull_request.head.repo.full_name == 'mewhhaha/blot' && github.event.pull_request.head.ref == 'repair/pr143-compiler-workbench-20260915'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: bd57a8211daede2c299892b6f7b6deb8793f81af
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.6
+      - name: Format only the two inspected main specification files
+        run: |
+          set -euo pipefail
+          git config user.name 'Blot compiler repair'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          deno fmt LANGUAGE.md spec/STAGING.md
+          deno fmt --check
+          git diff --check
+          git add LANGUAGE.md spec/STAGING.md
+          git commit -m 'docs: restore canonical specification formatting'
+          git push origin HEAD:refs/heads/repair/main-formatting-20260915
+          git rev-parse HEAD
+  collect:
+    if: github.repository == 'mewhhaha/blot' && github.event.pull_request.head.repo.full_name == 'mewhhaha/blot' && github.event.pull_request.head.ref == 'repair/pr143-compiler-workbench-20260915'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: bd57a8211daede2c299892b6f7b6deb8793f81af
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Collect exact current example PR heads without publishing integration
+        run: |
+          set -euo pipefail
+          git config user.name 'Blot compiler repair'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for pr in 143 144 145 146 147 148 149 151 152 153 154 155 156 157 158 159 160; do
+            git fetch origin "refs/pull/$pr/head"
+            head="$(git rev-parse FETCH_HEAD)"
+            printf '%s %s\n' "$pr" "$head" >> "$RUNNER_TEMP/pr-heads.txt"
+            if ! git merge --no-ff --no-edit "$head"; then
+              while IFS= read -r file; do
+                case "$file" in
+                  scripts/check_abstractions.mjs|scripts/verify_showcase_examples.ts|examples/README.md) ;;
+                  *) echo "Unexpected merge conflict: $file" >&2; exit 1 ;;
+                esac
+                git show ":1:$file" > "$RUNNER_TEMP/base"
+                git show ":2:$file" > "$RUNNER_TEMP/ours"
+                git show ":3:$file" > "$RUNNER_TEMP/theirs"
+                git merge-file --union -p "$RUNNER_TEMP/ours" "$RUNNER_TEMP/base" "$RUNNER_TEMP/theirs" > "$file"
+                git add "$file"
+              done < <(git diff --name-only --diff-filter=U)
+              git commit --no-edit
+            fi
+          done
+          git bundle create "$RUNNER_TEMP/consolidated-source.bundle" HEAD
+          cp "$RUNNER_TEMP/pr-heads.txt" "$RUNNER_TEMP/consolidated-pr-heads.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: repair-consolidated-source-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/consolidated-source.bundle
+            ${{ runner.temp }}/consolidated-pr-heads.txt
+          if-no-files-found: error
+          retention-days: 7
