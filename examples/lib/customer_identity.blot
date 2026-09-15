@@ -1,0 +1,22 @@
+open import "blot:prelude"
+const Nominal = import "./nominal_domain.blot"
+
+// This module owns no singleton declaration object. The public seal identity is
+// reconstructed from the qualified name and exact carrier.
+const CustomerId = Nominal.domain ("example.customer-id.v1", Int)
+
+const make :: Int -> CustomerId
+const make = CustomerId.of
+
+const raw :: CustomerId -> Int
+const raw = CustomerId.value
+
+const successor :: CustomerId -> CustomerId
+const successor = fn id => CustomerId.of (CustomerId.value id + 1)
+
+return {
+  .CustomerId = CustomerId;
+  .make = make;
+  .raw = raw;
+  .successor = successor;
+}
