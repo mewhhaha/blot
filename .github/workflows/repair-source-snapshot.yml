@@ -32,7 +32,7 @@ jobs:
           gh api repos/mewhhaha/blot/git/ref/heads/main > repair-snapshot/main.json
           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           python3 - <<'PY'
-          import json, pathlib, subprocess
+          import gzip, json, pathlib, subprocess
           root = pathlib.Path('repair-snapshot')
           prs = json.loads((root / 'prs.json').read_text())
           statuses = {}
@@ -43,6 +43,15 @@ jobs:
               endpoint = 'repos/mewhhaha/blot/actions/runs?head_sha=' + sha + '&per_page=30'
               runs = json.loads(subprocess.check_output(['gh', 'api', endpoint]))
               statuses[str(pr['number'])] = [{k: run.get(k) for k in ('id', 'name', 'status', 'conclusion', 'head_sha', 'html_url')} for run in runs['workflow_runs']]
+              if pr['number'] == 161:
+                  for run in runs['workflow_runs']:
+                      if run['conclusion'] != 'failure':
+                          continue
+                      jobs = json.loads(subprocess.check_output(['gh', 'api', run['jobs_url']]))
+                      for job in jobs['jobs']:
+                          if job['conclusion'] == 'failure':
+                              log = subprocess.check_output(['gh', 'api', 'repos/mewhhaha/blot/actions/jobs/' + str(job['id']) + '/logs'])
+                              (root / ('failure-' + str(job['id']) + '.log.gz')).write_bytes(gzip.compress(log))
           (root / 'statuses.json').write_text(json.dumps(statuses, indent=2) + '\n')
           PY
           git bundle create repair-snapshot/repair-sources.bundle --all
