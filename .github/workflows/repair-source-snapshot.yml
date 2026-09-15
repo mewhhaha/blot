@@ -1,0 +1,56 @@
+name: Repair source snapshot
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/repair-source-snapshot.yml
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  snapshot:
+    if: github.repository == 'mewhhaha/blot' && github.event.pull_request.head.repo.full_name == 'mewhhaha/blot' && github.event.pull_request.head.ref == 'repair/pr143-compiler-workbench-20260915'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Capture exact sources and check results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p repair-snapshot
+          gh api 'repos/mewhhaha/blot/pulls?state=open&per_page=100' > repair-snapshot/prs.json
+          gh api repos/mewhhaha/blot/git/ref/heads/main > repair-snapshot/main.json
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          root = pathlib.Path('repair-snapshot')
+          prs = json.loads((root / 'prs.json').read_text())
+          statuses = {}
+          for pr in prs:
+              sha = pr['head']['sha']
+              subprocess.run(['git', 'cat-file', '-e', sha + '^{commit}'], check=True)
+              subprocess.run(['git', 'update-ref', 'refs/heads/snapshot/pr-' + str(pr['number']), sha], check=True)
+              endpoint = 'repos/mewhhaha/blot/actions/runs?head_sha=' + sha + '&per_page=30'
+              runs = json.loads(subprocess.check_output(['gh', 'api', endpoint]))
+              statuses[str(pr['number'])] = [{k: run.get(k) for k in ('id', 'name', 'status', 'conclusion', 'head_sha', 'html_url')} for run in runs['workflow_runs']]
+          (root / 'statuses.json').write_text(json.dumps(statuses, indent=2) + '\n')
+          PY
+          git bundle create repair-snapshot/repair-sources.bundle --all
+          git bundle verify repair-snapshot/repair-sources.bundle
+          sha256sum repair-snapshot/repair-sources.bundle > repair-snapshot/SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: repair-source-snapshot-${{ github.event.pull_request.head.sha }}
+          path: repair-snapshot/
+          if-no-files-found: error
+          retention-days: 7
