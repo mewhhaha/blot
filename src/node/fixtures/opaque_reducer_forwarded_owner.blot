@@ -1,0 +1,12 @@
+open import "blot:prelude"
+const R = import "../../../examples/lib/opaque_reducer.blot"
+
+// Current compiler-pressure case: factoring `run` through this higher-rank
+// helper forwards an owned array through a call that does not promise consumption.
+const consume_run :: @forall (fn Input => @forall (fn Output => [Input] -> @forall (fn State => R.StateMachine (State, Input, Output) -> Output)))
+const consume_run = fn values => fn machine => machine.finish (fold (values, machine.initial, machine.step))
+
+const run_forwarded :: @forall (fn Input => @forall (fn Output => (R.Reducer (Input, Output), [Input]) -> Output))
+const run_forwarded = fn (reducer, values) => reducer (consume_run values)
+
+return { .run_forwarded; }
