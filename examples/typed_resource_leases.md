@@ -13,18 +13,19 @@ Those ownership modes are the ordinary `Effect.produces` and `Effect.consumes`
 descriptors interpreted by `@effect`; the library adds no runtime bookkeeping.
 
 The executable instantiates the same constructor for a file handle and a deploy
-lock. Their resource and receipt carriers are intentionally distinct variants.
-A deployment acquires both resources, closes them in reverse order, and returns
-both typed receipts. A second case acquires two independent file handles from the
-same effect and proves that each must be closed once.
+lock. Their resource and receipt carriers are intentionally distinct variants. A
+deployment acquires both resources, closes them in reverse order, and returns
+both typed receipts. A second case acquires two independent file handles from
+the same effect and proves that each must be closed once.
 
-The compiler enforces resource/receipt carrier compatibility, linear consumption,
-and the remaining effect row. It does **not** attach producer provenance to a
-runtime value merely because an effect produced it. If two independent lease
-effects deliberately expose the same `Resource` carrier, a value produced by one
-can satisfy the other's `close` input. The focused `resource_lease_same_carrier`
-probe records that boundary. Applications needing producer identity should make
-it part of the resource carrier with a distinct variant or nominal type.
+The compiler enforces resource/receipt carrier compatibility, linear
+consumption, and the remaining effect row. It does **not** attach producer
+provenance to a runtime value merely because an effect produced it. If two
+independent lease effects deliberately expose the same `Resource` carrier, a
+value produced by one can satisfy the other's `close` input. The focused
+`resource_lease_same_carrier` probe records that boundary. Applications needing
+producer identity should make it part of the resource carrier with a distinct
+variant or nominal type.
 
 ## Run
 
