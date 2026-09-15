@@ -1,0 +1,4 @@
+open import "blot:prelude"
+const Customer = import "../../../examples/lib/customer_identity.blot"
+
+return Customer.raw 41
