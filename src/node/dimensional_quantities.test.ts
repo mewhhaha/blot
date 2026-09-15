@@ -69,11 +69,13 @@ test("dimensional quantities derive product dimensions in both executions", asyn
 test("dimensional quantities reject incompatible dimension relationships", async () => {
   const compiler = await Compiler.create();
   try {
-    for (const fixture of [
-      addMismatchPath,
-      resultMismatchPath,
-      inputMismatchPath,
-    ]) {
+    for (
+      const fixture of [
+        addMismatchPath,
+        resultMismatchPath,
+        inputMismatchPath,
+      ]
+    ) {
       await assert.rejects(() => compiler.check(fixture), /BLOT_TYPE_ERROR/);
     }
   } finally {
