@@ -1,0 +1,12 @@
+open import "blot:prelude"
+const Retry = import "../../../examples/lib/retry_strategy.blot"
+
+const Failure = #Failure Text
+
+const strategy :: Retry.Strategy (Int, Failure)
+const strategy = Retry.bounded (1, fn _ => True)
+
+let operation :: (Int, Text) -> Result (Int, Failure)
+let operation = fn (value, _) => #Ok value
+
+return Retry.run (strategy, operation, 1)
