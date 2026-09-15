@@ -1,0 +1,58 @@
+open import "blot:prelude"
+const Adapter = import "./lib/endpoint_adapter.blot"
+
+// These are ordinary compile-time type constructors. Keeping the payload slot
+// explicit is what lets one adapter be reused for ports, text, and any other
+// result without weakening the payload to a common dynamic representation.
+const Maybe = fn Value => #Found Value | #Missing
+const Checked = fn Value => #Ok Value | #Error Text
+const Observed = fn Value => #Ok { .value = Value; .source = Text; } | #Error Text
+
+const Port = 1..65535
+
+const require :: Adapter.Natural (Maybe, Checked)
+const require = fn candidate => case candidate of
+  #Found value => #Ok value
+  #Missing => #Error "missing"
+
+const observe :: Adapter.Natural (Checked, Observed)
+const observe = fn candidate => case candidate of
+  #Ok value => #Ok { .value; .source = "registry"; }
+  #Error error => #Error error
+
+// Composition preserves the hidden payload variable across both adapters. The
+// same rank-polymorphic value below is later instantiated at Port and Text.
+const require_observed =
+  Adapter.compose (Maybe, Checked, Observed) (require, observe)
+
+const require_endpoint = Adapter.hoist (Maybe, Checked)
+const observe_endpoint = Adapter.hoist (Maybe, Observed)
+
+const lookup_port :: Text -> Maybe Port
+const lookup_port = fn service => case service of
+  "api" => #Found 443
+  "admin" => #Found 8443
+  _ => #Missing
+
+const lookup_owner :: Int -> Maybe Text
+const lookup_owner = fn tenant => case tenant of
+  7 => #Found "Żaneta"
+  9 => #Found "Ada"
+  _ => #Missing
+
+const required_port = require_endpoint (require, lookup_port)
+const observed_port = observe_endpoint (require_observed, lookup_port)
+const observed_owner = observe_endpoint (require_observed, lookup_owner)
+
+// Edge cases are intentional: a refined success at its boundary, a missing
+// value, a Unicode payload, and the same adapter instantiated at two unrelated
+// payload types. No runtime tag or cast identifies which payload is flowing.
+return {
+  .default = {
+    .required_api = required_port "api";
+    .required_missing = required_port "metrics";
+    .observed_admin = observed_port "admin";
+    .observed_owner = observed_owner 7;
+    .observed_owner_missing = observed_owner 404;
+  };
+}
