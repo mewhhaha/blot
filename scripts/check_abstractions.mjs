@@ -39,6 +39,7 @@ const suites = [
   "src/node/reversible_updates.test.ts",
   "src/node/typed_traversals.test.ts",
   "src/node/typed_record_projections.test.ts",
+  "src/node/applicative_nominal_domains.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 
