@@ -1,0 +1,160 @@
+open import "blot:prelude"
+const ES = import "./lib/event_sourced_aggregate.blot"
+
+const Quantity = range (1, 100)
+const Percent = range (0, 100)
+
+const InventoryState =
+  {
+    .sku = Text;
+    .available = Int;
+    .reserved = Int;
+  }
+const InventoryCommand =
+  #Receive Quantity | #Reserve Quantity | #Release Quantity
+const InventoryEvent =
+  #Received Quantity | #Reserved Quantity | #Released Quantity
+const InventoryError =
+  (
+    #Insufficient { .requested = Quantity; .available = Int; } |
+    #ReleaseExceeds { .requested = Quantity; .reserved = Int; }
+  )
+
+let inventory_decide ::
+  (InventoryState, InventoryCommand) -> Result ([
+    InventoryEvent
+  ], InventoryError)
+let inventory_decide = fn (state, command) => case command of
+  #Receive quantity => #Ok [#Received quantity]
+  #Reserve quantity => do:
+    if quantity <= state.available:
+      return #Ok [#Reserved quantity]
+
+    return #Error (#Insufficient {
+      .requested = quantity;
+      .available = state.available;
+    })
+
+  #Release quantity => do:
+    if quantity <= state.reserved:
+      return #Ok [#Released quantity]
+
+    return #Error (#ReleaseExceeds {
+      .requested = quantity;
+      .reserved = state.reserved;
+    })
+
+let inventory_evolve :: (InventoryState, InventoryEvent) -> InventoryState
+let inventory_evolve = fn (state, event) => case event of
+  #Received quantity => { ...state; .available = state.available + quantity; }
+  #Reserved quantity => {
+    ...state;
+    .available = state.available - quantity;
+    .reserved = state.reserved + quantity;
+  }
+
+  #Released quantity => {
+    ...state;
+    .available = state.available + quantity;
+    .reserved = state.reserved - quantity;
+  }
+
+let inventory ::
+  ES.Aggregate (
+    InventoryState,
+    InventoryCommand,
+    InventoryEvent,
+    InventoryError
+  )
+let inventory =
+  {
+    .initial = { .sku = "db-🐱"; .available = 0; .reserved = 0; };
+    .decide = inventory_decide;
+    .evolve = inventory_evolve;
+  }
+
+const RolloutState = { .service = Text; .percent = Percent; }
+const RolloutCommand = #Advance Percent
+const RolloutEvent = #Advanced Percent
+const RolloutError = #Regression { .current = Percent; .requested = Percent; }
+
+let rollout_decide ::
+  (RolloutState, RolloutCommand) -> Result ([RolloutEvent], RolloutError)
+let rollout_decide = fn (state, command) => case command of
+  #Advance requested => do:
+    if requested >= state.percent:
+      return #Ok [#Advanced requested]
+
+    return #Error (#Regression { .current = state.percent; .requested; })
+
+let rollout_evolve :: (RolloutState, RolloutEvent) -> RolloutState
+let rollout_evolve = fn (state, event) => case event of
+  #Advanced percent => { ...state; .percent; }
+
+let rollout ::
+  ES.Aggregate (RolloutState, RolloutCommand, RolloutEvent, RolloutError)
+let rollout =
+  {
+    .initial = { .service = "api-λ"; .percent = 0; };
+    .decide = rollout_decide;
+    .evolve = rollout_evolve;
+  }
+
+const SystemState = ES.ProductState (InventoryState, RolloutState)
+const SystemCommand = ES.ProductCommand (InventoryCommand, RolloutCommand)
+const SystemEvent = ES.ProductEvent (InventoryEvent, RolloutEvent)
+const SystemError = ES.ProductError (InventoryError, RolloutError)
+
+let system ::
+  ES.Aggregate (SystemState, SystemCommand, SystemEvent, SystemError)
+let system = ES.product (inventory, rollout)
+
+let advance_state :: (SystemState, SystemCommand) -> SystemState
+let advance_state =
+  fn (state, command) => case ES.execute (system, state, command) of
+    #Ok outcome => outcome.state
+    #Error _ => state
+
+let s0 = system.initial
+let s1 = advance_state (s0, #Left (#Receive 10))
+let s2 = advance_state (s1, #Left (#Reserve 4))
+let s3 = advance_state (s2, #Right (#Advance 25))
+let s4 = advance_state (s3, #Left (#Release 1))
+
+let insufficient = ES.execute (system, s4, #Left (#Reserve 100))
+let regression = ES.execute (system, s4, #Right (#Advance 5))
+
+let recorded_events :: [SystemEvent]
+let recorded_events =
+  [
+    #Left (#Received 10),
+    #Left (#Reserved 4),
+    #Right (#Advanced 25),
+    #Left (#Released 1)
+  ]
+
+let replayed :: SystemState
+let replayed = ES.replay (system, recorded_events)
+
+let describe_error :: SystemError -> Text
+let describe_error = fn error => case error of
+  #Left inventory_error => case inventory_error of
+    #Insufficient info => "inventory:available=" <> Text.of_int info.available
+    #ReleaseExceeds info => "inventory:reserved=" <> Text.of_int info.reserved
+
+  #Right rollout_error => case rollout_error of
+    #Regression info => "rollout:" <> Text.of_int info.current <> "->" <> Text.of_int info.requested
+
+let error_of = fn result => case result of
+  #Error error => describe_error error
+  #Ok _ => "none"
+
+return {
+  .default = {
+    .final_state = s4;
+    .replayed;
+    .events = recorded_events;
+    .insufficient = error_of insufficient;
+    .regression = error_of regression;
+  };
+}
