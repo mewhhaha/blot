@@ -1,8 +1,8 @@
 open import "blot:prelude"
 const Domain = import "../../../examples/lib/bounded_int_domain.blot"
 
-const Percent = Domain.bounded (0, 100)
-const CanaryPercent = Domain.bounded (5, 25)
+const Percent = Domain.bounded (range (0, 100))
+const CanaryPercent = Domain.bounded (range (5, 25))
 
 let narrow :: Percent.Type -> CanaryPercent.Type
 let narrow = fn value => value
