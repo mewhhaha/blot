@@ -22,21 +22,7 @@ const bounded = fn (max_retries, retryable) => {
   ;
 }
 
-const rec attempt ::
-  @forall (fn State =>
-    @forall (fn Input =>
-      @forall (fn Output =>
-        @forall (fn Error =>
-          (
-            Strategy (State, Error),
-            ((Input, State) -> Result (Output, Error) ~ { ..e }),
-            Input,
-            State
-          ) -> Result (Output, Error) ~ { ..e }
-        )
-      )
-    )
-  )
+const rec attempt :: @forall (fn State => @forall (fn Input => @forall (fn Output => @forall (fn Error => (Strategy (State, Error), ((Input, State) -> Result (Output, Error) ~ { ..e }), Input, State) -> Result (Output, Error) ~ { ..e }))))
 const rec attempt = fn (strategy, operation, input, state) => do:
   use outcome <- operation (input, state)
   return case outcome of
@@ -45,25 +31,11 @@ const rec attempt = fn (strategy, operation, input, state) => do:
       #Retry next => attempt (strategy, operation, input, next)
       #Stop final => #Error final
 
-const run ::
-  @forall (fn State =>
-    @forall (fn Input =>
-      @forall (fn Output =>
-        @forall (fn Error =>
-          (
-            Strategy (State, Error),
-            ((Input, State) -> Result (Output, Error) ~ { ..e }),
-            Input
-          ) -> Result (Output, Error) ~ { ..e }
-        )
-      )
-    )
-  )
-const run = fn (strategy, operation, input) =>
-  attempt (strategy, operation, input, strategy.initial)
+const run :: @forall (fn State => @forall (fn Input => @forall (fn Output => @forall (fn Error => (Strategy (State, Error), ((Input, State) -> Result (Output, Error) ~ { ..e }), Input) -> Result (Output, Error) ~ { ..e }))))
+const run = fn (strategy, operation, input) => attempt (strategy, operation, input, strategy.initial)
 
 return {
-  .Strategy = Strategy;
-  .bounded = bounded;
-  .run = run;
+  .Strategy;
+  .bounded;
+  .run;
 }
