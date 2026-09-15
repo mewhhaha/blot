@@ -1,0 +1,63 @@
+name: Repair publish staging
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/repair-publish-staging.yml
+      - repair/staging/formatter.patch
+
+permissions:
+  contents: read
+
+jobs:
+  formatter:
+    if: github.repository == 'mewhhaha/blot' && github.event.pull_request.head.repo.full_name == 'mewhhaha/blot' && github.event.pull_request.head.ref == 'repair/pr143-compiler-workbench-20260915'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: 4489e2599426b125b5fb9f2a6dfe48651b136e58
+          path: candidate
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: candidate/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.6
+      - name: Apply the reviewed source repair
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          git apply --check ../control/repair/staging/formatter.patch
+          git apply ../control/repair/staging/formatter.patch
+          pnpm install --frozen-lockfile
+          deno fmt --check
+          deno lint
+          deno run --allow-read --allow-write scripts/generate_language_health.ts
+          deno run --allow-read scripts/generate_language_health.ts --check
+          git diff --check
+      - name: Run the complete formatter suite at its existing timeout
+        working-directory: candidate
+        run: node --import ./src/node/deno_test_compat.mjs --import tsx --test --test-isolation=none --test-timeout=300000 src/tooling/formatter.test.ts
+      - name: Publish an isolated validated candidate
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          git config user.name 'Blot compiler repair'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/tooling/formatter.ts src/tooling/formatter.test.ts generated/language-health.json
+          git commit -m 'fix: reuse structural indentation while formatting signature candidates'
+          git push origin HEAD:refs/heads/repair/main-formatter-validated-20260915
+          git rev-parse HEAD
+          git show --stat --oneline HEAD
