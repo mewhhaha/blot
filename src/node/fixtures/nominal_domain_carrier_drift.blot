@@ -2,5 +2,5 @@ open import "blot:prelude"
 const Nominal = import "../../../examples/lib/nominal_domain.blot"
 const Customer = import "../../../examples/lib/customer_identity.blot"
 
-const DriftedCustomerId = Nominal.domain ("example.customer-id.v1", Text)
-return Customer.raw (DriftedCustomerId.of "41")
+const DriftedCustomer = Nominal.domain ("example.customer-id.v1", Text)
+return Customer.raw (DriftedCustomer.of "41")

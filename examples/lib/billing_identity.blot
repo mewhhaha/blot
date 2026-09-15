@@ -1,24 +1,26 @@
-open import "blot:prelude"
+const { .Int; .Op; } = import "blot:prelude"
 const Nominal = import "./nominal_domain.blot"
 
 // Reconstructing the customer domain with the same name and carrier gives the
 // same nominal type as customer_identity.blot without importing that module.
-const CustomerId = Nominal.domain ("example.customer-id.v1", Int)
-const InvoiceId = Nominal.domain ("example.invoice-id.v1", Int)
+const Customer = Nominal.domain ("example.customer-id.v1", Int)
+const Invoice = Nominal.domain ("example.invoice-id.v1", Int)
+const CustomerId = Customer.type
+const InvoiceId = Invoice.type
 
 const customer_raw :: CustomerId -> Int
-const customer_raw = CustomerId.value
+const customer_raw = fn id => Customer.value id
 
 const invoice_for :: CustomerId -> InvoiceId
-const invoice_for = fn customer => InvoiceId.of (CustomerId.value customer + 1000)
+const invoice_for = fn customer => Invoice.of (Customer.value customer + 1000)
 
 const invoice_raw :: InvoiceId -> Int
-const invoice_raw = InvoiceId.value
+const invoice_raw = fn id => Invoice.value id
 
 return {
-  .CustomerId = CustomerId;
-  .InvoiceId = InvoiceId;
-  .customer_raw = customer_raw;
-  .invoice_for = invoice_for;
-  .invoice_raw = invoice_raw;
+  .CustomerId;
+  .InvoiceId;
+  .customer_raw;
+  .invoice_for;
+  .invoice_raw;
 }

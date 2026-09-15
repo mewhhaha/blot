@@ -1,20 +1,21 @@
 open import "blot:prelude"
 
-// Build one nominal domain from a public name and an invariant carrier. `seal`
-// is applicative, so reconstructing the same pair reconstructs the same type.
-const domain = fn (name, carrier) => do:
-  const Domain = seal (name, carrier)
+// Build a nominal-domain descriptor from a public name and invariant carrier.
+// `seal` is applicative, so reconstructing the same pair reconstructs the same type.
+const domain = fn (name, Carrier) => do:
+  const T = seal (name, Carrier)
 
-  const of :: carrier -> Domain
-  const of = fn value => seal (name, value)
+  let create :: Carrier -> T
+  let create = fn value => seal (name, value)
 
-  const value :: Domain -> carrier
-  const value = fn wrapped => unseal wrapped
+  let value :: T -> Carrier
+  let value = fn wrapped => unseal wrapped
 
-  return Domain <+ {
-    .name = name;
-    .of = of;
-    .value = value;
+  return {
+    .name;
+    .type = T;
+    .of = create;
+    .value;
   }
 
-return { .domain = domain; }
+return { .domain; }

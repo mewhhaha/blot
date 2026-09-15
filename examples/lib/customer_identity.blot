@@ -1,22 +1,25 @@
-open import "blot:prelude"
+const { .Int; .Op; } = import "blot:prelude"
 const Nominal = import "./nominal_domain.blot"
 
 // This module owns no singleton declaration object. The public seal identity is
 // reconstructed from the qualified name and exact carrier.
-const CustomerId = Nominal.domain ("example.customer-id.v1", Int)
+const Customer = Nominal.domain ("example.customer-id.v1", Int)
+const CustomerId = Customer.type
 
 const make :: Int -> CustomerId
-const make = CustomerId.of
+const make = fn value => Customer.of value
 
+// Pain point: directly assigning `Customer.value` keeps an imprecise fallback
+// arrow after imported staging; this forwarding call recovers the exact carrier.
 const raw :: CustomerId -> Int
-const raw = CustomerId.value
+const raw = fn id => Customer.value id
 
 const successor :: CustomerId -> CustomerId
-const successor = fn id => CustomerId.of (CustomerId.value id + 1)
+const successor = fn id => Customer.of (Customer.value id + 1)
 
 return {
-  .CustomerId = CustomerId;
-  .make = make;
-  .raw = raw;
-  .successor = successor;
+  .CustomerId;
+  .make;
+  .raw;
+  .successor;
 }

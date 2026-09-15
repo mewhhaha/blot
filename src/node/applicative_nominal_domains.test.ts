@@ -14,6 +14,8 @@ const wrongIdPath = "src/node/fixtures/nominal_domain_wrong_id.blot";
 const rawEscapePath = "src/node/fixtures/nominal_domain_raw_escape.blot";
 const carrierDriftPath = "src/node/fixtures/nominal_domain_carrier_drift.blot";
 const collisionPath = "src/node/fixtures/nominal_domain_name_collision.blot";
+const projectedEliminatorPath =
+  "examples/pending/nominal_domain_projected_eliminator.blot";
 
 const principalType =
   "{ .default = { .first = Int; .next = Int; .invoice = Int; .reconstructed = Int; .alias = Text } }";
@@ -27,6 +29,7 @@ const blotPaths = [
   rawEscapePath,
   carrierDriftPath,
   collisionPath,
+  projectedEliminatorPath,
 ] as const;
 
 test("applicative nominal domains agree across independent modules", async () => {
@@ -97,7 +100,24 @@ test("identical public seal identity intentionally reconstructs one domain", asy
     assert.equal(evaluated.display, "{ .default = 9; }");
     assert.equal(
       await runArtifact(await compiler.compile(collisionPath)),
-      "{ .default = 9; }",
+      "9",
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("projected staged eliminator retains an imprecise fallback arrow", async () => {
+  const compiler = await Compiler.create();
+  try {
+    await assert.rejects(
+      () => compiler.check(projectedEliminatorPath),
+      (error: unknown) => {
+        assert(error instanceof BlotError);
+        assert.equal(error.diagnostic.code, "BLOT_TYPE_ERROR");
+        assert.match(error.diagnostic.message, /⊤ -> ⊥/);
+        return true;
+      },
     );
   } finally {
     compiler.destroy();

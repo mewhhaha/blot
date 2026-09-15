@@ -1,23 +1,23 @@
 # Applicative nominal domains
 
-This example factors a common module-boundary problem into a small type-valued
-API: two independently authored modules need to agree that an integer is a
+This example factors a common module-boundary problem into a small staged API:
+two independently authored modules need to agree that an integer is a
 `CustomerId` without sharing one declaration object, while `CustomerId` must
 remain distinct from another integer-backed domain such as `InvoiceId`.
 
-`lib/nominal_domain.blot` uses Blot's sealed types directly.
-`domain (name, Carrier)` returns the sealed type itself with `of`, `value`, and
-`name` attached as its namespace. Because seals are applicative, their identity
-is the public name plus invariant carrier. Reconstructing
-`("example.customer-id.v1", Int)` in the customer module, billing module, or
-application therefore yields the same nominal type. Changing either the name or
-the carrier yields a different type.
+`lib/nominal_domain.blot` builds a descriptor with four compile-time members:
+`.type`, `.of`, `.value`, and `.name`. The `.type` member is `seal (name,
+Carrier)`. Because seals are applicative, their identity is the public name plus
+invariant carrier. Reconstructing `("example.customer-id.v1", Int)` in the
+customer module, billing module, or application therefore yields the same
+nominal type. Changing either the name or the carrier yields a different type.
 
-The abstraction keeps the representation boundary honest. `CustomerId` and
-`InvoiceId` erase to their carriers at runtime, but ordinary `Int` values cannot
-flow into either domain and one sealed domain cannot flow into the other.
-`unseal` is confined to the generated `.value` operation instead of being
-scattered through application code.
+The descriptor keeps the representation relationship explicit without dynamic
+tags, a registry, casts, or unchecked escapes. `.of` accepts exactly the carrier
+and produces the sealed domain; `.value` accepts exactly that sealed domain and
+returns the carrier. The customer and billing modules expose small monomorphic
+wrappers, which also isolate the current projection-precision issue recorded in
+the pending pressure test.
 
 The compiler enforces the seal identity, carrier invariance, typed constructors,
 and typed eliminators. It does not know the business meaning of the public name.
@@ -52,9 +52,16 @@ and carries Unicode text through a separate sealed alias domain.
 Three fixtures are intentional source-level rejections: an invoice passed to a
 customer consumer, a raw integer passed where `CustomerId` is required, and the
 same public customer name rebuilt over `Text` instead of `Int`. A fourth focused
-fixture is supported rather than rejected: two locally reconstructed seals with
-the exact same public name and `Int` carrier interoperate, preserving the
+fixture is supported rather than rejected: two locally reconstructed descriptors
+with the exact same public name and `Int` carrier interoperate, preserving the
 applicative-identity boundary as executable evidence.
+
+`examples/pending/nominal_domain_projected_eliminator.blot` is different: it is a
+pressure test for a natural direct projection that is not currently principal.
+Calling `Domain.value x` specializes to the concrete seal/carrier pair, but
+assigning the projected member directly to `Domain.type -> Int` retains an extra
+`⊤ -> ⊥` arrow and is rejected. The supported modules use a one-call forwarding
+wrapper rather than weakening the public type.
 
 ## Design tradeoff
 

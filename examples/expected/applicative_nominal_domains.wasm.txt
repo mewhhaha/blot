@@ -1,1 +1,1 @@
-{ .default = { .first = 41; .next = 42; .invoice = 1041; .reconstructed = 7; .alias = "Żaneta 🐱"; }; }
+{ .alias = "Żaneta 🐱"; .first = 41; .invoice = 1041; .next = 42; .reconstructed = 7 }
