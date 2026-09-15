@@ -1,0 +1,1 @@
+{ .default = { .flaky = #Ok 204; .rejected = #Error #Rejected "permission denied"; .stable = #Ok 200; .pure_retry = #Ok 42; .pure_stop = #Error #Invalid "bad"; .zero_budget = #Error #Incomplete "eventual"; }; }
