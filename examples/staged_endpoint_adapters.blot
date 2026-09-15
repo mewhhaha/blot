@@ -24,7 +24,7 @@ const observe = fn candidate => case candidate of
 // Composition preserves the hidden payload variable across both adapters. The
 // same rank-polymorphic value below is later instantiated at Port and Text.
 // Pain point: spelling the returned Rank-N signature here is currently required
-// to preserve the payload type through later specialization; the pending probe
+// to preserve the payload type through later specialization; the focused probe
 // records the otherwise inferred bottom result.
 const require_observed :: Adapter.Natural (Maybe, Observed)
 const require_observed =
