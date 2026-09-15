@@ -1,0 +1,130 @@
+open import "blot:prelude"
+const R = import "./lib/opaque_reducer.blot"
+
+const Latency = range (0, 60000)
+const Status = range (100, 599)
+
+const Sample = {
+  .route = Text;
+  .latency_ms = Latency;
+  .status = Status;
+}
+
+const Summary = {
+  .total_ms = Int;
+  .sample_count = Int;
+  .average_ms = Option Int;
+  .server_errors = Int;
+  .has_server_error = Bool;
+}
+
+const total_latency :: R.Reducer (Latency, Int)
+const total_latency = R.make {
+  .initial = 0;
+  .step = fn (total, value) => total + value;
+  .finish = fn total => total;
+}
+
+const sample_count :: R.Reducer (Latency, Int)
+const sample_count = R.make {
+  .initial = 0;
+  .step = fn (count, _) => count + 1;
+  .finish = fn count => count;
+}
+
+const average_latency :: R.Reducer (Latency, Option Int)
+const average_latency = R.zip_with (
+  total_latency,
+  sample_count,
+  fn (total, count) => case count of
+    0 => #None
+    _ => #Some (total / count)
+)
+
+const sample_total :: R.Reducer (Sample, Int)
+const sample_total = R.contramap (total_latency, fn sample => sample.latency_ms)
+
+const sample_volume :: R.Reducer (Sample, Int)
+const sample_volume = R.contramap (sample_count, fn sample => sample.latency_ms)
+
+const sample_average :: R.Reducer (Sample, Option Int)
+const sample_average = R.contramap (average_latency, fn sample => sample.latency_ms)
+
+const count_error :: (Int, Sample) -> Int
+const count_error = fn (count, sample) => do:
+  if sample.status >= 500:
+    return count + 1
+
+  return count
+
+const server_errors :: R.Reducer (Sample, Int)
+const server_errors = R.make {
+  .initial = 0;
+  .step = count_error;
+  .finish = fn count => count;
+}
+
+const has_server_error :: R.Reducer (Sample, Bool)
+const has_server_error = R.map_output (server_errors, fn count => count > 0)
+
+const Volume = {
+  .total_ms = Int;
+  .sample_count = Int;
+  .average_ms = Option Int;
+}
+
+const total_and_count :: R.Reducer (Sample, { .total_ms = Int; .sample_count = Int; })
+const total_and_count = R.zip_with (
+  sample_total,
+  sample_volume,
+  fn (total_ms, sample_count) => { .total_ms; .sample_count; }
+)
+
+const volume :: R.Reducer (Sample, Volume)
+const volume = R.zip_with (
+  total_and_count,
+  sample_average,
+  fn (counts, average_ms) => {
+    .total_ms = counts.total_ms;
+    .sample_count = counts.sample_count;
+    .average_ms;
+  }
+)
+
+const Health = { .server_errors = Int; .has_server_error = Bool; }
+const health :: R.Reducer (Sample, Health)
+const health = R.zip_with (
+  server_errors,
+  has_server_error,
+  fn (server_errors, has_server_error) => { .server_errors; .has_server_error; }
+)
+
+// Each `zip_with` creates a nested pair accumulator, but the public annotation
+// mentions only the reusable input and output relationship.
+const summarize :: R.Reducer (Sample, Summary)
+const summarize = R.zip_with (
+  volume,
+  health,
+  fn (volume, health) => {
+    .total_ms = volume.total_ms;
+    .sample_count = volume.sample_count;
+    .average_ms = volume.average_ms;
+    .server_errors = health.server_errors;
+    .has_server_error = health.has_server_error;
+  }
+)
+
+const full :: [Sample]
+const full = [{ .route = "/api"; .latency_ms = 120; .status = 200; }, { .route = "/search/🐱"; .latency_ms = 60000; .status = 503; }, { .route = "/api"; .latency_ms = 180; .status = 204; }, { .route = "/db"; .latency_ms = 20; .status = 404; }]
+
+const empty :: [Sample]
+const empty = []
+
+const boundary :: [Sample]
+const boundary = [{ .route = "/zero"; .latency_ms = 0; .status = 599; }]
+
+return { .default = {
+  .full = R.run (summarize, full);
+  .empty = R.run (summarize, empty);
+  .boundary = R.run (summarize, boundary);
+}; }
