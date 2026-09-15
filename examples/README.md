@@ -63,7 +63,6 @@ shared array snapshots, guarded runtime indices, and large record-update folds.
 | [`typed_relational_join.blot`](typed_relational_join.blot)       | Typed key projections connect two row domains and preserve grouped matches                                                           | duplicates, unmatched rows, empty sides, flipped relations          |
 | [`typed_traversals.blot`](typed_traversals.blot)                 | Composable zero-or-more focuses preserve the relationship between whole values and their parts                                       | nested arrays, empty waves, Unicode labels, incompatible modifiers  |
 | [`typed_record_projections.blot`](typed_record_projections.blot) | A staged field selection derives a shared shape for typed observation and replacement                                                | refinements, unselected fields, empty selections, unknown names     |
-| [`staged_bounded_domains.blot`](staged_bounded_domains.blot)     | One pair of compile-time integer bounds generates a refinement plus checked admission and clamping operations                        | inclusive edges, rejection, clamping, negative bounds, range widening |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
@@ -162,12 +161,6 @@ The reversible-update example turns an immutable getter/setter pair into a
 evidence accepted by `revert`. Composition pairs both input and undo carriers,
 while `commit_if` uses the produced evidence to roll back failed validation. The
 type checks carrier compatibility; inverse laws remain executable contracts.
-
-The staged bounded-domain example specializes a descriptor from two compile-time
-integer bounds. The resulting `.Type`, `.admit`, and `.clamp` members share one
-range definition; branch narrowing proves the successful runtime paths inhabit
-that range. Narrower generated ranges flow to wider ones by ordinary range
-subtyping. Equal numeric ranges do not encode application-level unit identity.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
