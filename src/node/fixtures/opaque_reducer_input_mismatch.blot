@@ -1,0 +1,13 @@
+open import "blot:prelude"
+const R = import "../../../examples/lib/opaque_reducer.blot"
+
+const ints :: R.Reducer (Int, Int)
+const ints = R.make { .initial = 0; .step = fn (total, value) => total + value; .finish = fn value => value; }
+
+const texts :: R.Reducer (Text, Int)
+const texts = R.make { .initial = 0; .step = fn (count, _) => count + 1; .finish = fn value => value; }
+
+const invalid :: R.Reducer (Int, Int)
+const invalid = R.zip_with (ints, texts, fn (left, right) => left + right)
+
+return invalid
