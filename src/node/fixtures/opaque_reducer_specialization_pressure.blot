@@ -1,0 +1,21 @@
+const { .Int; .Op; .Text; } = import "blot:prelude"
+const R = import "../../../examples/lib/opaque_reducer.blot"
+
+const int_state :: R.Reducer (Int, Int)
+const int_state = R.make { .initial = 0; .step = fn (state, value) => state + value; .finish = fn value => value; }
+
+const pair_state :: R.Reducer (Int, Int)
+const pair_state = R.make {
+  .initial = { .left = 0; .right = 0; };
+  .step = fn (state, value) => { .left = state.left + value; .right = state.right + 1; };
+  .finish = fn state => state.left + state.right;
+}
+
+const text_state :: R.Reducer (Int, Text)
+const text_state = R.make {
+  .initial = "seed";
+  .step = fn (state, _) => state;
+  .finish = fn value => value;
+}
+
+return { .int_state; .pair_state; .text_state; }
