@@ -5,6 +5,7 @@ export const terminalContinue: LintRule = {
   name: "terminal-continue",
   code: "BLOT_LINT_TERMINAL_CONTINUE",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       concrete(rule) {

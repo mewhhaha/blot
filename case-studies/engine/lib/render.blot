@@ -54,20 +54,20 @@ const Canvas =
     // A projected triangle. Each vertex keeps its view depth so the host can
     // rasterize slanted faces without reducing them to a painter-order guess.
     .tri = {
-    .ax = Int; .ay = Int; .az = Int;
-    .bx = Int; .by = Int; .bz = Int;
-    .cx = Int; .cy = Int; .cz = Int;
-    .shade = Int;
-    .color = Color;
+      .ax = Int; .ay = Int; .az = Int;
+      .bx = Int; .by = Int; .bz = Int;
+      .cx = Int; .cy = Int; .cz = Int;
+      .shade = Int;
+      .color = Color;
     } -> Unit;
     // A 2D texture, always square to the screen. Under an orthographic lens this
     // is a plain sprite; under a perspective one it is a billboard, and the only
     // difference is what scaled its size.
     .sprite = {
-    .x = Int; .y = Int;
-    .size = Int;
-    .depth = Int;
-    .texture = Text;
+      .x = Int; .y = Int;
+      .size = Int;
+      .depth = Int;
+      .texture = Text;
     } -> Unit;
     .present = Unit -> Unit;
   }
@@ -209,32 +209,32 @@ const camera_of = fn (yaw, pitch, distance, lens) => do:
   let zoom = F32.div FOCAL distance
   return {
     .eye = F32x4.of (
-    F32.mul distance (F32.mul cos_pitch sin_yaw),
-    F32.mul distance sin_pitch,
-    F32.mul distance (F32.mul cos_pitch cos_yaw),
-    ONE
-  );
+      F32.mul distance (F32.mul cos_pitch sin_yaw),
+      F32.mul distance sin_pitch,
+      F32.mul distance (F32.mul cos_pitch cos_yaw),
+      ONE
+    );
     // `right` and `up` span the screen and `forward` grows away from the eye,
     // which is the sign the divide, the near test, and the host's sort all
     // want — so it is settled here rather than three times downstream.
     .right = F32x4.of (cos_yaw, ZERO, F32.negate sin_yaw, ZERO);
     .up = F32x4.of (
-    F32.negate (F32.mul sin_pitch sin_yaw),
-    cos_pitch,
-    F32.negate (F32.mul sin_pitch cos_yaw),
-    ZERO
-  );
+      F32.negate (F32.mul sin_pitch sin_yaw),
+      cos_pitch,
+      F32.negate (F32.mul sin_pitch cos_yaw),
+      ZERO
+    );
     // A row's fourth lane is its translation, and the eye is the whole of it.
     // Because the camera orbits the origin, that translation collapses: the eye
     // only ever moves along `forward`, so the two screen rows translate by
     // nothing and the depth row translates by the orbit radius. Subtracting the
     // eye per vertex would arrive at these same three numbers.
     .forward = F32x4.of (
-    F32.negate (F32.mul cos_pitch sin_yaw),
-    F32.negate sin_pitch,
-    F32.negate (F32.mul cos_pitch cos_yaw),
-    distance
-  );
+      F32.negate (F32.mul cos_pitch sin_yaw),
+      F32.negate sin_pitch,
+      F32.negate (F32.mul cos_pitch cos_yaw),
+      distance
+    );
     .lens = lens;
     .zoom = zoom;
     .zoom_axes = F32x4.of (zoom, F32.negate zoom, ZERO, ZERO);
@@ -324,10 +324,10 @@ const draw_face = fn (position, angle, scale, color, camera, face) => do:
 // than a second renderer.
 const draw_mesh = fn (position, angle, scale, color, camera) => do:
   use each (
-      faces,
-      fn face => do:
-        use draw_face (position, angle, scale, color, camera, face)
-    )
+    faces,
+    fn face => do:
+      use draw_face (position, angle, scale, color, camera, face)
+  )
 
 // A 2D texture placed in the 3D world. Its size divides by depth under a
 // perspective lens and does not under an orthographic one — the same one-line

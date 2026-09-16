@@ -11,6 +11,7 @@
 
 import { dirname, fromFileUrl, join } from "@std/path";
 import { parseGrammar } from "@mewhhaha/baba";
+import { installHelixManagedBlock } from "./helix_languages.ts";
 
 const repository = dirname(fromFileUrl(new URL("../", import.meta.url) + "x"));
 const grammarDirectory = join(repository, "tree-sitter-blot");
@@ -18,7 +19,9 @@ const grammarDirectory = join(repository, "tree-sitter-blot");
 const home = Deno.env.get("HOME");
 if (home === undefined) throw new Error("HOME is not set");
 
-const configHome = Deno.env.get("XDG_CONFIG_HOME") ?? join(home, ".config");
+const configuredHome = Deno.env.get("XDG_CONFIG_HOME");
+let configHome = join(home, ".config");
+if (configuredHome !== undefined) configHome = configuredHome;
 const helix = join(configHome, "helix");
 const languagesPath = join(helix, "languages.toml");
 const queryTarget = join(helix, "runtime", "queries", "blot");
@@ -28,9 +31,6 @@ const grammarTarget = join(
   "grammars",
   `blot.${libraryExtension()}`,
 );
-
-const beginMarker = `# >>> blot (managed by ${repository}) >>>`;
-const endMarker = `# <<< blot (managed by ${repository}) <<<`;
 
 function libraryExtension(): string {
   if (Deno.build.os === "linux") return "so";
@@ -277,46 +277,10 @@ try {
   if (!(error instanceof Deno.errors.NotFound)) throw error;
 }
 
-const start = languages.indexOf(beginMarker);
-if (start >= 0) {
-  const end = languages.indexOf(endMarker, start);
-  if (end < 0) {
-    throw new Error(
-      `${languagesPath} has a blot block with no closing marker; remove it by hand and re-run.`,
-    );
-  }
-  languages = languages.slice(0, start) +
-    languages.slice(end + endMarker.length);
-}
-
-const block = `${beginMarker}
-[language-server.blot]
-command = "deno"
-args = ["run", "--allow-read", "${join(repository, "src", "cli.ts")}", "lsp"]
-
-[[language]]
-name = "blot"
-language-id = "blot"
-scope = "source.blot"
-injection-regex = "^blot$"
-file-types = ["blot"]
-roots = ["AGENTS.md", "deno.json", ".git"]
-comment-token = "//"
-grammar = "blot"
-language-servers = ["blot"]
-auto-format = true
-text-width = 80
-rainbow-brackets = true
-indent = { tab-width = 2, unit = "  " }
-
-[[grammar]]
-name = "blot"
-source = { path = "${grammarDirectory}" }
-${endMarker}
-`;
+const merged = installHelixManagedBlock(languages, repository, languagesPath);
 
 await Deno.mkdir(helix, { recursive: true });
-await Deno.writeTextFile(languagesPath, `${languages.trimEnd()}\n\n${block}`);
+await Deno.writeTextFile(languagesPath, merged);
 
 console.log(`Registered blot in ${languagesPath} (file-types = ["blot"])`);
 console.log(`Installed queries in ${queryTarget}`);

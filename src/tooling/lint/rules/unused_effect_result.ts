@@ -6,6 +6,7 @@ export const unusedEffectResult: LintRule = {
   name: "unused-effect-result",
   code: "BLOT_LINT_UNUSED_EFFECT_RESULT",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       module(path) {
