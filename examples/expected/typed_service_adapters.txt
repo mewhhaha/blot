@@ -1,0 +1,1 @@
+{ .default = { .pure = #Resolved #Service { .endpoint = "api:443"; .status = #Ready; }; .effectful = #Resolved #Service { .endpoint = "db-🐱:65535"; .status = #Degraded "db-🐱: cache warmup"; }; .identity = { .endpoint = "id:1"; .status = #Ready; }; }; }
