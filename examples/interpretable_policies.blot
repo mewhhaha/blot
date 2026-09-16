@@ -1,0 +1,119 @@
+open import "blot:prelude"
+
+const P = import "./lib/interpretable_policy.blot"
+
+const Quota = refine (Int, fn value => value >= 1 && value <= 100)
+const Profile = { .region = Text; .quota = Quota; }
+const Role = #Admin | #Member
+const Request = { .role = Role; .profile = Profile; }
+
+let region :: P.Policy Profile
+let region = P.check (fn profile => profile.region == "eu-🐱", "region")
+
+let quota :: P.Policy Profile
+let quota = P.check (fn profile => profile.quota <= 80, "quota<=80")
+
+let profile :: P.Policy Profile
+let profile = P.both (region, quota)
+
+let profile_request :: P.Policy Request
+let profile_request = P.contramap (fn request => request.profile, profile)
+
+let is_admin :: Request -> Bool
+let is_admin = fn request => case request.role of
+  #Admin => True
+  #Member => False
+
+let admin :: P.Policy Request
+let admin = P.check (is_admin, "admin")
+
+// Pain point: `either` combines already-interpreted child results, so it is
+// intentionally strict rather than a short-circuiting control-flow operator.
+let allowed_request :: P.Policy Request
+let allowed_request = P.either (admin, profile_request)
+
+const decision :: P.Algebra Bool
+const decision =
+  {
+    .pass = fn _ => True;
+    .fail = fn _ => False;
+    .both = fn (left, right) => left && right;
+    .either = fn (left, right) => left || right;
+  }
+
+const Trace = { .allowed = Bool; .notes = [Text]; }
+
+let trace_pass :: Text -> Trace
+let trace_pass = fn label => {
+  .allowed = True;
+  .notes = ["+" <> label];
+}
+
+let trace_fail :: Text -> Trace
+let trace_fail = fn label => {
+  .allowed = False;
+  .notes = ["-" <> label];
+}
+
+let trace_both :: (Trace, Trace) -> Trace
+let trace_both = fn (left, right) => {
+  .allowed = left.allowed && right.allowed;
+  .notes = Array.append left.notes right.notes;
+}
+
+let trace_either :: (Trace, Trace) -> Trace
+let trace_either = fn (left, right) => {
+  .allowed = left.allowed || right.allowed;
+  .notes = Array.append left.notes right.notes;
+}
+
+const trace :: P.Algebra Trace
+const trace =
+  {
+    .pass = trace_pass;
+    .fail = trace_fail;
+    .both = trace_both;
+    .either = trace_either;
+  }
+
+let admin_request :: Request
+let admin_request =
+  {
+    .role = #Admin;
+    .profile = { .region = "elsewhere"; .quota = 100; };
+  }
+
+let valid_member :: Request
+let valid_member =
+  {
+    .role = #Member;
+    .profile = { .region = "eu-🐱"; .quota = 80; };
+  }
+
+let over_limit :: Request
+let over_limit =
+  {
+    .role = #Member;
+    .profile = { .region = "eu-🐱"; .quota = 100; };
+  }
+
+let wrong_region :: Request
+let wrong_region =
+  {
+    .role = #Member;
+    .profile = { .region = "us-east"; .quota = 20; };
+  }
+
+let observe = fn request => {
+  .allowed = P.run (decision, allowed_request, request);
+  .trace = P.run (trace, allowed_request, request);
+}
+
+return {
+  .default = {
+    .admin = observe admin_request;
+    .member = observe valid_member;
+    .over_limit = observe over_limit;
+    .wrong_region = observe wrong_region;
+  };
+}
