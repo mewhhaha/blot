@@ -145,3 +145,81 @@ test("regression runner rejects invalid deadlines before running tests", async (
     }
   });
 });
+
+async function withNativeDenoFixture(
+  source: string,
+  run: (directory: string) => void,
+): Promise<void> {
+  const directory = await mkdtemp(resolve(".regression-native-deno-"));
+  try {
+    await mkdir(join(directory, "scripts"), { recursive: true });
+    await mkdir(join(directory, "src", "node"), { recursive: true });
+    await copyFile(
+      compatibility,
+      join(directory, "src", "node", "deno_test_compat.mjs"),
+    );
+    await writeFile(
+      join(directory, "scripts", "distribution_contents.test.ts"),
+      source,
+    );
+    await writeFile(
+      join(directory, "z.test.ts"),
+      'Deno.test("later portable file ran", () => {});\n',
+    );
+    run(directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test("regression runner executes Deno integration proofs in the real runtime", async () => {
+  await withNativeDenoFixture(
+    `Deno.test("native Deno APIs", async () => {
+  if (typeof Deno.version.deno !== "string") throw new Error("not Deno");
+  const result = await new Deno.Command(Deno.execPath(), {
+    args: ["eval", "console.log('native subprocess ran')"],
+    stdout: "piped",
+  }).output();
+  if (!result.success) throw new Error("native subprocess failed");
+  console.log(new TextDecoder().decode(result.stdout));
+});\n`,
+    (directory) => {
+      const result = runFixture(directory, "10000");
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.match(result.stdout, /native subprocess ran/);
+      assert.match(result.stdout, /later portable file ran/);
+    },
+  );
+});
+
+test("native Deno failures stop the regression runner", async () => {
+  await withNativeDenoFixture(
+    'Deno.test("native failure", () => { throw new Error("native assertion failed"); });\n',
+    (directory) => {
+      const result = runFixture(directory, "10000");
+      assert.ifError(result.error);
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stdout + result.stderr, /native assertion failed/);
+      assert.match(
+        result.stderr,
+        /Regression test failed: scripts\/distribution_contents/,
+      );
+      assert.doesNotMatch(result.stdout, /later portable file ran/);
+    },
+  );
+});
+
+test("the parent deadline also terminates a blocked native Deno test", async () => {
+  await withNativeDenoFixture(
+    'Deno.test("blocked native test", () => { console.log("entered native loop"); while (true) {} });\n',
+    (directory) => {
+      const result = runFixture(directory, "2000");
+      assert.ifError(result.error);
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stdout, /entered native loop/);
+      assert.match(result.stdout, /timed out after 2000ms/);
+      assert.doesNotMatch(result.stdout, /later portable file ran/);
+    },
+  );
+});
