@@ -1,0 +1,15 @@
+open import "blot:prelude"
+const R = import "../../../examples/lib/renderable.blot"
+
+const show_port :: Int -> Text
+const show_port = fn port => Text.of_int port
+
+const observation :: R.Renderable
+const observation = R.make (443, show_port)
+
+// Pain point: this monomorphic consumer is correctly rejected, but the current
+// diagnostic exposes an internal solver name instead of the hidden-type boundary.
+const int_consumer :: (Int, (Int -> Text)) -> Text
+const int_consumer = fn (value, render) => render value
+
+return observation int_consumer
