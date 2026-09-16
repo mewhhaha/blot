@@ -4,6 +4,7 @@ export const noopRebinding: LintRule = {
   name: "noop-rebinding",
   code: "BLOT_LINT_NOOP_REBINDING",
   severity: "warning",
+  evidence: "rewrite-validation",
   create(context) {
     return {
       declaration(path) {

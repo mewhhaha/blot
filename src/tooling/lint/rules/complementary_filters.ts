@@ -7,6 +7,7 @@ export const complementaryFilters: LintRule = {
   name: "complementary-filters",
   code: "BLOT_LINT_COMPLEMENTARY_FILTERS",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       module: ({ node }) =>

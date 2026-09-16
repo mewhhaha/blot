@@ -1,81 +1,90 @@
+// src/tooling/formatter.ts
+//
+// Stable formatter facade over the fixed-cost formatting pipeline.
+//
+// The pipeline builds a typed formatting IR from ONE syntax snapshot,
+// prints it through the document algebra, and validates changed output
+// with exactly one output parse. There is no rewrite/reparse fixed
+// point: layout decisions compose bottom-up from the grammar and
+// lowering contract, and no production helper invokes the frontend.
+// Changed output costs at most two frontend invocations (one with a
+// matching input snapshot); unchanged output returns without an output
+// parse. Validation failure is a typed invariant failure, never
+// unvalidated changed text.
+
 import type { Diagnostic } from "../diagnostic.ts";
 import { type ConcreteParseResult, parseConcrete } from "../syntax/parse.ts";
-import type { Module, Span } from "../syntax/ast.ts";
+import {
+  snapshotSource,
+  SYNTAX_SNAPSHOT_FRONTEND_REVISION,
+  type SyntaxSnapshot,
+} from "../syntax/snapshot.ts";
+import { lineAtOffset, sourceLineStarts } from "../text/document.ts";
+import { buildFormatIr } from "./format/build.ts";
+import { FormatterInvariantError } from "./format/errors.ts";
+import { assertRepresentationEqual } from "./format/equivalence.ts";
+import {
+  type PrintLimits,
+  resolveFormattingOptions,
+  resolveLimits,
+  resolveStyle,
+} from "./format/options.ts";
+import { printIr } from "./format/print.ts";
+
+export { lineAtOffset, sourceLineStarts };
 
 export type FormatResult =
   | { readonly ok: true; readonly source: string }
   | { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
 
-type ConcreteNode =
-  | {
-    readonly type: "token";
-    readonly kind: string;
-    readonly text: string;
-    readonly span: Span;
-  }
-  | {
-    readonly type: "rule";
-    readonly name: string;
-    readonly span: Span;
-    children(): readonly ConcreteNode[];
-  };
+export type FormatSnapshotInput =
+  | Extract<ConcreteParseResult, { readonly ok: true }>
+  | SyntaxSnapshot;
 
-type ConcreteToken = Extract<ConcreteNode, { readonly type: "token" }>;
-type ConcreteRule = Extract<ConcreteNode, { readonly type: "rule" }>;
+export type FormatLoopHelper =
+  | "statement"
+  | "array"
+  | "tuple"
+  | "lambda"
+  | "none";
 
-interface IndentRegion {
-  readonly startsAtLine: number;
-  readonly endsAtLine: number;
-  readonly includesLastLine: boolean;
+export interface FormatLoopIteration {
+  readonly iteration: number;
+  readonly helper: FormatLoopHelper;
 }
 
-const maximumLineWidth = 80;
-const delimitedLayoutRules = new Set([
-  "array",
-  "array_pattern",
-  "effect_row",
-  "parenthesized_or_tuple",
-  "tuple_pattern",
-  "shape",
-  "shape_pattern",
-]);
-const layoutSensitiveRules = new Set([
-  "array",
-  "block",
-  "do_block",
-  "case_expression",
-  "effect_row",
-  "shape",
-]);
-const blockRule = new Set(["block", "do_block"]);
-const valueScopeBoundaryRules = new Set([
-  "block",
-  "do_block",
-  "case_expression",
-]);
-const indentedValueRuleNames = new Set([
-  "continued_expression",
-  "lambda",
-]);
-const suiteStatementRules = new Set([
-  "conditional_statement",
-  "iteration",
-]);
+export interface FormatPhaseMetrics {
+  readonly horizontalSpacingChanged: boolean;
+  readonly redundantParenSpans: number;
+  readonly parenRemovalChanged: boolean;
+  readonly loopIterations: number;
+  readonly loopHelpers: readonly FormatLoopHelper[];
+  readonly structuralIndentationAccepted: boolean;
+  readonly finalValidationPassed: boolean;
+}
 
-const INDENTED_RULES = new Set([
-  "array",
-  "array_pattern",
-  "block",
-  "case_expression",
-  "continued_expression",
-  "effect_row",
-  "lambda",
-  "parenthesized_or_tuple",
-  "tuple_pattern",
-  "shape",
-  "shape_pattern",
-  "statement_suite",
-]);
+// Observation hooks for characterization tests. Hooks must not throw and
+// must not mutate their arguments; formatting output never depends on them.
+// Hooks fire only while formatting proceeds past the initial parse, and
+// onComplete fires once per successful format. The fixed pipeline runs no
+// trial loop, so onLoopIteration never fires and the loop metrics stay
+// empty; redundantParenSpans counts compositional grouping removals.
+export interface FormatMetricsHooks {
+  readonly onLoopIteration?: (iteration: FormatLoopIteration) => void;
+  readonly onComplete?: (metrics: FormatPhaseMetrics) => void;
+}
+
+/**
+ * Optional pipeline controls. Formatting options are parsed and
+ * validated so misconfigured clients fail loudly, but the house style
+ * is fixed and preferences never override it (see format/options.ts).
+ * Limits bound input size, node count, depth, and output bytes; input
+ * beyond them is refused with a typed failure.
+ */
+export interface FormatControls {
+  readonly options?: unknown;
+  readonly limits?: Partial<PrintLimits>;
+}
 
 /**
  * Applies Blot's deliberately small house style: two-space structural
@@ -85,1305 +94,81 @@ const INDENTED_RULES = new Set([
  */
 export async function formatSource(
   source: string,
-  snapshot?: Extract<ConcreteParseResult, { readonly ok: true }>,
+  snapshot?: FormatSnapshotInput,
+  hooks?: FormatMetricsHooks,
+  controls?: FormatControls,
 ): Promise<FormatResult> {
-  let parsed: ConcreteParseResult;
-  if (snapshot === undefined) parsed = await parseConcrete(source);
-  else parsed = snapshot;
-  if (!parsed.ok) return parsed;
-
-  const spaced = formatHorizontalSpacing(source, parsed.cst);
-  if (spaced !== source) {
-    const reparsed = await parseConcrete(spaced);
-    if (
-      !reparsed.ok ||
-      moduleWithoutSpans(reparsed.module) !== moduleWithoutSpans(parsed.module)
-    ) {
-      throw new Error("formatter spacing changed the parsed module");
-    }
-    source = spaced;
-    parsed = reparsed;
-  }
-
-  const preferredSequencing = preferDiscardSequencing(source, parsed.cst);
-  if (preferredSequencing !== source) {
-    const reparsed = await parseConcrete(preferredSequencing);
-    if (
-      reparsed.ok &&
-      moduleWithoutSpans(reparsed.module) === moduleWithoutSpans(parsed.module)
-    ) {
-      source = preferredSequencing;
-      parsed = reparsed;
-    }
-  }
-  const redundantParentheses: Span[] = [];
-  collectRedundantParentheses(parsed.cst, [], source, redundantParentheses);
-
-  let withoutRedundantParentheses = removeParentheses(
+  const style = resolveStyle(
+    resolveFormattingOptions(controls?.options),
+  );
+  const limits = resolveLimits(controls?.limits);
+  const input = await resolveInput(source, snapshot);
+  if (!input.ok) return input;
+  const ir = buildFormatIr({
     source,
-    redundantParentheses,
-  );
-  if (redundantParentheses.length > 0) {
-    const reparsed = await parseConcrete(withoutRedundantParentheses);
-    if (
-      !reparsed.ok ||
-      moduleWithoutSpans(reparsed.module) !== moduleWithoutSpans(parsed.module)
-    ) {
-      withoutRedundantParentheses = source;
-    }
-  }
-  withoutRedundantParentheses = await removeRedundantLambdaParentheses(
-    withoutRedundantParentheses,
-    parsed.module,
-  );
-  let laidOut = withoutRedundantParentheses.replace(
-    /\n[ \t]*\n([ \t]*else\b)/g,
-    "\n$1",
-  );
-  while (true) {
-    const current = await parseConcrete(laidOut);
-    if (!current.ok) break;
-    const statementValue = await formatOneStatementValue(
-      laidOut,
-      current.cst,
-      current.module,
-    );
-    if (statementValue !== laidOut) {
-      laidOut = statementValue;
-      continue;
-    }
-    const array = formatOneArray(laidOut, current.cst);
-    if (array !== laidOut) {
-      laidOut = array;
-      continue;
-    }
-    const tuple = formatOneTuple(laidOut, current.cst);
-    if (tuple !== laidOut) {
-      laidOut = tuple;
-      continue;
-    }
-    const lambda = formatOneLambda(laidOut, current.cst);
-    if (lambda === laidOut) break;
-    laidOut = lambda;
-  }
-  let laidOutParse = await parseConcrete(laidOut);
-  if (!laidOutParse.ok) {
-    laidOut = withoutRedundantParentheses;
-    laidOutParse = await parseConcrete(laidOut);
-  }
-  if (!laidOutParse.ok) {
-    throw new Error("formatter lost a previously parsed module");
-  }
-  if (
-    moduleWithoutSpans(laidOutParse.module) !==
-      moduleWithoutSpans(parsed.module)
-  ) {
-    laidOut = withoutRedundantParentheses;
-    laidOutParse = await parseConcrete(laidOut);
-    if (!laidOutParse.ok) {
-      throw new Error("formatter lost a previously parsed module");
-    }
-  }
-  const concrete = laidOutParse.cst;
-  const lineStarts = sourceLineStarts(laidOut);
-  const lines = laidOut.split("\n");
-  const formatted = structurallyIndentedLines(laidOut, concrete, lineStarts);
-  const formattedSource = formatStructuralSpacing(
-    `${formatted.join("\n").trimEnd()}\n`,
-    concrete,
-    lineStarts,
-  );
-  const reparsed = await parseConcrete(formattedSource);
-  if (
-    reparsed.ok &&
-    moduleWithoutSpans(reparsed.module) === moduleWithoutSpans(parsed.module)
-  ) {
-    return { ok: true, source: formattedSource };
-  }
-
-  const preservedLayout = `${
-    lines.map((line) => line.trimEnd()).join("\n").trimEnd()
-  }\n`;
-  let previousIndent: number | null = null;
-  const normalizedClosingLayout = preservedLayout.split("\n").map((line) => {
-    const content = line.trim();
-    if (content === "") return "";
-    const currentIndent = line.match(/^[ ]*/)?.[0].length;
-    if (currentIndent === undefined) {
-      throw new Error("preserved line has no indentation");
-    }
-    const indent = /^[)\]}][,;]?$/.test(content) && previousIndent !== null
-      ? Math.min(currentIndent, Math.max(0, previousIndent - 2))
-      : currentIndent;
-    previousIndent = indent;
-    return `${" ".repeat(indent)}${content}`;
-  }).join("\n");
-  const preserved = await parseConcrete(normalizedClosingLayout);
-  if (
-    !preserved.ok ||
-    moduleWithoutSpans(preserved.module) !== moduleWithoutSpans(parsed.module)
-  ) {
-    throw new Error("formatter could not preserve the parsed module");
-  }
-  const separatedLayout = formatStructuralSpacing(
-    normalizedClosingLayout,
-    preserved.cst,
-    sourceLineStarts(normalizedClosingLayout),
-  );
-  const separated = await parseConcrete(separatedLayout);
-  if (
-    !separated.ok ||
-    moduleWithoutSpans(separated.module) !== moduleWithoutSpans(parsed.module)
-  ) {
-    throw new Error("formatter could not separate statement suites");
-  }
-  return { ok: true, source: separatedLayout };
-}
-
-async function formatOneStatementValue(
-  source: string,
-  root: ConcreteRule,
-  expectedModule: Module,
-): Promise<string> {
-  const statements: ConcreteRule[] = [];
-  collectRules(root, "signature", statements);
-  collectRules(root, "binding", statements);
-  collectRules(root, "result", statements);
-  statements.sort((left, right) => left.span.start - right.span.start);
-  // Every candidate in this pass shares one source/CST snapshot. Recomputing
-  // structural indentation for each signature makes large modules quadratic.
-  let signatureLayout: {
-    lineStarts: readonly number[];
-    sourceLines: readonly string[];
-    indentedLines: readonly string[];
-  } | undefined;
-  for (const statement of statements) {
-    let introducer = directToken(statement, "return");
-    if (statement.name === "signature") {
-      introducer = directToken(statement, "::");
-    }
-    if (statement.name === "binding") introducer = directToken(statement, "=");
-    if (introducer === null) continue;
-    let value = directRule(statement, "value");
-    const indentedValue = directRule(statement, "indented_value");
-    if (indentedValue !== null) value = indentedBindingValue(indentedValue);
-    if (value === null) continue;
-    const valueSpan = ruleContentSpan(value);
-    const separator = source.slice(introducer.span.end, valueSpan.start);
-    if (!/^[ \t\r\n]*$/.test(separator)) continue;
-    const valueSource = source.slice(valueSpan.start, valueSpan.end);
-    const statementLineStart = source.lastIndexOf(
-      "\n",
-      introducer.span.start - 1,
-    ) + 1;
-    const indent = source.slice(statementLineStart).match(/^[ \t]*/)?.[0];
-    if (indent === undefined) {
-      throw new Error(`${statement.name} line has no indentation`);
-    }
-    const valueStartsOnIntroducerLine = !separator.includes("\n");
-    const valueIsMultiline = valueSource.includes("\n");
-    const valueFirstLineEnd = valueSource.indexOf("\n");
-    let valueFirstLine = valueSource;
-    if (valueFirstLineEnd >= 0) {
-      valueFirstLine = valueSource.slice(0, valueFirstLineEnd);
-    }
-    const inlineWidth = introducer.span.end - statementLineStart + 1 +
-      valueFirstLine.length;
-    let valueUsesDelimiters = false;
-    const valueIsLambda = value.name === "lambda" ||
-      directRule(value, "lambda") !== null;
-    if (!valueUsesDelimiters && !valueIsLambda) {
-      let expression = directRule(value, "expression");
-      if (value.name === "continued_expression") expression = value;
-      if (expression !== null) {
-        let valueScopeOwnsLayout = expressionPrimaryIs(expression, "do_block");
-        for (const layoutRule of valueScopeBoundaryRules) {
-          if (expressionPrimaryIs(expression, layoutRule)) {
-            valueScopeOwnsLayout = true;
-            break;
-          }
-        }
-        if (!valueScopeOwnsLayout) {
-          valueUsesDelimiters = containsRule(expression, delimitedLayoutRules);
-        }
-      }
-    }
-    const declarationOwnsDelimitedValue =
-      (statement.name === "binding" || statement.name === "signature") &&
-      valueIsMultiline && valueUsesDelimiters;
-    const needsSeparateLine = inlineWidth > maximumLineWidth ||
-      declarationOwnsDelimitedValue;
-    if (
-      statement.name === "signature" && !valueStartsOnIntroducerLine &&
-      valueIsMultiline
-    ) {
-      if (signatureLayout === undefined) {
-        const lineStarts = sourceLineStarts(source);
-        signatureLayout = {
-          lineStarts,
-          sourceLines: source.split("\n"),
-          indentedLines: structurallyIndentedLines(source, root, lineStarts),
-        };
-      }
-      const { lineStarts, indentedLines } = signatureLayout;
-      const sourceLines = [...signatureLayout.sourceLines];
-      const startsAtLine = lineAtOffset(lineStarts, statement.span.start);
-      const endsAtLine = lineAtOffset(
-        lineStarts,
-        Math.max(statement.span.start, ruleContentSpan(statement).end - 1),
-      );
-      let changed = false;
-      for (let line = startsAtLine; line <= endsAtLine; line += 1) {
-        const indented = indentedLines[line];
-        if (indented === undefined) {
-          throw new Error("signature line is missing");
-        }
-        if (sourceLines[line] === indented) continue;
-        sourceLines[line] = indented;
-        changed = true;
-      }
-      if (changed) {
-        const candidate = sourceLines.join("\n");
-        const reparsed = await parseConcrete(candidate);
-        if (
-          reparsed.ok &&
-          moduleWithoutSpans(reparsed.module) ===
-            moduleWithoutSpans(expectedModule)
-        ) {
-          return candidate;
-        }
-      }
-    }
-    if (!needsSeparateLine) {
-      if (valueStartsOnIntroducerLine && separator === " ") continue;
-      if (statement.name === "binding") continue;
-      return replaceSpan(
-        source,
-        { start: introducer.span.end, end: valueSpan.end },
-        ` ${valueSource}`,
-      );
-    }
-    if (!valueStartsOnIntroducerLine && separator === `\n${indent}  `) {
-      continue;
-    }
-    const valueLines = reindentFragment(
-      source,
-      valueSpan,
-      `${indent}  `,
-      "",
-    );
-    return replaceSpan(
-      source,
-      { start: introducer.span.end, end: valueSpan.end },
-      `\n${valueLines.join("\n")}`,
-    );
-  }
-  return source;
-}
-
-function indentedBindingValue(
-  indentedValue: ConcreteRule,
-): ConcreteRule | null {
-  for (const child of indentedValue.children()) {
-    if (child.type === "rule" && indentedValueRuleNames.has(child.name)) {
-      return child;
-    }
-  }
-  return null;
-}
-
-function formatStructuralSpacing(
-  source: string,
-  root: ConcreteRule,
-  lineStarts: readonly number[],
-): string {
-  const lines = source.split("\n");
-  const separators = new Set<number>();
-  const blankLinesToRemove = new Set<number>();
-  collectSpacing(root);
-  for (const separator of separators) {
-    for (let line = separator - 1; lines[line]?.trim() === ""; line -= 1) {
-      blankLinesToRemove.add(line);
-    }
-  }
-
-  const separated: string[] = [];
-  for (let line = 0; line < lines.length; line += 1) {
-    if (blankLinesToRemove.has(line) && lines[line]?.trim() === "") continue;
-    if (
-      separators.has(line) && separated.at(-1)?.trim() !== ""
-    ) {
-      separated.push("");
-    }
-    const content = lines[line];
-    if (content !== undefined) separated.push(content);
-  }
-  return separated.join("\n");
-
-  function collectSpacing(node: ConcreteNode): void {
-    if (node.type !== "rule") return;
-    const siblingName = node.name === "program"
-      ? "declaration"
-      : blockRule.has(node.name) || node.name === "statement_suite"
-      ? "statement"
-      : null;
-    if (siblingName !== null) {
-      const siblings = directRules(node, siblingName);
-      for (let index = 0; index + 1 < siblings.length; index += 1) {
-        const current = siblings[index];
-        const next = siblings[index + 1];
-        if (
-          current === undefined || next === undefined ||
-          !current.children().some((child) =>
-            child.type === "rule" && suiteStatementRules.has(child.name)
-          )
-        ) {
-          continue;
-        }
-        separateBefore(next);
-      }
-
-      for (let index = 0; index + 1 < siblings.length; index += 1) {
-        const current = siblings[index];
-        const next = siblings[index + 1];
-        if (current === undefined || next === undefined) continue;
-        const signature = directRule(current, "signature");
-        if (signature !== null && directRule(next, "binding") !== null) {
-          joinDeclarations(current, next);
-        }
-
-        const currentKind = recursiveBindingKind(current);
-        if (currentKind === null) continue;
-        const nextKind = recursiveDeclarationKind(next);
-        if (nextKind === currentKind) {
-          joinDeclarations(current, next);
-          continue;
-        }
-        separateBefore(next);
-      }
-    }
-
-    if (node.name === "case_expression") {
-      const arms = directRules(node, "case_arm");
-      for (let index = 0; index + 1 < arms.length; index += 1) {
-        const current = arms[index];
-        const next = arms[index + 1];
-        if (current === undefined || next === undefined) continue;
-        const body = directRule(current, "value");
-        if (body === null) continue;
-        const bodyStart = lineAtOffset(lineStarts, body.span.start);
-        const bodyEnd = lineAtOffset(
-          lineStarts,
-          Math.max(body.span.start, ruleContentSpan(body).end - 1),
-        );
-        if (bodyStart < bodyEnd) separateBefore(next);
-      }
-    }
-
-    for (const child of node.children()) collectSpacing(child);
-  }
-
-  function separateBefore(rule: ConcreteRule): void {
-    let nextLine = lineAtOffset(lineStarts, rule.span.start);
-    const nextIndent = lines[nextLine]?.match(/^[ ]*/)?.[0];
-    if (nextIndent === undefined) {
-      throw new Error("following statement has no indentation");
-    }
-    while (
-      nextLine > 0 && lines[nextLine - 1]?.trimStart().startsWith("//")
-    ) {
-      const comment = lines[nextLine - 1];
-      if (comment === undefined) throw new Error("leading comment is missing");
-      lines[nextLine - 1] = `${nextIndent}${comment.trimStart()}`;
-      nextLine -= 1;
-    }
-    separators.add(nextLine);
-  }
-
-  function joinDeclarations(
-    current: ConcreteRule,
-    next: ConcreteRule,
-  ): void {
-    const currentEnd = lineAtOffset(
-      lineStarts,
-      Math.max(current.span.start, ruleContentSpan(current).end - 1),
-    );
-    const nextStart = lineAtOffset(lineStarts, next.span.start);
-    for (let line = currentEnd + 1; line < nextStart; line += 1) {
-      if (lines[line]?.trim() === "") blankLinesToRemove.add(line);
-    }
-  }
-}
-
-function recursiveBindingKind(rule: ConcreteRule): "let" | "const" | null {
-  const binding = directRule(rule, "binding");
-  if (binding === null || directToken(binding, "rec") === null) return null;
-  return declarationKind(binding);
-}
-
-function recursiveDeclarationKind(
-  rule: ConcreteRule,
-): "let" | "const" | null {
-  const bindingKind = recursiveBindingKind(rule);
-  if (bindingKind !== null) return bindingKind;
-  const signature = directRule(rule, "signature");
-  if (signature === null || directToken(signature, "rec") === null) {
-    return null;
-  }
-  return declarationKind(signature);
-}
-
-function declarationKind(rule: ConcreteRule): "let" | "const" {
-  if (directToken(rule, "let") !== null) return "let";
-  if (directToken(rule, "const") !== null) return "const";
-  throw new Error(`${rule.name} has no declaration kind`);
-}
-
-function formatOneArray(source: string, root: ConcreteRule): string {
-  const arrays: ConcreteRule[] = [];
-  collectRules(root, "array", arrays);
-  arrays.sort((left, right) =>
-    (right.span.end - right.span.start) - (left.span.end - left.span.start)
-  );
-  for (const array of arrays) {
-    const elements = directRules(array, "array_element");
-    if (elements.length === 0) continue;
-    const arraySpan = contentSpan(source, array.span);
-    const original = source.slice(arraySpan.start, arraySpan.end);
-    if (original.includes("//")) continue;
-    const elementSources = elements.map((element) => {
-      const span = contentSpan(source, element.span);
-      return source.slice(span.start, span.end).trim();
-    });
-    if (elementSources.some((element) => element.includes("\n"))) continue;
-    const lineStart = source.lastIndexOf("\n", arraySpan.start - 1) + 1;
-    const lineEnd = source.indexOf("\n", arraySpan.end);
-    const suffixEnd = lineEnd < 0 ? source.length : lineEnd;
-    const flattened = `[${elementSources.join(", ")}]`;
-    const candidateWidth = source.slice(lineStart, arraySpan.start).length +
-      flattened.length + source.slice(arraySpan.end, suffixEnd).length;
-    if (candidateWidth <= maximumLineWidth) {
-      if (flattened === original) continue;
-      return replaceSpan(source, arraySpan, flattened);
-    }
-    const indent = source.slice(lineStart).match(/^[ \t]*/)?.[0];
-    if (indent === undefined) throw new Error("array line has no indentation");
-    const nestedIndent = `${indent}  `;
-    const lines = elementSources.map((element, index) => {
-      const separator = index < elementSources.length - 1 ? "," : "";
-      return `${nestedIndent}${element}${separator}`;
-    });
-    const replacement = `[\n${lines.join("\n")}\n${indent}]`;
-    if (replacement === original) continue;
-    return replaceSpan(source, arraySpan, replacement);
-  }
-  return source;
-}
-
-function formatOneTuple(source: string, root: ConcreteRule): string {
-  const tuples: ConcreteRule[] = [];
-  collectRules(root, "parenthesized_or_tuple", tuples);
-  collectRules(root, "tuple_pattern", tuples);
-  tuples.sort((left, right) =>
-    (right.span.end - right.span.start) - (left.span.end - left.span.start)
-  );
-  for (const tuple of tuples) {
-    let valueRule = "value";
-    if (tuple.name === "tuple_pattern") valueRule = "annotated_pattern";
-    const values = directRules(tuple, valueRule);
-    if (values.length < 2) continue;
-    const tupleSpan = contentSpan(source, tuple.span);
-    const original = source.slice(tupleSpan.start, tupleSpan.end);
-    if (
-      flattenLines(original).length < maximumLineWidth / 2 ||
-      original.includes("//") || original.startsWith("(\n")
-    ) {
-      continue;
-    }
-    const lineStart = source.lastIndexOf("\n", tupleSpan.start - 1) + 1;
-    const lineEnd = source.indexOf("\n", tupleSpan.end);
-    const suffixEnd = lineEnd < 0 ? source.length : lineEnd;
-    const candidateWidth = source.slice(lineStart, tupleSpan.start).length +
-      original.length + source.slice(tupleSpan.end, suffixEnd).length;
-    if (!original.includes("\n") && candidateWidth <= maximumLineWidth) {
-      continue;
-    }
-    const indent = source.slice(lineStart).match(/^[ \t]*/)?.[0];
-    if (indent === undefined) throw new Error("tuple line has no indentation");
-    const nestedIndent = `${indent}  `;
-    const lines = values.flatMap((value, index) => {
-      const separator = index < values.length - 1 ? "," : "";
-      const valueSpan = contentSpan(source, value.span);
-      const valueLines = [...reindentFragment(
-        source,
-        valueSpan,
-        nestedIndent,
-        "",
-      )];
-      const last = valueLines.length - 1;
-      valueLines[last] = `${valueLines[last]}${separator}`;
-      return valueLines;
-    });
-    return replaceSpan(
-      source,
-      tupleSpan,
-      `(\n${lines.join("\n")}\n${indent})`,
-    );
-  }
-  return source;
-}
-
-function formatOneLambda(source: string, root: ConcreteRule): string {
-  const lambdas: ConcreteRule[] = [];
-  collectRules(root, "lambda", lambdas);
-  lambdas.sort((left, right) =>
-    (right.span.end - right.span.start) - (left.span.end - left.span.start)
-  );
-  for (const lambda of lambdas) {
-    const lambdaSpan = contentSpan(source, lambda.span);
-    const body = directRule(lambda, "expression");
-    if (body === null || expressionIsBlock(body)) continue;
-    const original = source.slice(lambdaSpan.start, lambdaSpan.end);
-    if (original.includes("//")) continue;
-    if (original.includes("\n") && containsRule(body, layoutSensitiveRules)) {
-      continue;
-    }
-    const flattened = flattenLines(original);
-    const lineStart = source.lastIndexOf("\n", lambdaSpan.start - 1) + 1;
-    const lineEnd = source.indexOf("\n", lambdaSpan.end);
-    const suffixEnd = lineEnd < 0 ? source.length : lineEnd;
-    const candidateWidth = source.slice(lineStart, lambdaSpan.start).length +
-      flattened.length + source.slice(lambdaSpan.end, suffixEnd).length;
-    if (candidateWidth <= maximumLineWidth) {
-      if (flattened === original) continue;
-      return replaceSpan(source, lambdaSpan, flattened);
-    }
-    const parameters = directRules(lambda, "lambda_parameter");
-    const lastParameter = parameters.at(-1);
-    if (lastParameter === undefined) continue;
-    const arrow = directToken(lastParameter, "=>");
-    if (arrow === null) continue;
-    const indent = source.slice(lineStart).match(/^[ \t]*/)?.[0];
-    if (indent === undefined) throw new Error("lambda line has no indentation");
-    const bodyIndent = `${indent}  `;
-    const bodySpan = contentSpan(source, body.span);
-    const bodyLines = reindentFragment(
-      source,
-      bodySpan,
-      bodyIndent,
-      "return ",
-    );
-    const first = bodyLines[0];
-    if (first === undefined || first === "") continue;
-    const closesDelimited = closesDelimitedLayout(root, lambda);
-    const replacement = `${
-      source.slice(lambdaSpan.start, arrow.span.end)
-    }\n${first}${
-      bodyLines.length === 1 ? "" : `\n${bodyLines.slice(1).join("\n")}`
-    }${
-      closesDelimited && closesOnSameLine(source, lambdaSpan.end)
-        ? `\n${indent}`
-        : ""
-    }`;
-    return replaceSpan(source, lambdaSpan, replacement);
-  }
-  return source;
-}
-
-function hasAncestorIn(
-  node: ConcreteNode,
-  target: ConcreteRule,
-  names: ReadonlySet<string>,
-  ancestors: readonly ConcreteRule[] = [],
-): boolean {
-  if (node === target) {
-    return ancestors.some((ancestor) => names.has(ancestor.name));
-  }
-  if (node.type !== "rule") return false;
-  const nestedAncestors = [...ancestors, node];
-  return node.children().some((child) =>
-    hasAncestorIn(child, target, names, nestedAncestors)
-  );
-}
-
-function closesDelimitedLayout(
-  node: ConcreteNode,
-  target: ConcreteRule,
-  ancestors: readonly ConcreteRule[] = [],
-): boolean {
-  if (node === target) {
-    for (const ancestor of ancestors.toReversed()) {
-      if (delimitedLayoutRules.has(ancestor.name)) return true;
-      if (blockRule.has(ancestor.name)) return false;
-    }
-    return false;
-  }
-  if (node.type !== "rule") return false;
-  const nestedAncestors = [...ancestors, node];
-  return node.children().some((child) =>
-    closesDelimitedLayout(child, target, nestedAncestors)
-  );
-}
-
-function closesOnSameLine(source: string, offset: number): boolean {
-  const lineEnd = source.indexOf("\n", offset);
-  const suffixEnd = lineEnd < 0 ? source.length : lineEnd;
-  return source.slice(offset, suffixEnd).trim() !== "";
-}
-
-function reindentFragment(
-  source: string,
-  span: Span,
-  indent: string,
-  prefix: string,
-): readonly string[] {
-  const lines = source.slice(span.start, span.end).split("\n");
-  const first = lines[0];
-  if (first === undefined) throw new Error("source fragment has no content");
-  const lineStart = source.lastIndexOf("\n", span.start - 1) + 1;
-  const sourceIndent = source.slice(lineStart).match(/^[ \t]*/)?.[0];
-  if (sourceIndent === undefined) {
-    throw new Error("source fragment line has no indentation");
-  }
-  return [
-    `${indent}${prefix}${first.trim()}`,
-    ...lines.slice(1).map((line) => {
-      const leading = line.match(/^[ \t]*/)?.[0];
-      if (leading === undefined) {
-        throw new Error("source fragment continuation has no indentation");
-      }
-      const relativeWidth = Math.max(0, leading.length - sourceIndent.length);
-      return `${indent}${" ".repeat(relativeWidth)}${line.trimStart()}`;
-    }),
-  ];
-}
-
-function collectRules(
-  node: ConcreteNode,
-  name: string,
-  rules: ConcreteRule[],
-): void {
-  if (node.type !== "rule") return;
-  if (node.name === name) rules.push(node);
-  for (const child of node.children()) collectRules(child, name, rules);
-}
-
-function preferDiscardSequencing(
-  source: string,
-  concrete: ConcreteRule,
-): string {
-  const statements: ConcreteRule[] = [];
-  collectRules(concrete, "sequencing", statements);
-  const discardedBindings = statements.flatMap((statement) => {
-    const use = directToken(statement, "use");
-    const pattern = directRules(statement, "value")[0] ?? null;
-    const arrow = directToken(statement, "<-");
-    if (
-      use === null || pattern === null || arrow === null ||
-      source.slice(pattern.span.start, pattern.span.end).trim() !== "_" ||
-      use.span.end > pattern.span.start ||
-      pattern.span.end > arrow.span.start
-    ) {
-      return [];
-    }
-    if (!/^[ \t]*$/.test(source.slice(use.span.end, pattern.span.start))) {
-      return [];
-    }
-    if (!/^[ \t]*$/.test(source.slice(pattern.span.end, arrow.span.start))) {
-      return [];
-    }
-    return [{ start: use.span.end, end: arrow.span.end }];
-  }).sort((left, right) => right.start - left.start);
-
-  let preferred = source;
-  for (const discardedBinding of discardedBindings) {
-    preferred = replaceSpan(preferred, discardedBinding, "");
-  }
-  return preferred;
-}
-
-function containsRule(
-  node: ConcreteNode,
-  names: ReadonlySet<string>,
-): boolean {
-  if (node.type !== "rule") return false;
-  if (names.has(node.name)) return true;
-  return node.children().some((child) => containsRule(child, names));
-}
-
-function expressionIsBlock(expression: ConcreteRule): boolean {
-  return expressionPrimaryIs(expression, "block") ||
-    expressionPrimaryIs(expression, "do_block");
-}
-
-function expressionPrimaryIs(
-  expression: ConcreteRule,
-  name: string,
-): boolean {
-  const operand = directRule(expression, "operand");
-  if (operand === null) return false;
-  const postfix = directRule(operand, "postfix_expression");
-  if (postfix === null) return false;
-  const primary = directRule(postfix, "primary_expression");
-  if (primary === null) return false;
-  return directRule(primary, name) !== null;
-}
-
-function directToken(rule: ConcreteRule, text: string): ConcreteToken | null {
-  for (const child of rule.children()) {
-    if (child.type === "token" && child.text === text) return child;
-  }
-  return null;
-}
-
-function flattenLines(source: string): string {
-  return source.replace(/[ \t]*\r?\n[ \t]*/g, " ").trim();
-}
-
-function replaceSpan(source: string, span: Span, replacement: string): string {
-  return source.slice(0, span.start) + replacement + source.slice(span.end);
-}
-
-function contentSpan(source: string, span: Span): Span {
-  let end = span.end;
-  while (end > span.start && /\s/.test(source[end - 1])) end -= 1;
-  return { start: span.start, end };
-}
-
-function ruleContentSpan(rule: ConcreteRule): Span {
-  let end = rule.span.start;
-  collectContentEnd(rule);
-  return { start: rule.span.start, end };
-
-  function collectContentEnd(node: ConcreteNode): void {
-    if (node.type === "token") {
-      if (!/^[\uE000-\uF8FF]+$/.test(node.text)) {
-        end = Math.max(end, node.span.end);
-      }
-      return;
-    }
-    for (const child of node.children()) collectContentEnd(child);
-  }
-}
-
-function collectRedundantParentheses(
-  node: ConcreteNode,
-  ancestors: readonly ConcreteRule[],
-  source: string,
-  parentheses: Span[],
-): void {
-  if (node.type !== "rule") return;
-  if (
-    node.name === "parenthesized_or_tuple" &&
-    !parenthesizesLambda(node) &&
-    source.slice(node.span.start, node.span.end).indexOf("\n") < 0 &&
-    parenthesesAreRedundant(node, ancestors)
-  ) {
-    parentheses.push(node.span);
-  }
-  const nestedAncestors = [...ancestors, node];
-  for (const child of node.children()) {
-    collectRedundantParentheses(child, nestedAncestors, source, parentheses);
-  }
-}
-
-async function removeRedundantLambdaParentheses(
-  source: string,
-  expectedModule: Module,
-): Promise<string> {
-  let current = source;
-  let candidates: Span[] = [];
-  while (true) {
-    const parsed = await parseConcrete(current);
-    if (!parsed.ok) {
-      throw new Error("lambda parenthesis removal received invalid source");
-    }
-    candidates = [];
-    collectCandidates(parsed.cst, []);
-    candidates.sort((left, right) =>
-      (left.end - left.start) - (right.end - right.start)
-    );
-    let removed = false;
-    for (const candidate of candidates) {
-      const trial = removeParentheses(current, [candidate]);
-      const reparsed = await parseConcrete(trial);
-      if (
-        !reparsed.ok ||
-        moduleWithoutSpans(reparsed.module) !==
-          moduleWithoutSpans(expectedModule)
-      ) {
-        continue;
-      }
-      current = trial;
-      removed = true;
-      break;
-    }
-    if (!removed) return current;
-  }
-
-  function collectCandidates(
-    node: ConcreteNode,
-    ancestors: readonly ConcreteRule[],
-  ): void {
-    if (node.type !== "rule") return;
-    if (
-      node.name === "parenthesized_or_tuple" &&
-      parenthesizesLambda(node) &&
-      parenthesesAreRedundant(node, ancestors)
-    ) {
-      candidates.push(node.span);
-    }
-    const nestedAncestors = [...ancestors, node];
-    for (const child of node.children()) {
-      collectCandidates(child, nestedAncestors);
-    }
-  }
-}
-
-function parenthesesAreRedundant(
-  grouping: ConcreteRule,
-  ancestors: readonly ConcreteRule[],
-): boolean {
-  if (
-    grouping.children().some((child) =>
-      child.type === "token" && child.text === ","
-    )
-  ) {
-    return false;
-  }
-  const value = directRule(grouping, "value");
-  if (value === null) return false;
-  if (directRule(value, "lambda") !== null) {
-    const outerPostfixIndex = findLastRule(ancestors, "postfix_expression");
-    if (outerPostfixIndex < 0) return true;
-    const pathFromPostfix = ancestors.slice(outerPostfixIndex + 1);
-    const groupingIsApplicationHead = pathFromPostfix.some((ancestor) =>
-      ancestor.name === "primary_expression"
-    );
-    if (!groupingIsApplicationHead) return true;
-    const outerPostfix = ancestors[outerPostfixIndex];
-    return directRules(outerPostfix, "application_argument").length === 0 &&
-      directRules(outerPostfix, "field_suffix").length === 0;
-  }
-  const expression = directRule(value, "expression");
-  if (expression === null) return false;
-  if (directRules(expression, "infix_operation").length > 0) return false;
-
-  const operand = directRule(expression, "operand");
-  if (operand === null) return false;
-  if (directRules(operand, "prefix_operator").length > 0) return false;
-  const postfix = directRule(operand, "postfix_expression");
-  if (postfix === null || !hasApplicationPrimary(postfix)) return false;
-
-  const innerApplications = directRules(postfix, "application_argument");
-  if (innerApplications.length === 0) return true;
-
-  const outerPostfixIndex = findLastRule(ancestors, "postfix_expression");
-  if (outerPostfixIndex < 0) return true;
-  if (
-    ancestors.slice(outerPostfixIndex + 1).some((ancestor) =>
-      ancestor.name === "application_argument"
-    )
-  ) return false;
-  const outerPostfix = ancestors[outerPostfixIndex];
-  return directRules(outerPostfix, "field_suffix").length === 0;
-}
-
-function parenthesizesLambda(grouping: ConcreteRule): boolean {
-  const value = directRule(grouping, "value");
-  return value !== null && directRule(value, "lambda") !== null;
-}
-
-function hasApplicationPrimary(postfix: ConcreteRule): boolean {
-  const primary = directRule(postfix, "primary_expression");
-  if (primary === null) return false;
-  const inner = primary.children()[0];
-  if (inner === undefined) return false;
-  if (inner.type === "token") {
-    return inner.kind === "IDENT" || inner.kind === "TYPE_IDENT" ||
-      inner.kind === "INTEGER" || inner.kind === "FLOAT" ||
-      inner.kind === "TEXT" || inner.kind === "INTRINSIC";
-  }
-  return inner.name === "constructor_expression" || inner.name === "unit" ||
-    inner.name === "array" || inner.name === "shape" ||
-    inner.name === "parenthesized_or_tuple";
-}
-
-function directRule(
-  rule: ConcreteRule,
-  name: string,
-): ConcreteRule | null {
-  const found = directRules(rule, name);
-  if (found.length === 0) return null;
-  return found[0];
-}
-
-function directRules(
-  rule: ConcreteRule,
-  name: string,
-): readonly ConcreteRule[] {
-  return rule.children().filter((child): child is ConcreteRule =>
-    child.type === "rule" && child.name === name
-  );
-}
-
-function findLastRule(
-  rules: readonly ConcreteRule[],
-  name: string,
-): number {
-  for (let index = rules.length - 1; index >= 0; index -= 1) {
-    if (rules[index].name === name) return index;
-  }
-  return -1;
-}
-
-function removeParentheses(
-  source: string,
-  parentheses: readonly Span[],
-): string {
-  const removed = new Set<number>();
-  for (const span of parentheses) {
-    if (source[span.start] !== "(" || source[span.end - 1] !== ")") {
-      throw new Error(
-        `parenthesized source ${span.start}..${span.end} lost its delimiters`,
-      );
-    }
-    removed.add(span.start);
-    removed.add(span.end - 1);
-    const closingLineStart = source.lastIndexOf("\n", span.end - 2) + 1;
-    if (
-      closingLineStart > span.start &&
-      source.slice(closingLineStart, span.end - 1).trim() === ""
-    ) {
-      for (let index = closingLineStart - 1; index < span.end; index += 1) {
-        removed.add(index);
-      }
-    }
-  }
-  const characters: string[] = [];
-  for (let index = 0; index < source.length; index += 1) {
-    if (!removed.has(index)) characters.push(source[index]);
-  }
-  return characters.join("");
-}
-
-function formatHorizontalSpacing(source: string, root: ConcreteRule): string {
-  const tokens: ConcreteToken[] = [];
-  const spacedOperators = new Set<number>();
-  const tightPrefixes = new Set<number>();
-  const arguments_ = new Set<number>();
-  const tightDots = new Set<number>();
-  function collect(node: ConcreteNode): void {
-    if (node.type === "token") {
-      if (
-        node.kind !== "WHITESPACE" && !node.kind.startsWith("LAYOUT_") &&
-        node.span.end > node.span.start
-      ) tokens.push(node);
-      return;
-    }
-    if (node.name === "infix_operation") {
-      const operator = directRule(node, "operator_token");
-      if (operator !== null) spacedOperators.add(operator.span.start);
-    }
-    if (node.name === "prefix_operator") {
-      tightPrefixes.add(node.span.start);
-    }
-    if (node.name === "binding_pattern") {
-      const qualifier = directRule(node, "operator_token");
-      if (qualifier !== null) tightPrefixes.add(qualifier.span.start);
-    }
-    if (node.name === "application_argument") arguments_.add(node.span.start);
-    if (node.name === "field_suffix") tightDots.add(node.span.start);
-    for (const child of node.children()) collect(child);
-  }
-  collect(root);
-  tokens.sort((left, right) => left.span.start - right.span.start);
-  const edits: { start: number; end: number; text: string }[] = [];
-  const operators = new Set(["=", ":=", "::", "<-", "=>"]);
-  const keywords = new Set([
-    "fn",
-    "return",
-    "case",
-    "of",
-    "if",
-    "else",
-    "for",
-    "in",
-    "open",
-    "import",
-    "use",
-    "module",
-    "with",
-    "let",
-    "const",
-    "rec",
-  ]);
-  for (let index = 1; index < tokens.length; index += 1) {
-    const left = tokens[index - 1];
-    const right = tokens[index];
-    if (left.kind === "COMMENT" || right.kind === "COMMENT") continue;
-    const gap = source.slice(left.span.end, right.span.start);
-    if (!/^[ \t]*$/.test(gap)) continue;
-    let space = "";
-    if (gap.length > 0) space = " ";
-    if (keywords.has(left.text)) space = " ";
-    if (
-      left.text === "," || left.text === ";" || left.text === "{" ||
-      right.text === "}"
-    ) space = " ";
-    if (
-      operators.has(left.text) || operators.has(right.text) ||
-      spacedOperators.has(left.span.start) ||
-      spacedOperators.has(right.span.start) || arguments_.has(right.span.start)
-    ) space = " ";
-    if (
-      [")", "]", ",", ";", ":"].includes(right.text) ||
-      ["(", "[", ".", "#"].includes(left.text) ||
-      tightDots.has(right.span.start) || tightPrefixes.has(left.span.start)
-    ) space = "";
-    if (left.text === "{" && right.text === "}") space = "";
-    if (space !== gap) {
-      edits.push({ start: left.span.end, end: right.span.start, text: space });
-    }
-  }
-  let formatted = source;
-  for (const edit of edits.toReversed()) {
-    formatted = formatted.slice(0, edit.start) + edit.text +
-      formatted.slice(edit.end);
-  }
-  return formatted;
-}
-
-function moduleWithoutSpans(module: Module): string {
-  return JSON.stringify(normalizeModuleValue(module));
-}
-
-function normalizeModuleValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalizeModuleValue);
-  if (typeof value === "bigint") return `${value}n`;
-  if (typeof value !== "object" || value === null) return value;
-
-  const record = value as Record<string, unknown>;
-  if (
-    record.tag === "block" && Array.isArray(record.declarations) &&
-    record.declarations.length === 0
-  ) {
-    return normalizeModuleValue(record.result);
-  }
-
-  const normalized: Record<string, unknown> = {};
-  for (const [key, field] of Object.entries(record)) {
-    if (key === "span") continue;
-    if (key === "name" && typeof field === "string") {
-      normalized[key] = field.replace(/\$[0-9]+/g, "$span");
-      continue;
-    }
-    normalized[key] = normalizeModuleValue(field);
-  }
-  return normalized;
-}
-
-function lastCodeLine(
-  source: string,
-  lineStarts: readonly number[],
-  line: number,
-  limit: number,
-): number {
-  let current = line;
-  while (current > limit) {
-    const start = lineStarts[current];
-    if (start === undefined) return current;
-    const end = lineStarts[current + 1] ?? source.length;
-    const content = source.slice(start, end).trim();
-    if (content !== "" && !content.startsWith("//")) return current;
-    current -= 1;
-  }
-  return current;
-}
-
-function structurallyIndentedLines(
-  source: string,
-  root: ConcreteRule,
-  lineStarts: readonly number[],
-): readonly string[] {
-  const regions: IndentRegion[] = [];
-  collectIndentRegions(root, source, lineStarts, regions);
-  return source.split("\n").map((line, index) => {
-    const content = line.trim();
-    if (content === "") return "";
-    const openingLines = new Set<number>();
-    for (const region of regions) {
-      if (index <= region.startsAtLine) continue;
-      if (index < region.endsAtLine) {
-        openingLines.add(region.startsAtLine);
-      }
-      if (index === region.endsAtLine && region.includesLastLine) {
-        openingLines.add(region.startsAtLine);
-      }
-    }
-    return `${"  ".repeat(openingLines.size)}${content}`;
+    lineStarts: input.snapshot.lineIndex,
+    cst: input.snapshot.cst,
+    tokens: input.snapshot.tokens,
+    limits,
   });
+  const printed = printIr({ ir, width: style.width, limits });
+  if (printed.text !== source) {
+    const validated = await parseConcrete(printed.text);
+    if (!validated.ok) {
+      throw new FormatterInvariantError(
+        `formatter printed invalid output: ${
+          describeDiagnostics(validated.diagnostics)
+        }`,
+      );
+    }
+    assertRepresentationEqual(input.snapshot.module, validated.module);
+  }
+  if (hooks?.onComplete !== undefined) {
+    hooks.onComplete({
+      horizontalSpacingChanged: printed.stats.spacingChanged,
+      redundantParenSpans: printed.stats.groupingDrops,
+      parenRemovalChanged: printed.stats.dropsApplied,
+      loopIterations: 0,
+      loopHelpers: [],
+      structuralIndentationAccepted: !printed.stats.usedFallback,
+      finalValidationPassed: true,
+    });
+  }
+  return { ok: true, source: printed.text };
 }
 
-function collectIndentRegions(
-  node: ConcreteNode,
+type ResolvedInput =
+  | { readonly ok: true; readonly snapshot: SyntaxSnapshot }
+  | { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
+
+/**
+ * Resolves the input snapshot. A matching syntax snapshot is reused
+ * without invoking the frontend; anything else (no snapshot, a stale
+ * snapshot, or a detached parse result without a token tape) parses
+ * fresh exactly once.
+ */
+async function resolveInput(
   source: string,
-  lineStarts: readonly number[],
-  regions: IndentRegion[],
-): void {
-  if (node.type !== "rule") return;
-  if (node.name === "binding" || node.name === "signature") {
-    const indentedValue = directRule(node, "indented_value");
-    let value = directRule(node, "value");
-    if (indentedValue !== null) value = indentedBindingValue(indentedValue);
-    if (value !== null) {
-      const introducer = node.name === "signature"
-        ? directToken(node, "::")
-        : directToken(node, "=");
-      if (introducer === null) {
-        throw new Error(`${node.name} has no value introducer`);
-      }
-      const startsAtLine = lineAtOffset(lineStarts, introducer.span.start);
-      const valueStartsAtLine = lineAtOffset(lineStarts, value.span.start);
-      const endsAtLine = lineAtOffset(
-        lineStarts,
-        Math.max(value.span.start, ruleContentSpan(value).end - 1),
-      );
-      if (startsAtLine < valueStartsAtLine && startsAtLine < endsAtLine) {
-        regions.push({
-          startsAtLine,
-          endsAtLine,
-          includesLastLine: true,
-        });
-      }
-    }
-  }
-  if (node.name === "result") {
-    const value = directRule(node, "value");
-    if (value !== null) {
-      const startsAtLine = lineAtOffset(lineStarts, node.span.start);
-      const endsAtLine = lineAtOffset(
-        lineStarts,
-        Math.max(value.span.start, ruleContentSpan(value).end - 1),
-      );
-      if (
-        startsAtLine < endsAtLine &&
-        !hasInlineLayoutRegion(value, startsAtLine, lineStarts)
-      ) {
-        regions.push({
-          startsAtLine,
-          endsAtLine,
-          includesLastLine: true,
-        });
-      }
-    }
-  }
-  if (node.name === "do_block") {
-    const startsAtLine = lineAtOffset(lineStarts, node.span.start);
-    const endsAtLine = lineAtOffset(
-      lineStarts,
-      Math.max(node.span.start, ruleContentSpan(node).end - 1),
-    );
-    if (startsAtLine < endsAtLine) {
-      regions.push({
-        startsAtLine,
-        endsAtLine,
-        includesLastLine: true,
-      });
-    }
-  }
-  let indentsFollowingLines = INDENTED_RULES.has(node.name);
-  if (node.name === "lambda") {
-    const body = directRule(node, "expression");
-    if (body === null) throw new Error("lambda has no body");
-    const lastParameter = directRules(node, "lambda_parameter").at(-1);
-    if (lastParameter === undefined) throw new Error("lambda has no parameter");
-    const arrow = directToken(lastParameter, "=>");
-    if (arrow === null) {
-      throw new Error("lambda parameter has no body boundary");
-    }
-    indentsFollowingLines = lineAtOffset(lineStarts, arrow.span.start) <
-      lineAtOffset(lineStarts, body.span.start);
-  }
-  if (indentsFollowingLines) {
-    let startsAtLine = lineAtOffset(lineStarts, node.span.start);
+  snapshot: FormatSnapshotInput | undefined,
+): Promise<ResolvedInput> {
+  if (snapshot !== undefined && isSyntaxSnapshot(snapshot)) {
     if (
-      (node.name === "block" || node.name === "statement_suite") &&
-      startsAtLine > 0
+      snapshot.source === source &&
+      snapshot.frontendRevision === SYNTAX_SNAPSHOT_FRONTEND_REVISION
     ) {
-      startsAtLine -= 1;
-    }
-    const contentEnd = ruleContentSpan(node).end;
-    // A suite's span runs to the dedent, so it can cover the blank line and
-    // the comment that introduce whatever follows. Ending the region at the
-    // last line carrying code keeps a comment block at the indentation of the
-    // statement it belongs to, rather than indenting its first line into a
-    // scope the reader has left and leaving the rest behind.
-    const endsAtLine = lastCodeLine(
-      source,
-      lineStarts,
-      lineAtOffset(lineStarts, Math.max(node.span.start, contentEnd - 1)),
-      lineAtOffset(lineStarts, node.span.start),
-    );
-    if (startsAtLine < endsAtLine) {
-      let includesLastLine = node.name === "block" || node.name === "lambda" ||
-        node.name === "case_expression" || node.name === "statement_suite";
-      if (delimitedLayoutRules.has(node.name)) {
-        const closingLineStart = lineStarts[endsAtLine];
-        if (closingLineStart === undefined) {
-          throw new Error(`${node.name} closing line is missing`);
-        }
-        const closingLine = source.slice(
-          closingLineStart,
-          ruleContentSpan(node).end,
-        ).trim();
-        includesLastLine = !/^[)\]}]+/.test(closingLine);
-      }
-      regions.push({
-        startsAtLine,
-        endsAtLine,
-        includesLastLine,
-      });
+      return { ok: true, snapshot };
     }
   }
-  for (const child of node.children()) {
-    collectIndentRegions(child, source, lineStarts, regions);
-  }
+  return await snapshotSource(source);
 }
 
-function hasInlineLayoutRegion(
-  node: ConcreteNode,
-  line: number,
-  lineStarts: readonly number[],
-): boolean {
-  if (node.type !== "rule") return false;
-  if (
-    (INDENTED_RULES.has(node.name) || node.name === "do_block") &&
-    lineAtOffset(lineStarts, node.span.start) === line
-  ) return true;
-  return node.children().some((child) =>
-    hasInlineLayoutRegion(child, line, lineStarts)
-  );
+function isSyntaxSnapshot(
+  snapshot: FormatSnapshotInput,
+): snapshot is SyntaxSnapshot {
+  return "frontendRevision" in snapshot;
 }
 
-export function sourceLineStarts(source: string): readonly number[] {
-  const starts = [0];
-  for (let index = 0; index < source.length; index += 1) {
-    if (source[index] === "\n") starts.push(index + 1);
-  }
-  return starts;
-}
-
-export function lineAtOffset(
-  lineStarts: readonly number[],
-  offset: number,
-): number {
-  let low = 0;
-  let high = lineStarts.length;
-  while (low + 1 < high) {
-    const middle = Math.floor((low + high) / 2);
-    if (lineStarts[middle] <= offset) low = middle;
-    else high = middle;
-  }
-  return low;
+function describeDiagnostics(diagnostics: readonly Diagnostic[]): string {
+  const codes = diagnostics.map((diagnostic) => diagnostic.code);
+  return codes.join(", ");
 }

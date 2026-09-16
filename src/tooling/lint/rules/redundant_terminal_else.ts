@@ -15,6 +15,7 @@ export const redundantTerminalElse: LintRule = {
   name: "redundant-terminal-else",
   code: "BLOT_LINT_REDUNDANT_TERMINAL_ELSE",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     const eligibleBodies = new Set<string>();
     return {

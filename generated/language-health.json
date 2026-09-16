@@ -284,6 +284,7 @@
     "BLOT_LINT_NESTED_CASE_CHAIN",
     "BLOT_LINT_NESTED_IF_CHAIN",
     "BLOT_LINT_NOOP_REBINDING",
+    "BLOT_LINT_NO_SUCH_RULE",
     "BLOT_LINT_OPEN_SHADOW",
     "BLOT_LINT_OPERATOR_SPELLING",
     "BLOT_LINT_PARAMETER_DESTRUCTURING",
@@ -304,6 +305,7 @@
     "BLOT_LINT_TERMINAL_VALUE_FORWARDING",
     "BLOT_LINT_TEST_CHOSEN_NAME",
     "BLOT_LINT_TEST_SURFACE_COVERAGE",
+    "BLOT_LINT_TEST_UNKNOWN",
     "BLOT_LINT_UNNECESSARY_REC",
     "BLOT_LINT_UNREACHABLE_CASE_ARM",
     "BLOT_LINT_UNUSED_BINDING",
@@ -832,12 +834,12 @@
       "lines": 2486
     },
     {
-      "path": "compiler/src/qcore.rs",
-      "lines": 2303
+      "path": "src/language_service.ts",
+      "lines": 2434
     },
     {
-      "path": "src/development_runtime.ts",
-      "lines": 2168
+      "path": "src/tooling/format/print.ts",
+      "lines": 2408
     }
   ]
 }

@@ -14,6 +14,7 @@ export const nestedIfChain: LintRule = {
   name: "nested-if-chain",
   code: "BLOT_LINT_NESTED_IF_CHAIN",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     const coveredExpressions = new Set<string>();
     const coveredStatements = new Set<string>();

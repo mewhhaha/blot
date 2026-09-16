@@ -5,6 +5,7 @@ export const emptyArraySpelling: LintRule = {
   name: "empty-array-spelling",
   code: "BLOT_LINT_EMPTY_ARRAY_SPELLING",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     return {
       expression(path) {
