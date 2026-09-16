@@ -448,7 +448,12 @@ const PENDING: Record<
   string,
   | { code: string; stage: "check" | "run" }
   | { type: string; stage: "type" }
-> = {};
+> = {
+  "transducer_generic_run": {
+    "stage": "check",
+    "code": "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+  },
+};
 
 async function blotFiles(directory: string): Promise<string[]> {
   const found: string[] = [];

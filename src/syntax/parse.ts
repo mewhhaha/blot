@@ -9,6 +9,15 @@ import { babaRuntime, disposeBabaRuntime } from "./baba_runtime.ts";
 import type { Rule } from "./cursor.ts";
 import { materializeCpuCst } from "./cpu_cst.ts";
 import { ingestCpuSource } from "./cpu_ingest.ts";
+import {
+  recordBabaCpuParse,
+  recordCstMaterialization,
+  recordGeneratedLexing,
+  recordLayoutElaboration,
+  recordLowering,
+  recordParseConcreteInvocation,
+  recordSurfaceElaboration,
+} from "./frontend_metrics.ts";
 import { lowerModule } from "./lower.ts";
 import { elaborateLayout } from "./layout.ts";
 import { rebindingFrameDiagnostics } from "./rebinding.ts";
@@ -36,10 +45,13 @@ export type ConcreteParseResult =
 export async function parseConcrete(
   source: string,
 ): Promise<ConcreteParseResult> {
+  recordParseConcreteInvocation();
+  recordLayoutElaboration();
   const elaborated = await elaborateLayout(source);
   if (!elaborated.ok) return elaborated;
   const runtime = await babaRuntime();
 
+  recordGeneratedLexing();
   const lexed = runtime.wasmLexer.lex(elaborated.layout.source);
   if (lexed.diagnostics.length > 0) {
     return {
@@ -55,6 +67,7 @@ export async function parseConcrete(
     };
   }
 
+  recordBabaCpuParse();
   const result = ingestCpuSource(
     runtime.cpuParser,
     elaborated.layout.source,
@@ -81,15 +94,19 @@ export async function parseConcrete(
   }
 
   try {
+    recordCstMaterialization();
     const cst = materializeCpuCst(
       runtime.cpuParser,
       result.program,
       elaborated.layout.source,
       elaborated.layout.originalOffset,
     );
+    recordLowering();
+    const lowered = lowerModule(cst, source);
+    recordSurfaceElaboration();
     return {
       ok: true,
-      module: elaborateSurface(lowerModule(cst, source)),
+      module: elaborateSurface(lowered),
       cst,
     };
   } catch (error) {

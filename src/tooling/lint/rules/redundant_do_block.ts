@@ -12,6 +12,7 @@ export const redundantDoBlock: LintRule = {
   name: "redundant-do-block",
   code: "BLOT_LINT_REDUNDANT_DO_BLOCK",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       concrete(rule) {

@@ -6,6 +6,7 @@ export const booleanIdentityConditional: LintRule = {
   name: "boolean-identity-conditional",
   code: "BLOT_LINT_BOOLEAN_IDENTITY_CONDITIONAL",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression(path) {

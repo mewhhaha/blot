@@ -7,6 +7,7 @@ export const largePositionalTuple: LintRule = {
   name: "large-positional-tuple",
   code: "BLOT_LINT_LARGE_POSITIONAL_TUPLE",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       module(path) {
