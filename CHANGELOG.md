@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased — direct calls for pure callees
+
+### Symptom
+
+Calls from suspending functions into pure (non-suspending) callees cost about
+100 us each: a game frame making roughly 300 such calls measured 4.48 ms mean
+against 0.12 ms after the fix, with identical output. The same function bodies
+measured under 1 us per call when invoked outside a suspension context.
+
+### Root cause
+
+The suspension emitter routed every call to a framed function through the full
+frame dance — spill the live set, heap-allocate the callee frame, store
+arguments, dispatch through the poll loop, restore the result, free the frame —
+even when the callee cannot suspend and already has a direct internal body that
+never touches frames.
+
+### What changed
+
+- Non-tail calls to non-suspending framed callees now emit direct Wasm calls to
+  their existing internal bodies. Ownership follows the specified direct-callee
+  contract (consume argument references, transfer result references).
+- Tail calls keep frame reuse, preserving constant-space recursion.
+- Functions reachable from worker callbacks keep the frame dance: framed calls
+  are cooperative yield points, and routing them direct made admitted-kernel
+  cancellation untimely (the cancel test hung instead of draining in 200 ms).
+- Measured on the gdev game loop: 4.48 ms to 0.12 ms mean frame time (300
+  frames), rendered matrices bit-identical to before.
+
 ## Unreleased — Helix timeout fix (formatter/LSP overhaul)
 
 ### Symptom

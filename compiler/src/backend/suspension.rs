@@ -432,6 +432,32 @@ pub(super) fn emit(
             }
         })
         .collect::<BTreeSet<_>>();
+    // Framed calls are cooperative yield points: worker callbacks rely on
+    // polling every call for timely cancellation, so functions reachable
+    // from callbacks keep the frame dance even when they cannot suspend.
+    let mut callees = HashMap::new();
+    for function in &module.functions {
+        let mut targets = Vec::new();
+        for continuation in &function.continuations {
+            if let RuntimeTransition::Call {
+                target: CallTarget::Function { function: callee },
+                ..
+            } = &continuation.transition
+            {
+                targets.push(*callee);
+            }
+        }
+        callees.insert(function.id, targets);
+    }
+    let mut polling = callbacks.clone();
+    let mut pending: Vec<FunctionId> = callbacks.iter().copied().collect();
+    while let Some(id) = pending.pop() {
+        for callee in callees.get(&id).cloned().unwrap_or_default() {
+            if polling.insert(callee) {
+                pending.push(callee);
+            }
+        }
+    }
     let mut frames = module
         .functions
         .iter()
@@ -519,6 +545,7 @@ pub(super) fn emit(
                 static_data,
                 direct,
                 &roots,
+                &polling,
             )?,
         )?;
     }
@@ -666,6 +693,7 @@ fn step(
     static_data: &StaticData,
     direct: &HashMap<FunctionId, u32>,
     roots: &BTreeSet<FunctionId>,
+    polling: &BTreeSet<FunctionId>,
 ) -> Result<Function, String> {
     let mut locals = frame.lane_types.clone();
     let pointer = locals.len() as u32 + 2;
@@ -834,8 +862,16 @@ fn step(
                         .i32_store(mem(PENDING_RESULT));
                     constant_word(&mut ins, 0, IMPORT, ordinal as u32);
                     constant_word(&mut ins, 0, STATUS, 1);
+                // Pure callees run directly: their internal bodies never touch
+                // frames, so the frame dance only wastes an alloc, spills, and
+                // dispatch scans per call. Tail calls keep frame reuse for
+                // constant-space recursion, and callback-reachable callees keep
+                // polling so worker cancellation stays timely.
                 } else if let CallTarget::Function { function: target } = target
                     && let Some(child) = frames.get(target)
+                    && (module.functions[target.0].suspends
+                        || function.returns_call_result(next)
+                        || polling.contains(target))
                 {
                     let callee = &module.functions[target.0];
                     let entry = &callee.continuations[callee.entry.0];
