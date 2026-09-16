@@ -20,7 +20,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - name: Stage exact tested runner changes without updating pull request refs
+      - name: Stage final tree-verified repairs without updating pull request refs
         shell: bash
         run: |
           set -euo pipefail
@@ -29,61 +29,84 @@ jobs:
           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           python3 - <<'PY'
           import json, os, pathlib, subprocess
-          foundation = '10879a5fe707adb3316ab3bf18dc5a99483fceec'
+          foundation = '2f67e521bd4fd008326b0af1b3c94a439b25d900'
           candidates = [
-              (143, '95b25022ab9b263617c07deca424a7fb26bbbedc', 'b2dec256e5db77f6348046827c442d8bfce9d59e'),
-              (144, 'e1fecf5385563f214a85c225f7869447f92cd94c', '1c1198f0b8f1ba68976b562856e94ca3c629142a'),
-              (145, '7cfad807a031fc0a979c8377695ed8daf02f9e99', 'ce2bd75b6c898a396d8ad923894bea57599c81af'),
-              (146, '81026d9b0af0dce13f64d898381f50751a1ee241', '69234ec331c26f16fade6e585968022cf95494dc'),
-              (147, '28f2e56ec29e22c09978576ccacb896b18e4ae85', 'b0f76fd3ab6330ae834e57d6e0057b1be272c3ff'),
-              (148, '4546c57332bc0cc2525c09fda5da05efde8fcf5d', 'c9ceedd65ceea63a2fc153b956c7068920ffe036'),
-              (149, 'd19202e317a188e0920820129d404f528b5002ce', 'b2b20fab1cade784532c80f13f08f741e6b8a342'),
-              (151, 'd45f19c2a0dbdd827afd0d3401d2251359581bc7', 'a158fb227c4e5a029a25d7b18b7d7b3f0b21cea9'),
-              (152, '5acc50cac0c85a171c203308dec49fc045547e21', 'e04db0e3d68759ee0b24f6083cae085944cb1a3e'),
-              (153, 'e54eaa1ba076e4add8dfe9b9c0df3c2af6db316b', 'b527df3b764e33ca6f2d13148fbadead03c01d06'),
-              (154, '70696791ccab8d6cbd85fe47d085dfa61df56b89', '11406703d7e74d410a2120e80cfa814e0e201872'),
-              (155, '2bfa5cb780baca78873b6f54ca88d0b643a33e85', '53b5453eaf980060302956e02f3af7a114009aa0'),
-              (156, '5ea2f5b0d29427565ec1610ab74488da578d0e42', '28111ff16291feaace20b2e63cdbddd80fccf9e8'),
-              (157, 'd5d12791d238062abc12e20529f32394bd83f684', '37b48075a2e98c6b1a4b7e161aedc72273cb5a56'),
-              (158, '02cc437424c5cd2750c44a8670c2531853afd556', 'b6d34d9f95ff71ca120bd6f231fec108136b6195'),
-              (159, '537eb25faa654d01e0178320800895f774b34f90', '47aa7d0725980195b7ba0837831f9e5afbb745a4'),
-              (160, '14db366bf16a68d580bde440839b093678f51d5f', 'd8298d563300bd7194af13ac7a33bf220a55065a'),
-              (162, '9f71fadc6dcb28510305063b48b2c8ad8de00aa0', '5d1a67824acc3d0fa9e21d0a6aae57b825138136'),
-              (163, 'f18407b455695aa49e566e3dcd9cf282d52f85ba', 'fc3cc3affa67956c3421ff4f2e222b8eb4045be2'),
-              (164, '06cc6a2fb682c5e1dae09451efb682a93931234c', '4622b036a046034497cc60981fb5765cdacb8faf'),
+              (143, '54dadfce1001b4f95c753b3c7849581b43b00033', '99427758d021165fbe4c7548df5ee9cdd94c1075'),
+              (144, '8bf50b104fe123752f3b4ff48d8b842eb5567366', 'b0d2ba1e864d03f48e2339adfbc6ec2ad23866a9'),
+              (145, '9fcf6eb2342b39a555ad75425228f8c0122bba79', '0d8b8915bbce94f59137a2378d7b5933fcd991bd'),
+              (146, '53684bd06154b08abd80fc2c11e7b6fe09c9f9f3', 'f06c09da3098fd7637bf50605bbcaec0fc16f3c5'),
+              (147, '112a312c95c9e1d450a179ae6733563396f197b8', '342fb8247b1e984666c93fe51456497010c23cad'),
+              (148, '0fa65adc2983c1bcae0b018052b096b074435860', 'ca7fe8e79bd49fb030b0870987aca3102926b23d'),
+              (149, '475ff187b91ac7d72988bf43518ac31042583433', '9306a99aa95e68249ef2e7a1fe57d95dba91001f'),
+              (151, 'f6ad68a2f93b1e1d8660d641f0df42fe0b073edf', '8a20cc613d6cf14c0d052df44a15151d59a6acdc'),
+              (152, '4211ea0c7a0cff6447192ec06937b1599789770e', 'e94471619c3e87fcf6e588ab1faede978d5615ae'),
+              (153, 'ad819de66d8e7fb3656dcbf93496139522be18cc', '7e9239f4a7c72310268b8bc498adc87490045839'),
+              (154, '081f4805190b3e42452d55b33bedf8c7bdd8b039', 'ba2c7e445eb9bbe632faff7c2dbf632f9ade0121'),
+              (155, '100ddc4c25b287ef42b37f6e0137fa8adf34363a', 'f6bd1df3ef585cae60277571071d91be66cb3af1'),
+              (156, '2a60f080fd3c459e8867403fad534de2db9b3cc6', '4b32d94017ce2b50e53786d2e6dac6cf6ff0796e'),
+              (157, 'f3fd6b9c088b340b7ef84ac10d4b076fabd801b9', '9cb97d04a330350d8cf1a7a6b8481181fac82007'),
+              (158, '12931650aae3d1fae0f2b88e29a16464eb4c4ff2', '7030acf1f9d496369ad54a995bf859709a78f041'),
+              (159, 'e3e0667d108c5cbf6a80e760535f2202113d34b7', 'd874c42ac0668d52fee147f701a248a1cffbec4c'),
+              (160, '615a0f4717b5cc4f13eb633f75c99d926d37b689', '1ca76c63801bf1639dfc304fb0fe8d6e26428a05'),
+              (162, '73708ed471add2487590075070bbc3fa48738f11', 'fd3781b971a3721b50f35a3e1bc1f61a0eefa216'),
+              (163, 'b3312907ce241dc4e17ed8c8133ac9be316dad5a', 'd2132b51fbd97eb33200ed29c9165edfbb6ad749'),
+              (164, '6142d1638f5e9e21df3cea7276ef4bf038e17f9c', '6765a88b07e748f57cbdaec7f1d1917e31e58da9'),
           ]
-          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'runtime-audit'
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'completed-audit'
           out.mkdir(exist_ok=True)
           published = []
           def run(*args):
               subprocess.run(args, check=True)
           def git(*args):
               return subprocess.check_output(['git', *args], text=True).strip()
-          run('git', 'update-ref', 'refs/heads/runtime-audit/pr-161', foundation)
+          run('git', 'update-ref', 'refs/heads/completed-audit/pr-161', foundation)
           for number, old, expected in candidates:
               run('git', 'checkout', '--detach', old)
               run('git', 'merge', '--no-commit', '--no-ff', foundation)
+              if number == 155:
+                  path = pathlib.Path('compiler/src/typecheck.rs')
+                  source = path.read_text()
+                  before = '''        } else if let Some(value) = integer_refinement_witness(module, left, environment, values) {
+                      orderings = mirror_orderings(&orderings);
+                      (expression_field_path(module, right)?, value)
+                  } else {
+                      return None;
+                  };'''
+                  # Preserve Rust indentation independently of YAML's script indentation.
+                  before = '\n'.join([before.splitlines()[0]] + [line[10:] for line in before.splitlines()[1:]])
+                  after = '''        } else {
+                      let value = integer_refinement_witness(module, left, environment, values)?;
+                      orderings = mirror_orderings(&orderings);
+                      (expression_field_path(module, right)?, value)
+                  };'''
+                  after = '\n'.join([after.splitlines()[0]] + [line[10:] for line in after.splitlines()[1:]])
+                  if source.count(before) != 1:
+                      raise RuntimeError('Rust lint patch context differs')
+                  path.write_text(source.replace(before, after))
+                  path = pathlib.Path('generated/language-health.json')
+                  source = path.read_text()
+                  if source.count('"lines": 18257') != 1:
+                      raise RuntimeError('health line-count patch context differs')
+                  path.write_text(source.replace('"lines": 18257', '"lines": 18256'))
+                  run('git', 'add', 'compiler/src/typecheck.rs', 'generated/language-health.json')
               tree = git('write-tree')
               if tree != expected:
                   raise RuntimeError(f'PR {number}: {tree} differs from locally reviewed {expected}')
-              paths = git('diff', '--cached', '--name-only', old).splitlines()
-              if paths != ['scripts/node_regression_tests.mjs', 'scripts/node_regression_tests.test.ts']:
-                  raise RuntimeError(f'PR {number}: unexpected paths {paths}')
               run('git', 'diff', '--cached', '--check')
-              run('git', 'commit', '-m', 'fix: preserve native Deno integration checks under the regression deadline')
+              run('git', 'commit', '-m', 'fix: complete native runtime regression routing and validation cleanup')
               head = git('rev-parse', 'HEAD')
               run('git', 'merge-base', '--is-ancestor', old, head)
-              branch = f'repair/runtime-20260916/pr-{number}'
+              branch = f'repair/completed-20260916/pr-{number}'
               run('git', 'push', 'origin', f'HEAD:refs/heads/{branch}')
-              run('git', 'update-ref', f'refs/heads/runtime-audit/pr-{number}', head)
+              run('git', 'update-ref', f'refs/heads/completed-audit/pr-{number}', head)
               published.append({'number': number, 'old': old, 'head': head, 'tree': tree, 'candidate_branch': branch})
               (out / 'candidates.json').write_text(json.dumps(published, indent=2) + '\n')
-          run('git', 'bundle', 'create', str(out / 'candidates.bundle'), 'refs/heads/runtime-audit/pr-161', *[f'refs/heads/runtime-audit/pr-{p["number"]}' for p in published])
+          run('git', 'bundle', 'create', str(out / 'candidates.bundle'), 'refs/heads/completed-audit/pr-161', *[f'refs/heads/completed-audit/pr-{p["number"]}' for p in published])
           PY
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: runtime-audit-candidates-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/runtime-audit/
+          name: completed-audit-candidates-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/completed-audit/
           if-no-files-found: warn
           retention-days: 7
