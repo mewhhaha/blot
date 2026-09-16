@@ -6,6 +6,7 @@ export const singletonArrayAppend: LintRule = {
   name: "singleton-array-append",
   code: "BLOT_LINT_SINGLETON_ARRAY_APPEND",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression(path) {

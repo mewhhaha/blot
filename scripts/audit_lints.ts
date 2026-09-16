@@ -12,7 +12,16 @@ interface AuditFinding {
   readonly fixable: boolean;
 }
 
-const excludedDirectories = new Set(["pending", "rejected", "traps"]);
+// Directories of intentionally unaccepted programs. The audit reports lint
+// findings over accepted files only; value-rejected pathologies never
+// analyze (24/24 fail), exactly like rejected/, so they are excluded
+// rather than failing the run.
+const excludedDirectories = new Set([
+  "pending",
+  "rejected",
+  "traps",
+  "value-rejected",
+]);
 const files: string[] = [];
 await collectBlotFiles("examples", files);
 await collectBlotFiles("case-studies", files);

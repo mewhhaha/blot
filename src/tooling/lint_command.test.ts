@@ -1,10 +1,12 @@
 import { assert, assertEquals } from "@std/assert";
 import { resolve } from "@std/path";
 import { Compiler } from "../compiler.ts";
+import type { LintDiagnostic } from "./lint.ts";
 import {
   fixLintSource,
   lintSource,
   parseLintArguments,
+  selectNonOverlappingFixes,
 } from "./lint_command.ts";
 
 Deno.test("lint arguments select report, check, and fix modes", () => {
@@ -131,4 +133,50 @@ return (twice 21, total)
     analysis.destroy();
     validation.destroy();
   }
+});
+
+Deno.test("overlapping fix-all edits resolve to one deterministic winner", () => {
+  const overlapping = (
+    code: LintDiagnostic["code"],
+    start: number,
+    end: number,
+  ): LintDiagnostic => ({
+    code,
+    severity: "hint",
+    message: "overlap",
+    span: { start, end },
+    fix: {
+      title: `Fix ${code}`,
+      edits: [{ span: { start, end }, replacement: "x" }],
+      kind: "quickfix",
+      validation: "check-interface",
+    },
+  });
+  const wide = overlapping("BLOT_LINT_UNUSED_BINDING", 10, 20);
+  const narrow = overlapping("BLOT_LINT_NOOP_REBINDING", 12, 18);
+  const disjoint = overlapping("BLOT_LINT_EQUALITY_CASE", 30, 40);
+  const refactor: LintDiagnostic = {
+    ...overlapping("BLOT_LINT_IF_CHAIN", 50, 60),
+    fix: {
+      title: "Refactor",
+      edits: [{ span: { start: 50, end: 60 }, replacement: "y" }],
+      kind: "refactor.rewrite",
+      validation: "check-interface",
+    },
+  };
+  const forward = selectNonOverlappingFixes([wide, narrow, disjoint, refactor]);
+  const backward = selectNonOverlappingFixes([
+    refactor,
+    disjoint,
+    narrow,
+    wide,
+  ]);
+  assertEquals(
+    forward.map((selected) => selected.diagnostic.code),
+    ["BLOT_LINT_NOOP_REBINDING", "BLOT_LINT_EQUALITY_CASE"],
+  );
+  assertEquals(
+    backward.map((selected) => selected.diagnostic.code),
+    ["BLOT_LINT_NOOP_REBINDING", "BLOT_LINT_EQUALITY_CASE"],
+  );
 });
