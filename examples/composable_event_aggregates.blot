@@ -45,30 +45,17 @@ const gate =
     ;
   }
 
-const SystemCommand = A.ProductCommand (CounterCommand, GateCommand)
 const SystemEvent = A.ProductEvent (CounterEvent, GateEvent)
-const SystemError = A.ProductError (CounterError, GateError)
-const SystemState = (Int, GateState)
 
-const system ::
-  A.Aggregate (SystemState, SystemCommand, SystemEvent, SystemError)
 const system = A.product (counter, gate)
 
-const system_left ::
-  Result (A.Execution (SystemState, SystemEvent), SystemError)
 const system_left = A.execute (system, system.initial, #Left (#Deposit 8))
 
-const system_right ::
-  Result (A.Execution (SystemState, SystemEvent), SystemError)
 const system_right = A.execute (system, (8, #Closed), #Right #OpenGate)
 
-const system_left_error ::
-  Result (A.Execution (SystemState, SystemEvent), SystemError)
 const system_left_error =
   A.execute (system, (2, #Closed), #Left (#Withdraw 5))
 
-const system_right_error ::
-  Result (A.Execution (SystemState, SystemEvent), SystemError)
 const system_right_error =
   A.execute (system, (0, #Open), #Right #OpenGate)
 
