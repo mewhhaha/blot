@@ -27,8 +27,11 @@ if (tests.length === 0) {
 // not replace their worker/process APIs with the Node compatibility shim.
 const nativeDenoTests = new Set([
   "scripts/distribution_contents.test.ts",
+  "scripts/helix_languages.test.ts",
   "src/deno/lsp_worker_host.test.ts",
   "src/lsp_spawn.test.ts",
+  "src/syntax/snapshot_isolation.test.ts",
+  "src/tooling/format_parity.test.ts",
 ]);
 
 for (const [index, test] of tests.entries()) {
