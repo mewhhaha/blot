@@ -6,6 +6,7 @@ export const unreachableCaseArm: LintRule = {
   name: "unreachable-case-arm",
   code: "BLOT_LINT_UNREACHABLE_CASE_ARM",
   severity: "warning",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression(path) {

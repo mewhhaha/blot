@@ -10,6 +10,7 @@ export const filteringLoopPattern: LintRule = {
   name: "filtering-loop-pattern",
   code: "BLOT_LINT_FILTERING_LOOP_PATTERN",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       concrete(rule) {

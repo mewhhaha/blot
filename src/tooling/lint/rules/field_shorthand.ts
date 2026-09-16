@@ -4,6 +4,7 @@ export const fieldShorthand: LintRule = {
   name: "field-shorthand",
   code: "BLOT_LINT_FIELD_SHORTHAND",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       concrete(rule) {

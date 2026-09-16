@@ -196,7 +196,7 @@ return vector
   }
 });
 
-Deno.test("language formatting returns one whole-document edit", async () => {
+Deno.test("language formatting returns one minimal edit", async () => {
   const service = new LanguageService();
   const uri = "untitled:format.blot";
   try {
@@ -207,12 +207,41 @@ Deno.test("language formatting returns one whole-document edit", async () => {
       1,
     );
     const edits = await service.formatting(uri);
-    assertEquals(edits.length, 1);
-    assertEquals(
-      edits[0]?.newText,
-      `return 1
-`,
-    );
+    assertEquals(edits, [{
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 1 },
+      },
+      newText: "",
+    }]);
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("language formatting validates options and ignores style prefs", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:format-options.blot";
+  try {
+    service.open(uri, "let   x=1\nreturn x\n", 1);
+    const edits = await service.formatting(uri, {
+      tabSize: 8,
+      insertSpaces: false,
+    });
+    assertEquals(edits, [{
+      range: {
+        start: { line: 0, character: 4 },
+        end: { line: 0, character: 8 },
+      },
+      newText: "x = ",
+    }]);
+    let thrown = false;
+    try {
+      await service.formatting(uri, { tabSize: "eight" });
+    } catch (error) {
+      thrown = error instanceof TypeError;
+    }
+    assertEquals(thrown, true);
   } finally {
     await service.destroy();
   }
@@ -653,6 +682,85 @@ Deno.test("import navigation follows unsaved files and ignores missing paths", a
         null,
       );
     }
+  } finally {
+    await service.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("providers degrade when a dependency is deleted from disk", async () => {
+  const directory = await Deno.makeTempDir();
+  const dependency = join(directory, "missing.blot");
+  await Deno.writeTextFile(dependency, "return 1\n");
+  const uri = toFileUrl(join(directory, "editor.blot")).href;
+  const service = new LanguageService();
+  try {
+    service.open(
+      uri,
+      'const missing = import "./missing.blot"\nreturn missing\n',
+      1,
+    );
+    await service.formatting(uri);
+    await Deno.remove(dependency);
+    const position = { line: 1, character: 8 };
+    assertEquals(await service.hover(uri, position), null);
+    assertEquals(await service.completion(uri, position), []);
+    assertEquals(await service.signatureHelp(uri, position), null);
+    assertEquals(await service.documentSymbols(uri), []);
+    assertEquals(await service.references(uri, position), []);
+    assertEquals(await service.rename(uri, position, "renamed"), null);
+    assertEquals(
+      await service.codeActions(uri, {
+        start: { line: 0, character: 0 },
+        end: { line: 2, character: 0 },
+      }),
+      [],
+    );
+  } finally {
+    await service.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("providers degrade on an unparseable buffer", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:unparseable-providers.blot";
+  try {
+    service.open(uri, "let x = (\nreturn x\n", 1);
+    const position = { line: 1, character: 8 };
+    assertEquals(await service.hover(uri, position), null);
+    assertEquals(await service.completion(uri, position), []);
+    assertEquals(await service.signatureHelp(uri, position), null);
+    assertEquals(await service.documentSymbols(uri), []);
+    assertEquals(await service.references(uri, position), []);
+    assertEquals(await service.rename(uri, position, "renamed"), null);
+    assertEquals(
+      await service.codeActions(uri, {
+        start: { line: 0, character: 0 },
+        end: { line: 2, character: 0 },
+      }),
+      [],
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("inlay hints stay empty when a dependency is deleted from disk", async () => {
+  const directory = await Deno.makeTempDir();
+  const dependency = join(directory, "missing.blot");
+  await Deno.writeTextFile(dependency, "return 1\n");
+  const uri = toFileUrl(join(directory, "editor.blot")).href;
+  const service = new LanguageService();
+  try {
+    service.open(
+      uri,
+      'const missing = import "./missing.blot"\nreturn missing\n',
+      1,
+    );
+    await service.formatting(uri);
+    await Deno.remove(dependency);
+    assertEquals(await service.inlayHints(uri), []);
   } finally {
     await service.destroy();
     await Deno.remove(directory, { recursive: true });
@@ -1446,6 +1554,30 @@ return width { .left = 2; .right = 8; }
       "{ .left; .right; }",
     );
     assertEquals(action.edit.documentChanges[0].edits[1].newText, "");
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("close and reopen answers reused versions with new content", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:reopen-version-reuse.blot";
+  try {
+    service.open(uri, "return 1\n", 1);
+    const before = service.snapshot(uri);
+    assert(before);
+    await service.close(uri);
+    assertEquals(service.snapshot(uri), null);
+    service.open(uri, "return 2\n", 1);
+    const after = service.snapshot(uri);
+    assert(after);
+    assertEquals(service.version(uri), 1);
+    assert(after.lifecycle !== before.lifecycle);
+    assert(after.revision > before.revision);
+    const diagnostics = await service.diagnostics(uri);
+    assertEquals(diagnostics, []);
+    const formatting = await service.formatting(uri);
+    assertEquals(formatting, []);
   } finally {
     await service.destroy();
   }

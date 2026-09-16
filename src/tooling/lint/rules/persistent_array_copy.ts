@@ -6,6 +6,7 @@ export const persistentArrayCopy: LintRule = {
   name: "persistent-array-copy",
   code: "BLOT_LINT_PERSISTENT_ARRAY_COPY",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       module(path) {

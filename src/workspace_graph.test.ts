@@ -665,3 +665,93 @@ test("package changes remain pending for every open root", async () => {
     await rm(directory, { recursive: true });
   }
 });
+
+test("staged overlays record without loading until the next refresh", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-workspace-staged-"));
+  const provider = join(directory, "provider.blot");
+  const importer = join(
+    directory,
+    "importer.blot",
+  );
+  const graph = new WorkspaceGraph();
+  try {
+    await writeFile(provider, "return 1\n");
+    await writeFile(
+      importer,
+      'const provider = import "./provider.blot"\nreturn provider\n',
+    );
+    graph.stageOverlays(
+      new Map([
+        [provider, { source: "return 2\n", version: 1 }],
+        [importer, {
+          source:
+            'const provider = import "./provider.blot"\nreturn provider\n',
+          version: 1,
+        }],
+      ]),
+    );
+    assert.equal(graph.committedRevision(provider), undefined);
+    const loaded = await graph.refresh(importer);
+    assert.equal(loaded.source.includes("return provider"), true);
+    assert.equal(
+      loaded.dependencies.get("./provider.blot")?.source,
+      "return 2\n",
+    );
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("identical overlay restages are no-ops and regressions throw", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-workspace-staged-id-"));
+  const path = join(directory, "root.blot");
+  const graph = new WorkspaceGraph();
+  try {
+    await writeFile(path, "return 1\n");
+    graph.stageOverlays(
+      new Map([[path, { source: "return 2\n", version: 1 }]]),
+    );
+    graph.stageOverlays(
+      new Map([[path, { source: "return 2\n", version: 1 }]]),
+    );
+    graph.stageOverlays(new Map([[path, { source: "return 2\n" }]]));
+    assert.throws(
+      () =>
+        graph.stageOverlays(
+          new Map([[path, { source: "return 3\n", version: 1 }]]),
+        ),
+      /does not follow/,
+    );
+    assert.equal((await graph.refresh(path)).source, "return 2\n");
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("disk input refreshes notice dependency edits without a root load", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-workspace-disk-"));
+  const provider = join(directory, "provider.blot");
+  const importer = join(directory, "importer.blot");
+  const graph = new WorkspaceGraph();
+  try {
+    await writeFile(provider, "return 1\n");
+    await writeFile(
+      importer,
+      'const provider = import "./provider.blot"\nreturn provider\n',
+    );
+    const before = await graph.refresh(importer);
+    assert.equal(
+      before.dependencies.get("./provider.blot")?.source,
+      "return 1\n",
+    );
+    await writeFile(provider, "return 2\n");
+    await graph.refreshDiskInputs();
+    const after = await graph.refresh(importer);
+    assert.equal(
+      after.dependencies.get("./provider.blot")?.source,
+      "return 2\n",
+    );
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
