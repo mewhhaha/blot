@@ -6,7 +6,9 @@ const Path = { .path = Text; }
 const Healthy = #Ready | #Degraded Text
 const Status = Healthy | #Failed Text
 
+const to_path :: W.Witness (Rich, Path)
 const to_path = W.derive (Rich, Path)
+const to_status :: W.Witness (Healthy, Status)
 const to_status = W.derive (Healthy, Status)
 
 // The first target and second source are unrelated, so there is no shared

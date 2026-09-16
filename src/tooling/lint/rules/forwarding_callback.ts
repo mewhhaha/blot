@@ -5,6 +5,7 @@ export const forwardingCallback: LintRule = {
   name: "forwarding-callback",
   code: "BLOT_LINT_FORWARDING_CALLBACK",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression({ node, parent, ancestors }) {

@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-const Port = 1..65535
+const Port = range (1, 65535)
 const Request = { .path = Text; .port = Port; }
 
 let invalid :: Request

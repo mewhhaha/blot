@@ -1,5 +1,3 @@
-open import "blot:prelude"
-
 // A witness is an ordinary function packaged with the relationship it proves.
 // `Source` may be more precise than `Target`; applying the witness performs no
 // runtime conversion, it only exposes the statically safe view.
@@ -7,16 +5,15 @@ const Witness = fn (Source, Target) => {
   .apply = Source -> Target;
 }
 
-// Derivation happens at compile time because types and `refines` are ordinary
-// compile-time values. Invalid directions fail while specializing the program
-// rather than introducing a runtime branch or unchecked cast.
+// The identity implementation is checked against the requested arrow. That
+// makes the compiler's actual subtype relation the authority, including closed
+// sums, rather than duplicating it through a reflection predicate.
 const derive = fn (Source, Target) => do:
-  if refines (Source, Target):
-    let apply :: Source -> Target
-    let apply = fn value => value
-    return { .apply = apply; }
-
-  return @fail "subtyping witness requires Source to refine Target"
+  let apply :: Source -> Target
+  let apply = fn value => value
+  let witness :: Witness (Source, Target)
+  let witness = { .apply; }
+  return witness
 
 const identity :: @forall (fn Value => Witness (Value, Value))
 const identity = {
@@ -37,9 +34,9 @@ const adapt :: @forall (fn Source => @forall (fn Target => @forall (fn Output =>
 const adapt = fn (witness, consume) => fn value => consume (witness.apply value)
 
 return {
-  .Witness = Witness;
-  .derive = derive;
-  .identity = identity;
-  .compose = compose;
-  .adapt = adapt;
+  .Witness;
+  .derive;
+  .identity;
+  .compose;
+  .adapt;
 }

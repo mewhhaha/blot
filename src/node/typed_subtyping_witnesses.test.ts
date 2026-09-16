@@ -13,7 +13,15 @@ const expectedType =
 test("subtyping witnesses compose safe static views in both executions", async () => {
   const compiler = await Compiler.create();
   try {
-    for (const sourcePath of [libraryPath, path]) {
+    for (
+      const sourcePath of [
+        libraryPath,
+        path,
+        "src/node/fixtures/subtyping_witness_wrong_direction.blot",
+        "src/node/fixtures/subtyping_witness_bad_compose.blot",
+        "src/node/fixtures/subtyping_witness_invalid_refinement.blot",
+      ]
+    ) {
       const source = await readFile(sourcePath, "utf8");
       const formatted = await formatSource(source);
       assert.equal(formatted.ok, true);
@@ -53,16 +61,21 @@ test("subtyping witnesses reject unsafe directions, composition, and refinements
   try {
     await assert.rejects(
       () =>
-        compiler.check("src/node/fixtures/subtyping_witness_wrong_direction.blot"),
-      /subtyping witness requires Source to refine Target/,
-    );
-    await assert.rejects(
-      () => compiler.check("src/node/fixtures/subtyping_witness_bad_compose.blot"),
-      /BLOT_(TYPE_ERROR|ARGUMENT_MISMATCH)/,
+        compiler.check(
+          "src/node/fixtures/subtyping_witness_wrong_direction.blot",
+        ),
+      /BLOT_TYPE_ERROR/,
     );
     await assert.rejects(
       () =>
-        compiler.check("src/node/fixtures/subtyping_witness_invalid_refinement.blot"),
+        compiler.check("src/node/fixtures/subtyping_witness_bad_compose.blot"),
+      /BLOT_TYPE_ERROR/,
+    );
+    await assert.rejects(
+      () =>
+        compiler.check(
+          "src/node/fixtures/subtyping_witness_invalid_refinement.blot",
+        ),
       /BLOT_TYPE_ERROR/,
     );
   } finally {

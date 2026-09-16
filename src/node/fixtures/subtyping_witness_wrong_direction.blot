@@ -4,7 +4,7 @@ const W = import "../../../examples/lib/subtyping_witness.blot"
 const Internal = { .path = Text; .trace = Text; }
 const Public = { .path = Text; }
 
-// Public cannot be widened into a richer internal request: the missing field is
-// observable, so derive must refuse this direction at compile time.
+// A missing field cannot be created by a no-op conversion. The generated
+// Source -> Target signature must reject this direction at compile time.
 const invalid = W.derive (Public, Internal)
 return invalid
