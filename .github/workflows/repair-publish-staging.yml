@@ -4,9 +4,6 @@ on:
   pull_request:
     paths:
       - .github/workflows/repair-publish-staging.yml
-      - repair/staging/pr153.patch
-      - repair/staging/pr155.patch
-      - repair/staging/pr159.patch
 
 permissions:
   contents: read
@@ -16,36 +13,14 @@ jobs:
     if: github.repository == 'mewhhaha/blot' && github.event.pull_request.head.repo.full_name == 'mewhhaha/blot' && github.event.pull_request.head.ref == 'repair/pr143-compiler-workbench-20260915'
     permissions:
       contents: write
-      actions: read
-      pull-requests: read
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          path: control
-          persist-credentials: false
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          path: candidate
           fetch-depth: 0
-      - uses: pnpm/action-setup@v6
-        with:
-          package_json_file: candidate/package.json
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.19.0
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: 2.9.6
-      - run: pnpm install --frozen-lockfile
-        working-directory: candidate
-      - name: Stage exact locally tested source trees without changing PR refs
-        working-directory: candidate
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Stage exact tested runner changes without updating pull request refs
         shell: bash
         run: |
           set -euo pipefail
@@ -53,82 +28,62 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           python3 - <<'PY'
-          import concurrent.futures, gzip, json, os, pathlib, subprocess
-          root = pathlib.Path.cwd()
-          control = root.parent / 'control'
-          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'final-audit'
-          out.mkdir(exist_ok=True)
-          foundation = '7aed87f916aa35fcbaa2cbab7599a79fb1e470c8'
+          import json, os, pathlib, subprocess
+          foundation = '10879a5fe707adb3316ab3bf18dc5a99483fceec'
           candidates = [
-              (153, 'd7a1612766aa3ab0cbfaba50bee35a7360a2f3e0', '61cdc7faf6fbae215df9346fe13fe0060ba36edc'),
-              (155, '057bec5f8b35f81cacc1a04a89397062c276ad39', '45123912cccc7c8f08e950983ccdfbf5d9d2bd99'),
-              (159, '4cff992fa02b7d540266f60fcc6c89ce4cbb0847', '209cf11bf203652655e5ae662bbbae32085e5415'),
+              (143, '95b25022ab9b263617c07deca424a7fb26bbbedc', 'b2dec256e5db77f6348046827c442d8bfce9d59e'),
+              (144, 'e1fecf5385563f214a85c225f7869447f92cd94c', '1c1198f0b8f1ba68976b562856e94ca3c629142a'),
+              (145, '7cfad807a031fc0a979c8377695ed8daf02f9e99', 'ce2bd75b6c898a396d8ad923894bea57599c81af'),
+              (146, '81026d9b0af0dce13f64d898381f50751a1ee241', '69234ec331c26f16fade6e585968022cf95494dc'),
+              (147, '28f2e56ec29e22c09978576ccacb896b18e4ae85', 'b0f76fd3ab6330ae834e57d6e0057b1be272c3ff'),
+              (148, '4546c57332bc0cc2525c09fda5da05efde8fcf5d', 'c9ceedd65ceea63a2fc153b956c7068920ffe036'),
+              (149, 'd19202e317a188e0920820129d404f528b5002ce', 'b2b20fab1cade784532c80f13f08f741e6b8a342'),
+              (151, 'd45f19c2a0dbdd827afd0d3401d2251359581bc7', 'a158fb227c4e5a029a25d7b18b7d7b3f0b21cea9'),
+              (152, '5acc50cac0c85a171c203308dec49fc045547e21', 'e04db0e3d68759ee0b24f6083cae085944cb1a3e'),
+              (153, 'e54eaa1ba076e4add8dfe9b9c0df3c2af6db316b', 'b527df3b764e33ca6f2d13148fbadead03c01d06'),
+              (154, '70696791ccab8d6cbd85fe47d085dfa61df56b89', '11406703d7e74d410a2120e80cfa814e0e201872'),
+              (155, '2bfa5cb780baca78873b6f54ca88d0b643a33e85', '53b5453eaf980060302956e02f3af7a114009aa0'),
+              (156, '5ea2f5b0d29427565ec1610ab74488da578d0e42', '28111ff16291feaace20b2e63cdbddd80fccf9e8'),
+              (157, 'd5d12791d238062abc12e20529f32394bd83f684', '37b48075a2e98c6b1a4b7e161aedc72273cb5a56'),
+              (158, '02cc437424c5cd2750c44a8670c2531853afd556', 'b6d34d9f95ff71ca120bd6f231fec108136b6195'),
+              (159, '537eb25faa654d01e0178320800895f774b34f90', '47aa7d0725980195b7ba0837831f9e5afbb745a4'),
+              (160, '14db366bf16a68d580bde440839b093678f51d5f', 'd8298d563300bd7194af13ac7a33bf220a55065a'),
+              (162, '9f71fadc6dcb28510305063b48b2c8ad8de00aa0', '5d1a67824acc3d0fa9e21d0a6aae57b825138136'),
+              (163, 'f18407b455695aa49e566e3dcd9cf282d52f85ba', 'fc3cc3affa67956c3421ff4f2e222b8eb4045be2'),
+              (164, '06cc6a2fb682c5e1dae09451efb682a93931234c', '4622b036a046034497cc60981fb5765cdacb8faf'),
           ]
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'runtime-audit'
+          out.mkdir(exist_ok=True)
           published = []
           def run(*args):
               subprocess.run(args, check=True)
           def git(*args):
               return subprocess.check_output(['git', *args], text=True).strip()
+          run('git', 'update-ref', 'refs/heads/runtime-audit/pr-161', foundation)
           for number, old, expected in candidates:
               run('git', 'checkout', '--detach', old)
-              if number != 159:
-                  run('git', 'merge', '--no-commit', '--no-ff', foundation)
-              else:
-                  run('git', 'checkout', '95b25022ab9b263617c07deca424a7fb26bbbedc', '--',
-                      'compiler/src/hir.rs', 'compiler/src/runtime_signature.rs',
-                      'compiler/src/session.rs', 'compiler/src/typecheck.rs',
-                      'generated/compiler/prelude.snapshot', 'spec/TYPECHECKING.md',
-                      'examples/lib/event_aggregate.blot',
-                      'src/node/fixtures/event_aggregate_unannotated_right.blot')
-              run('git', 'apply', '--index', str(control / 'repair/staging' / f'pr{number}.patch'))
-              run('deno', 'fmt')
-              run('deno', 'lint')
-              run('deno', 'run', '--allow-read', '--allow-write', 'scripts/generate_language_health.ts')
-              run('deno', 'fmt', '--check')
-              run('git', 'diff', '--check')
-              run('git', 'add', '-u')
+              run('git', 'merge', '--no-commit', '--no-ff', foundation)
               tree = git('write-tree')
               if tree != expected:
-                  raise RuntimeError(f'PR {number}: {tree} is not the locally validated tree {expected}')
-              run('git', 'commit', '-m', f'fix: complete PR #{number} with checked implementations and strict regressions')
+                  raise RuntimeError(f'PR {number}: {tree} differs from locally reviewed {expected}')
+              paths = git('diff', '--cached', '--name-only', old).splitlines()
+              if paths != ['scripts/node_regression_tests.mjs', 'scripts/node_regression_tests.test.ts']:
+                  raise RuntimeError(f'PR {number}: unexpected paths {paths}')
+              run('git', 'diff', '--cached', '--check')
+              run('git', 'commit', '-m', 'fix: preserve native Deno integration checks under the regression deadline')
               head = git('rev-parse', 'HEAD')
               run('git', 'merge-base', '--is-ancestor', old, head)
-              branch = f'repair/final-20260916/pr-{number}'
+              branch = f'repair/runtime-20260916/pr-{number}'
               run('git', 'push', 'origin', f'HEAD:refs/heads/{branch}')
-              run('git', 'update-ref', f'refs/heads/final-audit/pr-{number}', head)
+              run('git', 'update-ref', f'refs/heads/runtime-audit/pr-{number}', head)
               published.append({'number': number, 'old': old, 'head': head, 'tree': tree, 'candidate_branch': branch})
               (out / 'candidates.json').write_text(json.dumps(published, indent=2) + '\n')
-          run('git', 'bundle', 'create', str(out / 'candidates.bundle'), *[f'refs/heads/final-audit/pr-{p["number"]}' for p in published])
-          def api(endpoint):
-              return json.loads(subprocess.check_output(['gh', 'api', endpoint]))
-          prs = api('repos/mewhhaha/blot/pulls?state=all&sort=created&direction=desc&per_page=100')
-          (out / 'prs.json').write_text(json.dumps(prs, indent=2) + '\n')
-          (out / 'main.json').write_text(json.dumps(api('repos/mewhhaha/blot/git/ref/heads/main'), indent=2) + '\n')
-          def inspect(pr):
-              number = pr['number']
-              runs = api('repos/mewhhaha/blot/actions/runs?head_sha=' + pr['head']['sha'] + '&per_page=20')['workflow_runs']
-              standard = [r for r in runs if r['name'] in ['CI source snapshot', 'Abstraction contracts', 'Rust/Wasm compiler CI']]
-              for run in standard:
-                  if run['conclusion'] != 'failure':
-                      continue
-                  jobs = api(run['jobs_url'])
-                  (out / f'pr-{number}-jobs-{run["id"]}.json').write_text(json.dumps(jobs, indent=2) + '\n')
-                  for job in jobs['jobs']:
-                      if job['conclusion'] == 'failure':
-                          try:
-                              log = subprocess.check_output(['gh', 'api', '--allow-escape-sequences', 'repos/mewhhaha/blot/actions/jobs/' + str(job['id']) + '/logs'], stderr=subprocess.PIPE)
-                              (out / f'pr-{number}-failure-{job["id"]}.log.gz').write_bytes(gzip.compress(log))
-                          except subprocess.CalledProcessError:
-                              pass
-              return str(number), [{k: r.get(k) for k in ['id', 'name', 'status', 'conclusion', 'head_sha', 'html_url']} for r in standard]
-          with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-              statuses = dict(pool.map(inspect, [p for p in prs if p['state'] == 'open' and 122 <= p['number'] <= 164 and p['number'] != 150]))
-          (out / 'statuses.json').write_text(json.dumps(statuses, indent=2) + '\n')
+          run('git', 'bundle', 'create', str(out / 'candidates.bundle'), 'refs/heads/runtime-audit/pr-161', *[f'refs/heads/runtime-audit/pr-{p["number"]}' for p in published])
           PY
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: final-audit-candidates-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/final-audit/
+          name: runtime-audit-candidates-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/runtime-audit/
           if-no-files-found: warn
           retention-days: 7
