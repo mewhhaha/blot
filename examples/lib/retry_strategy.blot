@@ -1,0 +1,41 @@
+open import "blot:prelude"
+
+// A retry strategy owns only retry state and error classification. The operation
+// stays independent, so the same strategy representation works for pure and
+// effectful calls without hiding the operation's effect row.
+const Strategy = fn (State, Error) => {
+  .initial = State;
+  .next = (State, Error) -> #Retry State | #Stop Error;
+}
+
+// Build the common finite retry policy. `max_retries <= 0` means stop after the
+// first failed attempt; positive values count retries after that first attempt.
+const bounded ::
+  @forall (fn Error => (Int, (Error -> Bool)) -> Strategy (Int, Error))
+const bounded = fn (max_retries, retryable) => {
+  .initial = 0;
+  .next = fn (retries, error) => do:
+    if retries < max_retries && retryable error:
+      return #Retry (retries + 1)
+
+    return #Stop error
+  ;
+}
+
+const rec attempt :: @forall (fn State => @forall (fn Input => @forall (fn Output => @forall (fn Error => (Strategy (State, Error), ((Input, State) -> Result (Output, Error) ~ { ..e }), Input, State) -> Result (Output, Error) ~ { ..e }))))
+const rec attempt = fn (strategy, operation, input, state) => do:
+  use outcome <- operation (input, state)
+  return case outcome of
+    #Ok value => #Ok value
+    #Error error => case strategy.next (state, error) of
+      #Retry next => attempt (strategy, operation, input, next)
+      #Stop final => #Error final
+
+const run :: @forall (fn State => @forall (fn Input => @forall (fn Output => @forall (fn Error => (Strategy (State, Error), ((Input, State) -> Result (Output, Error) ~ { ..e }), Input) -> Result (Output, Error) ~ { ..e }))))
+const run = fn (strategy, operation, input) => attempt (strategy, operation, input, strategy.initial)
+
+return {
+  .Strategy;
+  .bounded;
+  .run;
+}
