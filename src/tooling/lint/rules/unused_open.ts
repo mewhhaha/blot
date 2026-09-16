@@ -13,6 +13,7 @@ export const unusedOpen: LintRule = {
   name: "unused-open",
   code: "BLOT_LINT_UNUSED_OPEN",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     const soleSuiteOpenings = new Set<string>();
     collectSoleSuiteOpenings(context.cst, soleSuiteOpenings);

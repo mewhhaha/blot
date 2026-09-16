@@ -19,6 +19,7 @@ export const equalityIfChain: LintRule = {
   name: "equality-if-chain",
   code: "BLOT_LINT_IF_CHAIN",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     return {
       expression(path) {
