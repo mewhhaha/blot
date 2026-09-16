@@ -67,6 +67,22 @@ jobs:
           pnpm benchmark:compiler-soak --
           examples/minimal.blot
           experiments/compiler-soak.latest.json
+      # Editor benchmarks (informational, scheduled only; merge-blocking
+      # editor perf assertions live in CI's gate:editor step, not here):
+      # - Formatter: wall-clock medians plus exact per-sample frontend
+      #   invocation counts (internalParses == 2) across shaped cases.
+      # - Language server: formatting round-trips only. Formatting is the
+      #   one syntax-only deterministic request; semantic timing depends on
+      #   compiler-cache warmth, so burst responsiveness is proven by the
+      #   deterministic scheduler tests in test:lsp, not by wall clock here.
+      - name: Formatter benchmark
+        run: >-
+          pnpm benchmark:formatter
+          --out experiments/formatter-bench.latest.json
+      - name: Language server benchmark
+        run: >-
+          pnpm benchmark:lsp
+          --out experiments/lsp-bench.latest.json
       - name: Record compiler sizes
         shell: bash
         run: |

@@ -12,6 +12,7 @@ export const localOpen: LintRule = {
   name: "local-open",
   code: "BLOT_LINT_LOCAL_OPEN",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     return {
       module: ({ node }) => inspect(node.declarations, node.result, context),
