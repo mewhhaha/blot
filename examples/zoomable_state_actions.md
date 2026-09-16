@@ -1,16 +1,18 @@
 # Zoomable state actions
 
-`state_action.blot` packages a stateful computation as `Action (State, Value) =
-State -> Step (State, Value)`. The same `State` occurs on both sides of the
-arrow, so a reusable action cannot silently change the carrier it threads while
-its observation type remains independent.
+`state_action.blot` packages a stateful computation as
+`Action (State, Value) =
+State -> Step (State, Value)`. The same `State` occurs
+on both sides of the arrow, so a reusable action cannot silently change the
+carrier it threads while its observation type remains independent.
 
-The useful operation is `zoom`. Given a `Lens (Whole, Part)` and an `Action
-(Part, Value)`, it produces an `Action (Whole, Value)`: the local computation
-runs only on the focused part and the lens rebuilds the outer state. The same
-`Part` appears in both arguments, so an action for metrics cannot be localized
-through a profile lens. `and_then`, `map`, and `sequence` reuse the same state
-carrier without introducing a runtime framework.
+The useful operation is `zoom`. Given a `Lens (Whole, Part)` and an
+`Action
+(Part, Value)`, it produces an `Action (Whole, Value)`: the local
+computation runs only on the focused part and the lens rebuilds the outer state.
+The same `Part` appears in both arguments, so an action for metrics cannot be
+localized through a profile lens. `and_then`, `map`, and `sequence` reuse the
+same state carrier without introducing a runtime framework.
 
 The executable models an application with a profile and metrics. A name
 replacement is zoomed through two nested lenses, quota replacement uses a

@@ -5,6 +5,7 @@ export const identityVariantCase: LintRule = {
   name: "identity-variant-case",
   code: "BLOT_LINT_IDENTITY_VARIANT_CASE",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression({ node }) {

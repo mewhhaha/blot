@@ -16,7 +16,7 @@ const chainedProjectionPath =
   "src/node/fixtures/state_action_chained_tuple_projection.blot";
 
 const principalType =
-  '{ .default = { .state = { .profile = { .name = Text; .quota = 1..100 }; .metrics = { .requests = Int } }; .previous_name = Text; .previous_quota = 1..100; .new_request_count = Int; .untouched = { .state = { .profile = { .name = Text; .quota = 1..100 }; .metrics = { .requests = Int } }; .value = Text }; .mapped = { .state = { .profile = { .name = Text; .quota = 1..100 }; .metrics = { .requests = Int } }; .value = Text } } }';
+  "{ .default = { .state = { .profile = { .name = Text; .quota = 1..100 }; .metrics = { .requests = Int } }; .previous_name = Text; .previous_quota = 1..100; .new_request_count = Int; .untouched = { .state = { .profile = { .name = Text; .quota = 1..100 }; .metrics = { .requests = Int } }; .value = Text }; .mapped = { .state = { .profile = { .name = Text; .quota = 1..100 }; .metrics = { .requests = Int } }; .value = Text } } }";
 
 const formattedPaths = [
   libraryPath,
@@ -47,11 +47,15 @@ test("zoomable state actions preserve local state carriers in both executions", 
     assert.deepEqual(evaluated.writes, []);
     assert.equal(
       evaluated.display,
-      (await readFile("examples/expected/zoomable_state_actions.txt", "utf8")).trim(),
+      (await readFile("examples/expected/zoomable_state_actions.txt", "utf8"))
+        .trim(),
     );
     assert.equal(
       await runArtifact(await compiler.compile(examplePath)),
-      (await readFile("examples/expected/zoomable_state_actions.wasm.txt", "utf8")).trim(),
+      (await readFile(
+        "examples/expected/zoomable_state_actions.wasm.txt",
+        "utf8",
+      )).trim(),
     );
   } finally {
     compiler.destroy();
