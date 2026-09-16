@@ -1,0 +1,17 @@
+// PENDING: a fully generic helper cannot currently forward a reducer whose
+// state may carry affine Store authority through an opaque higher-rank
+// transducer parameter. Concrete specialization remains supported.
+open import "blot:prelude"
+const R = import "../lib/reducer.blot"
+const T = import "../lib/transducer.blot"
+
+const transduce ::
+  @forall (fn Input => @forall (fn Output => @forall (fn State => @forall (fn Result => (
+    T.Transducer (Input, Output),
+    R.Reducer (Output, State, Result),
+    [Input]
+  ) -> Result))))
+const transduce =
+  fn (transducer, reducer, values) => R.run (transducer reducer, values)
+
+return transduce

@@ -1,0 +1,16 @@
+open import "blot:prelude"
+const T = import "../../../examples/lib/transducer.blot"
+
+const left_stage :: T.Transducer (#Raw Int, #Middle Int)
+const left_stage =
+  T.map (fn value => case value of
+    #Raw number => #Middle number
+  )
+
+const right_stage :: T.Transducer (#Other Int, #Done Int)
+const right_stage =
+  T.map (fn value => case value of
+    #Other number => #Done number
+  )
+
+return T.compose (left_stage, right_stage)
