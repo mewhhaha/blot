@@ -1,0 +1,63 @@
+open import "blot:prelude"
+
+const Dimension = import "./lib/dimensional_quantity.blot"
+
+const Length = Dimension.make { .length = 1; .time = 0; }
+const Time = Dimension.make { .length = 0; .time = 1; }
+const Speed = Dimension.make { .length = 1; .time = -1; }
+const Area = Dimension.make { .length = 2; .time = 0; }
+const Scalar = Dimension.make { .length = 0; .time = 0; }
+
+const speed_from = Dimension.divide (Length, Time)
+const distance_from = Dimension.multiply (Speed, Time)
+const area_from = Dimension.multiply (Length, Length)
+const ratio_from = Dimension.divide (Length, Length)
+
+let path :: Length.type
+let path = Length.of 120
+let detour :: Length.type
+let detour = Length.of 30
+let total :: Length.type
+let total = Length.add (path, detour)
+let elapsed :: Time.type
+let elapsed = Time.of 5
+
+let speed = speed_from.apply (total, elapsed)
+let recovered_distance = case speed of
+  #None => Length.of 0
+  #Some rate => distance_from.apply (rate, elapsed)
+
+let area :: Area.type
+let area = area_from.apply (Length.of 12, Length.of 9)
+
+let ratio = ratio_from.apply (Length.of 81, Length.of 9)
+let ratio_value = case ratio of
+  #None => -1
+  #Some scalar => Scalar.value scalar
+
+let zero_divisor = speed_from.apply (Length.of 10, Time.of 0)
+
+let total_value = Length.value total
+let speed_value = case speed of
+  #None => -1
+  #Some rate => Speed.value rate
+let recovered_value = Length.value recovered_distance
+let area_value = Area.value area
+let zero_result = case zero_divisor of
+  #None => #RejectedZero
+  #Some _ => #Unexpected
+
+// Pain point: Blot's structural type constructors have no phantom parameters.
+// The dimension marker appears in the public carrier because leaving it out
+// would make every Quantity specialization structurally identical.
+return {
+  .default = {
+    .total = total_value;
+    .rate = speed_value;
+    .recovered = recovered_value;
+    .area = area_value;
+    .ratio = ratio_value;
+    .zero_divisor = zero_result;
+    .unicode_label = "m·s⁻¹";
+  };
+}

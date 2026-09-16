@@ -18,6 +18,7 @@ const suites = [
   "src/node/language_claims.test.ts",
   "src/node/practical_examples.test.ts",
   "src/node/typed_quantities.test.ts",
+  "src/node/dimensional_quantities.test.ts",
   "src/node/typed_lenses.test.ts",
   "src/node/composable_ordering.test.ts",
   "src/node/typed_nonempty.test.ts",

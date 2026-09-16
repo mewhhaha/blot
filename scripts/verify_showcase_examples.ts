@@ -37,6 +37,7 @@ const abstractionExamples = [
   "schema_effects.blot",
   "linear_transaction.blot",
   "typed_quantities.blot",
+  "dimensional_quantities.blot",
   "typed_lenses.blot",
   "composable_ordering.blot",
   "typed_nonempty.blot",
