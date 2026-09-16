@@ -1,0 +1,10 @@
+open import "blot:prelude"
+
+// A unary service port is identified by a qualified key and its exact request /
+// response contract. Reconstructing the same descriptor in another module
+// yields the same source effect without importing a singleton effect value.
+const unary = fn (key, Input, Output) => @effect.shared key {
+  .call = Input -> Output;
+}
+
+return { .unary; }

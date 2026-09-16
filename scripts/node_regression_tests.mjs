@@ -22,24 +22,43 @@ if (tests.length === 0) {
   );
 }
 
+// These integration proofs exercise Deno itself, not the portable test API.
+// Keep them in discovery and under the same parent-enforced deadline, but do
+// not replace their worker/process APIs with the Node compatibility shim.
+const nativeDenoTests = new Set([
+  "scripts/distribution_contents.test.ts",
+  "scripts/helix_languages.test.ts",
+  "src/deno/lsp_worker_host.test.ts",
+  "src/lsp/server.test.ts",
+  "src/lsp_spawn.test.ts",
+  "src/syntax/snapshot_isolation.test.ts",
+  "src/tooling/format_parity.test.ts",
+]);
+
 for (const [index, test] of tests.entries()) {
   console.log(
     `[${index + 1}/${tests.length}] ${test} (timeout ${timeoutMs}ms)`,
   );
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--import",
-      "./src/node/deno_test_compat.mjs",
-      "--import",
-      "tsx",
-      "--test",
-      "--test-isolation=none",
-      `--test-timeout=${timeoutMs}`,
-      test,
-    ],
-    { stdio: "inherit", timeout: timeoutMs, killSignal: "SIGKILL" },
-  );
+  let executable = process.execPath;
+  let args = [
+    "--import",
+    "./src/node/deno_test_compat.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-isolation=none",
+    `--test-timeout=${timeoutMs}`,
+    test,
+  ];
+  if (nativeDenoTests.has(test)) {
+    executable = "deno";
+    args = ["test", "--allow-all", test];
+  }
+  const result = spawnSync(executable, args, {
+    stdio: "inherit",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
   if (result.error?.code === "ETIMEDOUT") {
     console.log(`Test timed out after ${timeoutMs}ms`);
     console.error(`Regression test failed: ${test} (timeout)`);
@@ -48,7 +67,7 @@ for (const [index, test] of tests.entries()) {
   }
   if (result.error !== undefined) throw result.error;
   if (result.status === null) {
-    throw new Error(`Node regression test ${test} was terminated`);
+    throw new Error(`Regression test ${test} was terminated`);
   }
   if (result.status !== 0) {
     console.error(`Regression test failed: ${test} (exit ${result.status})`);

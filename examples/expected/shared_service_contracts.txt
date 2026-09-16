@@ -1,0 +1,1 @@
+{ .default = { .ada = { .name = #Some "Ada"; .quota = 25; }; .grace = { .name = #Some "Grace"; .quota = 80; }; .missing = { .name = #None; .quota = 0; }; }; }
