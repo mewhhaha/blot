@@ -29,6 +29,7 @@ const nativeDenoTests = new Set([
   "scripts/distribution_contents.test.ts",
   "scripts/helix_languages.test.ts",
   "src/deno/lsp_worker_host.test.ts",
+  "src/lsp/server.test.ts",
   "src/lsp_spawn.test.ts",
   "src/syntax/snapshot_isolation.test.ts",
   "src/tooling/format_parity.test.ts",
