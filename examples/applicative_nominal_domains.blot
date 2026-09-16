@@ -1,0 +1,28 @@
+const { .Int; .Text; } = import "blot:prelude"
+const Customer = import "./lib/customer_identity.blot"
+const Billing = import "./lib/billing_identity.blot"
+const Nominal = import "./lib/nominal_domain.blot"
+
+// A third independent reconstruction is the same nominal CustomerId because
+// seal identity is applicative in the public name and invariant carrier.
+const LocalCustomer = Nominal.domain ("example.customer-id.v1", Int)
+const Alias = Nominal.domain ("example.alias.v1", Text)
+
+let first = Customer.make 41
+let next = Customer.successor first
+let invoice = Billing.invoice_for first
+let local = LocalCustomer.of 7
+let alias = Alias.of "Żaneta 🐱"
+
+// Pain point: the compiler cannot distinguish two business domains that choose
+// the exact same public seal name and carrier. Qualified/versioned names are
+// therefore part of this API's domain-governance contract, not a hidden proof.
+return {
+  .default = {
+    .first = Customer.raw first;
+    .next = Billing.customer_raw next;
+    .invoice = Billing.invoice_raw invoice;
+    .reconstructed = Customer.raw local;
+    .alias = Alias.value alias;
+  };
+}

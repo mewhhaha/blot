@@ -1,0 +1,6 @@
+open import "blot:prelude"
+const Customer = import "../../../examples/lib/customer_identity.blot"
+const Billing = import "../../../examples/lib/billing_identity.blot"
+
+let invoice = Billing.InvoiceId.of 1001
+return Customer.raw invoice
