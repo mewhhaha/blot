@@ -6,6 +6,7 @@ export const parameterDestructuring: LintRule = {
   name: "parameter-destructuring",
   code: "BLOT_LINT_PARAMETER_DESTRUCTURING",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression({ node }) {

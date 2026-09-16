@@ -169,6 +169,15 @@ jobs:
       - name: Test Node host
         timeout-minutes: 5
         run: pnpm test:node
+      - name: Test formatter suites
+        timeout-minutes: 10
+        run: pnpm test:formatter
+      - name: Test LSP suites
+        timeout-minutes: 15
+        run: pnpm test:lsp
+      - name: Editor performance gates
+        timeout-minutes: 10
+        run: pnpm gate:editor
       - name: Test regression suite
         timeout-minutes: 15
         run: pnpm test:regression

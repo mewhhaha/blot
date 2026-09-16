@@ -11,6 +11,7 @@ export const operatorSpelling: LintRule = {
   name: "operator-spelling",
   code: "BLOT_LINT_OPERATOR_SPELLING",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     const fixities = resolveFixities(declaredFixities(context.cst));
     const infix = activeOperators("infix", fixities);

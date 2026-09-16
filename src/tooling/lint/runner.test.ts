@@ -9,6 +9,7 @@ function collector(create: LintRule["create"]): LintRule {
     name: "test-collector",
     code: "BLOT_LINT_UNUSED_BINDING",
     severity: "hint",
+    evidence: "syntax-only",
     create,
   };
 }

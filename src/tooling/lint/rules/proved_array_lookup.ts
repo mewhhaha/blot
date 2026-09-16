@@ -6,6 +6,7 @@ export const provedArrayLookup: LintRule = {
   name: "proved-array-lookup",
   code: "BLOT_LINT_PROVED_ARRAY_LOOKUP",
   severity: "hint",
+  evidence: "rewrite-validation",
   create(context) {
     return {
       expression(path) {

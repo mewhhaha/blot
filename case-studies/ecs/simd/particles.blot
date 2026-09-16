@@ -43,17 +43,25 @@ const unpack = fn table => Iter.collect (Iter.map (
 const S = Systems Block
 
 const C = S.components
-const integrate = S.define (
-  { .reads = [C.Position, C.Velocity]; .writes = [C.Position]; },
-  fn read => { .Position = F32x4.add read.Position read.Velocity; }
-)
-const bounce = S.define (
-  { .reads = [C.Position, C.Velocity]; .writes = [C.Velocity]; },
-  fn read => { .Velocity = F32x4.select (F32x4.less read.Position (F32x4.splat 10)) read.Velocity (F32x4.sub zero read.Velocity); }
-)
-const plan = Planning.compile (Block, { .integrate; .bounce; }, Planning.before ("integrate", "bounce"))
+const integrate =
+  S.define (
+    { .reads = [C.Position, C.Velocity]; .writes = [C.Position]; },
+    fn read => { .Position = F32x4.add read.Position read.Velocity; }
+  )
+const bounce =
+  S.define (
+    { .reads = [C.Position, C.Velocity]; .writes = [C.Velocity]; },
+    fn read => { .Velocity = F32x4.select (F32x4.less read.Position (F32x4.splat 10)) read.Velocity (F32x4.sub zero read.Velocity); }
+  )
+const plan =
+  Planning.compile (
+    Block,
+    { .integrate; .bounce; },
+    Planning.before ("integrate", "bounce")
+  )
 const advance :: Table -> Table
-const advance = fn table => { .count = table.count; .blocks = plan.each table.blocks; }
+const advance =
+  fn table => { .count = table.count; .blocks = plan.each table.blocks; }
 const run :: ([Entity], Int) -> [Entity]
 const run = fn (rows, frames) => do:
   let table = pack rows
@@ -66,15 +74,17 @@ const scalar :: ([Entity], Int) -> [Entity]
 const scalar = fn (rows, frames) => do:
   let rows = rows
   for Iter.range (0, frames):
-    rows := map (rows, fn row => do:
-      let position = F32.add row.Position row.Velocity
-      let below = case F32.is_nan position of
-        #True => False
-        #False => is_less (F32.cmp position 10)
-      let velocity = case below of
-        #True => row.Velocity
-        #False => F32.sub 0 row.Velocity
-      return { .Position = position; .Velocity = velocity; }
+    rows := map (
+      rows,
+      fn row => do:
+        let position = F32.add row.Position row.Velocity
+        let below = case F32.is_nan position of
+          #True => False
+          #False => is_less (F32.cmp position 10)
+        let velocity = case below of
+          #True => row.Velocity
+          #False => F32.sub 0 row.Velocity
+        return { .Position = position; .Velocity = velocity; }
     )
 
   return rows
@@ -85,4 +95,5 @@ const seed = fn count => Iter.collect (Iter.map (
   fn index => { .Position = F32.of_int (index % 11); .Velocity = F32.of_int (index % 5 - 2); }
 ))
 
-return { .Entity; .Block; .Table; .pack; .unpack; .plan; .advance; .run; .scalar; .seed; }
+return
+  { .Entity; .Block; .Table; .pack; .unpack; .plan; .advance; .run; .scalar; .seed; }

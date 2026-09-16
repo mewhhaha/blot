@@ -31,6 +31,12 @@ interface OverlayRevision {
   readonly version: number;
 }
 
+/** One unsaved overlay staged without loading: path resolves like elsewhere. */
+export interface StagedOverlay {
+  readonly source: string;
+  readonly version?: number;
+}
+
 interface WorkspaceState {
   loaded: Map<string, Loaded>;
   overlays: Map<string, OverlayRevision>;
@@ -68,6 +74,22 @@ export class WorkspaceGraph {
       this.#state.loaded.set(loaded.path, loaded);
       this.#pinnedPaths.add(loaded.path);
     }
+  }
+
+  /**
+   * Re-reads cached disk inputs (sources, capsules, includes) without
+   * loading any root. Open overlays keep shadowing disk; other roots
+   * observe changed resolutions on their next request. Editors call this
+   * once per batch of out-of-band disk or configuration changes.
+   */
+  async refreshDiskInputs(): Promise<void> {
+    const staged = this.#stage();
+    await refreshLoadedModules(
+      staged.loaded,
+      new Set([...staged.overlays.keys(), ...this.#pinnedPaths]),
+    );
+    staged.packageRefreshRoots = new Set(staged.roots);
+    this.#state = staged;
   }
 
   async refresh(path: string): Promise<Loaded> {
@@ -140,6 +162,48 @@ export class WorkspaceGraph {
     );
     this.#state = staged;
     return loaded;
+  }
+
+  /**
+   * Records unsaved overlays without loading or analyzing anything. Staged
+   * overlays mark their paths dirty and take effect on the next refresh or
+   * analysis of an affected root, so one batch stages N documents with one
+   * later load instead of N eager loads. Identical restages are no-ops;
+   * version regressions with changed content throw like updateOverlay.
+   */
+  stageOverlays(entries: ReadonlyMap<string, StagedOverlay>): void {
+    for (const [path, overlay] of entries) {
+      const absolute = resolve(path);
+      const previous = this.#state.overlays.get(absolute);
+      if (
+        previous !== undefined && previous.source === overlay.source &&
+        (overlay.version === undefined || overlay.version === previous.version)
+      ) {
+        continue;
+      }
+      let nextVersion = overlay.version;
+      if (nextVersion === undefined) {
+        let previousVersion = 0;
+        if (previous !== undefined) previousVersion = previous.version;
+        nextVersion = Math.max(this.#state.overlaySequence, previousVersion) +
+          1;
+        this.#state.overlaySequence = nextVersion;
+      }
+      if (!Number.isSafeInteger(nextVersion)) {
+        throw new Error(`overlay ${absolute} version must be a safe integer`);
+      }
+      if (previous !== undefined && nextVersion <= previous.version) {
+        throw new Error(
+          `overlay ${absolute} version ${nextVersion} does not follow ${previous.version}`,
+        );
+      }
+      this.#state.overlays.set(
+        absolute,
+        { source: overlay.source, version: nextVersion },
+      );
+      this.#state.dirty.add(absolute);
+      this.#state.roots.add(absolute);
+    }
   }
 
   async closeOverlay(path: string): Promise<readonly Loaded[]> {

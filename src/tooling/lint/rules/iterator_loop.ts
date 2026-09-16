@@ -7,6 +7,7 @@ export const iteratorLoop: LintRule = {
   name: "iterator-loop",
   code: "BLOT_LINT_ITERATOR_LOOP",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       module: ({ node }) =>
