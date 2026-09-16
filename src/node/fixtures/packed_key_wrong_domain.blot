@@ -1,0 +1,11 @@
+open import "blot:prelude"
+const PackedKey = import "../../../examples/lib/packed_key.blot"
+
+const Header = { .left = U 8; .right = U 8; }
+const Window = { .channel = U 8; .sequence = U 8; }
+const HeaderKey = PackedKey.derive ("example.header.v1", Header)
+const WindowKey = PackedKey.derive ("example.window.v1", Window)
+
+let window :: Window
+let window = { .channel = 141; .sequence = 0; }
+return HeaderKey.raw (WindowKey.pack window)

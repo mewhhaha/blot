@@ -1,0 +1,6 @@
+open import "blot:prelude"
+const PackedKey = import "../../../examples/lib/packed_key.blot"
+
+const SignedHeader = { .delta = I 4; }
+const SignedKey = PackedKey.derive ("example.signed.v1", SignedHeader)
+return SignedKey.bit_size
