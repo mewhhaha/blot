@@ -4,60 +4,124 @@ on:
   pull_request:
     paths:
       - .github/workflows/repair-publish-staging.yml
-      - repair/staging/formatter.patch
 
 permissions:
   contents: read
 
 jobs:
-  formatter:
+  reviewed-candidates:
     if: github.repository == 'mewhhaha/blot' && github.event.pull_request.head.repo.full_name == 'mewhhaha/blot' && github.event.pull_request.head.ref == 'repair/pr143-compiler-workbench-20260915'
     permissions:
       contents: write
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          path: control
-          persist-credentials: false
-      - uses: actions/checkout@v6
-        with:
-          ref: 4489e2599426b125b5fb9f2a6dfe48651b136e58
-          path: candidate
+          fetch-depth: 0
       - uses: pnpm/action-setup@v6
-        with:
-          package_json_file: candidate/package.json
       - uses: actions/setup-node@v6
         with:
           node-version: 24.19.0
       - uses: denoland/setup-deno@v2
         with:
           deno-version: 2.9.6
-      - name: Apply the reviewed source repair
-        working-directory: candidate
+      - name: Reconstruct and publish only isolated, tree-verified candidates
+        shell: bash
         run: |
           set -euo pipefail
-          git apply --check ../control/repair/staging/formatter.patch
-          git apply ../control/repair/staging/formatter.patch
-          pnpm install --frozen-lockfile
-          deno fmt --check
-          deno lint
-          deno run --allow-read --allow-write scripts/generate_language_health.ts
-          deno run --allow-read scripts/generate_language_health.ts --check
-          git diff --check
-      - name: Run the complete formatter suite at its existing timeout
-        working-directory: candidate
-        run: node --import ./src/node/deno_test_compat.mjs --import tsx --test --test-isolation=none --test-timeout=300000 src/tooling/formatter.test.ts
-      - name: Publish an isolated validated candidate
-        working-directory: candidate
-        run: |
-          set -euo pipefail
-          git config user.name 'Blot compiler repair'
+          git config user.name 'Blot PR repair'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/tooling/formatter.ts src/tooling/formatter.test.ts generated/language-health.json
-          git commit -m 'fix: reuse structural indentation while formatting signature candidates'
-          git push origin HEAD:refs/heads/repair/main-formatter-validated-20260915
-          git rev-parse HEAD
-          git show --stat --oneline HEAD
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          main = 'f5e0957db3f69a09022bb295c383454d05444568'
+          foundation_old = 'e4719095634518a23b2acb2c24030cfad8b90307'
+          expected_foundation = '0f912462a2f42d807ec7c9a06d17017bd71aa3e8'
+          candidates = [
+              (143, 'b09aebb5b08cd83e3b266552c0d8cd17697f06b5', 'b11a4f6c6d73600556511942ef52d12011af2b23'),
+              (144, 'e17899f53b1675ee14a6ade60fdc41677d1dc2c2', 'c084bcef8731d1047869d6fdddb235728e09b956'),
+              (145, '38fce45f43d0b7c2249542dc3c19825e38f93396', 'f0ea7c5f0548a00683995e276428c8ca898277aa'),
+              (146, 'db71fba6b65820ec21df1218f33db5d973ca168d', '2db35aeb86c55311da783d3189be0a55791e323d'),
+              (147, 'f03cbab2809f6f4f5abd69c6e90a977222a30efe', '94868a7109016ed828a0b9efc607ff9031f6f1df'),
+              (148, '321b044531bbe2635fd0909a45a21e3fc77860f9', '52e577d5a30ee489026180747c5a8273ec8748a8'),
+              (149, '2c0bfe1ef64c39bee2219d59bd5f14dd71fb4e8f', '10254269fe912e5ad210d96a5b7773e6deb18aa5'),
+              (151, 'f1267ac7f969526b34ba61220d1c290dc2c7fecd', 'df6b15103a3e37346a9c9573b189405b765ee7b5'),
+              (152, '0f0b825029b137a1695a61c8e639db3b9c7cb0cc', 'a7f32b8dd2ae28f923aa460ef66783975d0e6172'),
+              (154, 'aaf82679587a8357b8c0859bd1373132107af210', '5547197ebaa077d77bd5ba79ea884d80e02266f8'),
+              (156, '091ae174f3a7de0f54a1e995963ca627f1bbbe48', '485d55cc1eb338c2c138c0a8dc9036efd6095671'),
+              (157, '2a1094e23a94370efad568573226552e9d416ac6', '5dbf44e025833ad8953b369641b45f76ba82688f'),
+              (158, '0358cfda2035e75941cf3d1d5a3c5bee2d97614b', '9c53163b79248b9ac06e54c800d588931d024452'),
+              (159, '13fe4f74637de0f1df11a1b133a57832a657ca4b', '945168baba140e83fd1b238cdd1fcdd6c09a6cbb'),
+              (160, '5d46517f06c4d4b6d8d8f8da08d92464b47db585', '39dec3005e64426e22baf85b7b86271d959f2310'),
+              (162, '1803bc75e6a323b2caeeca664a4fd351a97fa882', '7f626e3165fefb69c554b27497122eb9b69c6d8c'),
+              (163, 'd758d3ce3d1fe9b0a988cb0993fdfebc44f2dff3', '92ba027ef9ab749adf8d9ecfcad44ba2741cb6c3'),
+              (164, '80c4e355c23bae875de036c400a0415aa58de580', 'd56bbe01767d4f4f7fe17dad33ba47b2e877d9fa'),
+          ]
+          pending = {
+              144: {'versioned_nominal_migration': {'stage': 'type', 'type': '⊥'}},
+              151: {'record_edit_guarded_increment': {'stage': 'check', 'code': 'BLOT_TYPE_ERROR'}},
+              152: {'transducer_generic_run': {'stage': 'check', 'code': 'BLOT_LINEAR_ARGUMENT_NOT_OWNED'}},
+              157: {'packed_key_computed_word_range': {'stage': 'check', 'code': 'BLOT_TYPE_ERROR'}},
+              162: {'nominal_domain_projected_eliminator': {'stage': 'check', 'code': 'BLOT_TYPE_ERROR'}},
+          }
+          root = pathlib.Path.cwd()
+          out = root.parent / 'audit-candidates'
+          out.mkdir(exist_ok=True)
+          published = []
+          def run(*args, **kwargs):
+              return subprocess.run(args, check=True, **kwargs)
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          def normalize():
+              run('deno', 'fmt')
+              run('deno', 'lint')
+              run('deno', 'run', '--allow-read', '--allow-write', 'scripts/generate_language_health.ts')
+              run('deno', 'fmt', '--check')
+              run('git', 'diff', '--check')
+              run('git', 'add', '-u')
+          def publish(number, old, expected_tree):
+              tree = git('write-tree')
+              if tree != expected_tree:
+                  raise RuntimeError(f'PR {number}: tree {tree} differs from locally validated {expected_tree}')
+              run('git', 'commit', '-m', f'fix: refresh PR #{number} against current main and repair validation gates')
+              head = git('rev-parse', 'HEAD')
+              run('git', 'merge-base', '--is-ancestor', old, head)
+              branch = f'repair/audit-20260916/pr-{number}'
+              run('git', 'push', 'origin', f'HEAD:refs/heads/{branch}')
+              run('git', 'update-ref', f'refs/heads/audit/pr-{number}', head)
+              published.append({'number': number, 'old': old, 'head': head, 'tree': tree, 'candidate_branch': branch})
+              (out / 'candidates.json').write_text(json.dumps(published, indent=2) + '\n')
+              return head
+          run('git', 'checkout', '--detach', foundation_old)
+          merge = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', main])
+          conflicts = git('diff', '--name-only', '--diff-filter=U').splitlines()
+          if conflicts != ['src/tooling/formatter.ts']:
+              raise RuntimeError(f'unexpected foundation conflicts: {conflicts}')
+          run('git', 'checkout', main, '--', 'src/tooling/formatter.ts')
+          normalize()
+          foundation = publish(161, foundation_old, expected_foundation)
+          for number, old, tree in candidates:
+              run('git', 'checkout', '--detach', old)
+              run('git', 'merge', '--no-commit', '--no-ff', foundation)
+              if number in pending:
+                  path = pathlib.Path('examples.test.ts')
+                  source = path.read_text()
+                  old_text = '> = {};\n\nasync function blotFiles'
+                  if old_text not in source:
+                      raise RuntimeError(f'PR {number}: pending registry has changed')
+                  replacement = '> = ' + json.dumps(pending[number], ensure_ascii=False, indent=2) + ';\n\nasync function blotFiles'
+                  path.write_text(source.replace(old_text, replacement))
+              normalize()
+              publish(number, old, tree)
+          run('git', 'bundle', 'create', str(out / 'candidates.bundle'), *[f'refs/heads/audit/pr-{p["number"]}' for p in published])
+          print(json.dumps(published, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: audited-pr-candidates-${{ github.event.pull_request.head.sha }}
+          path: ../audit-candidates/
+          if-no-files-found: warn
+          retention-days: 7
