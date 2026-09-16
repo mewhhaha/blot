@@ -17,7 +17,9 @@ aggregate with tuple state and tagged command, event, and error sums. A left
 command can only produce left events or a left error, and replay can only
 consume the product event carrier. The concrete program composes a bounded
 counter with an open/closed gate, then exercises both sides independently and by
-replaying a mixed history.
+replaying a mixed history. The product and execution bindings infer their
+carriers from the library signatures; callers do not repeat concrete signatures
+for those results.
 
 The compiler enforces carrier compatibility, the `Amount = 1..100` refinement,
 and the left/right wrappers exposed by the product. It does **not** prove event-
