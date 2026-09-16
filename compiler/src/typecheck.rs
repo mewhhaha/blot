@@ -13292,11 +13292,10 @@ fn comparison_refinements(
     let (projection, witness) =
         if let Some(value) = integer_refinement_witness(module, right, environment, values) {
             (expression_field_path(module, left)?, value)
-        } else if let Some(value) = integer_refinement_witness(module, left, environment, values) {
+        } else {
+            let value = integer_refinement_witness(module, left, environment, values)?;
             orderings = mirror_orderings(&orderings);
             (expression_field_path(module, right)?, value)
-        } else {
-            return None;
         };
     let original = refined_original_integer_type(checker, environment, &projection)?;
     let accepted = ordering_type(&orderings, &witness);
