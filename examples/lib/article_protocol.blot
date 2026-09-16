@@ -1,0 +1,108 @@
+const { .Text; } = import "blot:prelude"
+const R = import "./reversible_protocol.blot"
+
+// Pain point: structural record width subtyping is intentionally permissive, so
+// later records with more fields are not exclusive protocol stages. Constructors
+// make Draft, Reviewed, and Published disjoint while keeping their payloads clear.
+const Draft =
+  #Draft {
+    .title = Text;
+    .body = Text;
+  }
+const Reviewed =
+  #Reviewed {
+    .title = Text;
+    .body = Text;
+    .reviewer = Text;
+  }
+const Published =
+  #Published {
+    .title = Text;
+    .slug = Text;
+  }
+const ReviewInput =
+  {
+    .reviewer = Text;
+    .approved_body = Text;
+    .slug = Text;
+  }
+const Approval =
+  #Approved {
+    .reviewer = Text;
+    .slug = Text;
+  }
+const Receipt = #Receipt Text
+const ReviewUndo = { .body = Text; }
+const PublishUndo =
+  {
+    .body = Text;
+    .reviewer = Text;
+  }
+
+const Review ::
+  R.Transition { .from = Draft; .input = ReviewInput; .to = Reviewed; .output = Approval; .undo = ReviewUndo; }
+const Review =
+  {
+    .forward = fn (draft, input) => case draft of
+      #Draft article => do:
+        let reviewed =
+          #Reviewed {
+            .title = article.title;
+            .body = input.approved_body;
+            .reviewer = input.reviewer;
+          }
+        let approval =
+          #Approved {
+            .reviewer = input.reviewer;
+            .slug = input.slug;
+          }
+        return (reviewed, approval, { .body = article.body; })
+    .backward = fn (reviewed, undo) => case reviewed of
+      #Reviewed article => #Draft {
+        .title = article.title;
+        .body = undo.body;
+      }
+    ;
+  }
+
+const Publish ::
+  R.Transition { .from = Reviewed; .input = Approval; .to = Published; .output = Receipt; .undo = PublishUndo; }
+const Publish =
+  {
+    .forward = fn (reviewed, approval) => case (reviewed, approval) of
+      (#Reviewed article, #Approved approved) => do:
+        let published =
+          #Published {
+            .title = article.title;
+            .slug = approved.slug;
+          }
+        let undo =
+          {
+            .body = article.body;
+            .reviewer = article.reviewer;
+          }
+        return (published, #Receipt approved.reviewer, undo)
+    .backward = fn (published, undo) => case published of
+      #Published article => #Reviewed {
+        .title = article.title;
+        .body = undo.body;
+        .reviewer = undo.reviewer;
+      }
+    ;
+  }
+
+const Workflow = R.compose (Review, Publish)
+
+return {
+  .Draft
+  .Reviewed
+  .Published
+  .ReviewInput
+  .Approval
+  .Receipt
+  .ReviewUndo
+  .PublishUndo
+  .Review
+  .Publish
+  .Workflow
+}

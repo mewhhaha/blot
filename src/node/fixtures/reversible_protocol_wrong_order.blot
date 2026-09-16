@@ -1,0 +1,4 @@
+const R = import "../../../examples/lib/reversible_protocol.blot"
+const Article = import "../../../examples/lib/article_protocol.blot"
+
+return R.compose (Article.Publish, Article.Review)
