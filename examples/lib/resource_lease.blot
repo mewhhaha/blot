@@ -1,0 +1,12 @@
+const { .Effect; .Resource; .Unit; } = import "blot:prelude"
+
+// A lease couples the type of a resource produced by acquisition with the exact
+// resource consumed by close and the receipt returned by that close. Ownership
+// is carried by the effect operation descriptors rather than weakened into a
+// runtime flag or an optional handle.
+const Lease = fn (Resource, Receipt) => @effect {
+  .acquire = Effect.produces (Unit -> Resource);
+  .close = Effect.consumes (Resource -> Receipt);
+}
+
+return { .Lease; }

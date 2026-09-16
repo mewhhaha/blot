@@ -1,0 +1,1 @@
+{ .default = { .single = #FileClosed { .path = "build/🐱.wasm"; .generation = 7; }; .nested = { .file = #FileClosed { .path = "build/🐱.wasm"; .generation = 7; }; .lock = #Unlocked "deploy:prod"; }; .two_files = (#FileClosed { .path = "build/🐱.wasm"; .generation = 7; }, #FileClosed { .path = "build/🐱.wasm"; .generation = 7; }); }; }

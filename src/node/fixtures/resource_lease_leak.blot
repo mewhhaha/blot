@@ -1,0 +1,9 @@
+open import "blot:prelude"
+const Resources = import "../../../examples/lib/resource_lease.blot"
+const Handle = #Handle Int
+const Receipt = #Closed
+const Resource = Resources.Lease (Handle, Receipt)
+let leak = fn () => do:
+  use handle <- Resource.acquire ()
+  return 42
+return leak
