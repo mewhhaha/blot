@@ -1,0 +1,6 @@
+open import "blot:prelude"
+const S = import "../../../examples/lib/state_action.blot"
+const Quota = range (1, 100)
+const invalid :: S.Action (Quota, Quota)
+const invalid = S.replace 0
+return invalid
