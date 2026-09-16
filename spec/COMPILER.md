@@ -516,6 +516,9 @@ Identity policy is explicit:
 
 - ordinary source effects are generative under complete module-instance,
   declaration, and compile-time-scope identity;
+- shared source effects are applicative in their explicit text key and complete
+  normalized operation contract; their resident IDs retain live occurrence
+  provenance for invalidation and transactional snapshot staging;
 - seals are applicative in public name and canonical invariant carrier; and
 - administrative compiler identities are hidden only when the semantic relation
   says so.

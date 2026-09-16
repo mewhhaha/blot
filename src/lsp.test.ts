@@ -170,6 +170,80 @@ return remainder
   assertEquals(cancelled.error.code, -32800);
 });
 
+Deno.test("the LSP formats through the syntax lane byte-identically", async () => {
+  const uri = "untitled:lsp-formatting.blot";
+  const responses = await exchange([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+    { jsonrpc: "2.0", method: "initialized", params: {} },
+    {
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: { uri, version: 1, text: "let   x=1\nreturn x\n" },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "textDocument/formatting",
+      params: { textDocument: { uri }, options: {} },
+    },
+    { jsonrpc: "2.0", id: 3, method: "shutdown", params: null },
+    { jsonrpc: "2.0", method: "exit", params: null },
+  ]);
+  assertEquals(responses.find((response) => response.id === 2)?.result, [{
+    range: {
+      start: { line: 0, character: 4 },
+      end: { line: 0, character: 8 },
+    },
+    newText: "x = ",
+  }]);
+});
+
+Deno.test("the LSP rejects mistyped formatting options as invalid params", async () => {
+  const uri = "untitled:lsp-formatting-options.blot";
+  const responses = await exchange([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+    { jsonrpc: "2.0", method: "initialized", params: {} },
+    {
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: { uri, version: 1, text: "let   x=1\nreturn x\n" },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "textDocument/formatting",
+      params: {
+        textDocument: { uri },
+        options: { tabSize: 2, insertSpaces: true },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "textDocument/formatting",
+      params: {
+        textDocument: { uri },
+        options: { tabSize: "two" },
+      },
+    },
+    { jsonrpc: "2.0", id: 3, method: "shutdown", params: null },
+    { jsonrpc: "2.0", method: "exit", params: null },
+  ]);
+  assertEquals(responses.find((response) => response.id === 2)?.result, [{
+    range: {
+      start: { line: 0, character: 4 },
+      end: { line: 0, character: 8 },
+    },
+    newText: "x = ",
+  }]);
+  const rejected = responses.find((response) => response.id === 4);
+  assertEquals((rejected?.error as { code: number }).code, -32602);
+});
+
 Deno.test("the LSP resolves a deferred fix-all action into versioned edits", async () => {
   const uri = "untitled:lsp-resolve-fix-all.blot";
   const source = "let count = 2\nreturn { .count = count; }\n";
@@ -177,7 +251,14 @@ Deno.test("the LSP resolves a deferred fix-all action into versioned edits", asy
     title: "Fix all field shorthand suggestions",
     kind: "source.fixAll.blot.BLOT_LINT_FIELD_SHORTHAND",
     diagnostics: [],
-    data: { uri, version: 7, rule: "BLOT_LINT_FIELD_SHORTHAND" },
+    data: {
+      uri,
+      version: 7,
+      lifecycle: 1,
+      revision: 1,
+      workspaceEpoch: 2,
+      rule: "BLOT_LINT_FIELD_SHORTHAND",
+    },
   };
   const responses = await exchange([
     {

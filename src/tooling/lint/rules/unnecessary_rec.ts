@@ -18,6 +18,7 @@ export const unnecessaryRec: LintRule = {
   name: "unnecessary-rec",
   code: "BLOT_LINT_UNNECESSARY_REC",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     const candidates = new Map<string, Candidate>();
     const signatureMarkers = new Map<string, Span>();

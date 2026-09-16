@@ -482,6 +482,39 @@ type EffectSignatures = Vec<(
     u32,
 )>;
 
+#[derive(Clone)]
+struct SharedEffect {
+    operations: OrderedFields,
+    ownership: BTreeMap<String, EffectOperationContract>,
+    id: u32,
+    occurrences: HashSet<EffectIdentity>,
+}
+
+#[derive(Clone, Default)]
+struct SharedEffects {
+    keys: HashMap<String, Vec<SharedEffect>>,
+}
+
+impl SharedEffects {
+    fn remove_modules(&mut self, paths: &HashSet<String>) -> HashSet<u32> {
+        let mut removed = HashSet::new();
+        self.keys.retain(|_, signatures| {
+            signatures.retain_mut(|signature| {
+                signature.occurrences.retain(|occurrence| {
+                    !paths.iter().any(|path| occurrence.references_module(path))
+                });
+                if signature.occurrences.is_empty() {
+                    removed.insert(signature.id);
+                    return false;
+                }
+                true
+            });
+            !signatures.is_empty()
+        });
+        removed
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct LiveDeclaration {
     pub(crate) declaration: DeclarationId,
@@ -576,7 +609,7 @@ pub(crate) struct CachedEvaluatedBinding {
 
 #[derive(Clone, Default)]
 struct ResidentEffectValue {
-    declaration: Option<(String, Value)>,
+    declarations: Vec<(String, Value)>,
     attachments: Vec<(String, Value)>,
 }
 
@@ -759,24 +792,13 @@ fn operator_type_key(value: &Value) -> String {
 
 impl ResidentEffectValue {
     fn remove_module(&mut self, path: &str) {
-        if self
-            .declaration
-            .as_ref()
-            .is_some_and(|(module, _)| module == path)
-        {
-            self.declaration = None;
-        }
+        self.declarations.retain(|(module, _)| module != path);
         self.attachments.retain(|(module, _)| module != path);
     }
 
     fn remove_modules(&mut self, paths: &HashSet<String>) {
-        if self
-            .declaration
-            .as_ref()
-            .is_some_and(|(module, _)| paths.contains(module))
-        {
-            self.declaration = None;
-        }
+        self.declarations
+            .retain(|(module, _)| !paths.contains(module));
         self.attachments
             .retain(|(module, _)| !paths.contains(module));
     }
@@ -784,12 +806,12 @@ impl ResidentEffectValue {
     fn value(&self) -> Option<&Value> {
         self.attachments
             .last()
+            .or_else(|| self.declarations.last())
             .map(|(_, value)| value)
-            .or_else(|| self.declaration.as_ref().map(|(_, value)| value))
     }
 
     fn is_empty(&self) -> bool {
-        self.declaration.is_none() && self.attachments.is_empty()
+        self.declarations.is_empty() && self.attachments.is_empty()
     }
 }
 
@@ -818,6 +840,7 @@ pub struct Context {
         RefCell<ModuleFacts<ExpressionId, crate::ownership::OwnershipContract>>,
     next_effect: Cell<u32>,
     effect_ids: RefCell<HashMap<EffectIdentity, EffectSignatures>>,
+    shared_effects: RefCell<SharedEffects>,
     effect_values: RefCell<BTreeMap<u32, ResidentEffectValue>>,
     operator_extensions: RefCell<Vec<ResidentOperatorExtension>>,
     next_type_variable: Cell<u32>,
@@ -888,9 +911,12 @@ impl Context {
 
     pub(crate) fn snapshot_staging(&self, path: &str) -> Self {
         let replaced = HashSet::from([path.to_owned()]);
-        let removed_effects = self.effect_ids_referencing(&replaced);
+        let mut removed_effects = self.effect_ids_referencing(&replaced);
+        let mut shared_effects = self.shared_effects.borrow().clone();
+        removed_effects.extend(shared_effects.remove_modules(&replaced));
         Self {
             next_effect: Cell::new(self.next_effect.get()),
+            shared_effects: RefCell::new(shared_effects),
             effect_ids: RefCell::new(
                 self.effect_ids
                     .borrow()
@@ -944,6 +970,7 @@ impl Context {
                 .filter(|(identity, _)| identity.references_module(path))
                 .map(|(identity, signatures)| (identity.clone(), signatures.clone())),
         );
+        *self.shared_effects.borrow_mut() = staged.shared_effects.borrow().clone();
         *self.effect_values.borrow_mut() = staged.effect_values.borrow().clone();
         self.operator_extensions
             .borrow_mut()
@@ -1117,13 +1144,48 @@ impl Context {
         id
     }
 
+    fn shared_effect_id(
+        &self,
+        key: &str,
+        runtime: &Runtime,
+        source: ApplicationSite,
+        operations: &OrderedFields,
+        ownership: &BTreeMap<String, EffectOperationContract>,
+    ) -> u32 {
+        let occurrence = EffectIdentity {
+            module: runtime.module.as_ref().clone(),
+            source,
+            scope: runtime.effect_scope.as_ref().clone(),
+            instances: runtime.module_instances.as_ref().clone(),
+            host: false,
+        };
+        let mut shared = self.shared_effects.borrow_mut();
+        let signatures = shared.keys.entry(key.to_owned()).or_default();
+        if let Some(signature) = signatures.iter_mut().find(|signature| {
+            effect_signatures_equal(&signature.operations, operations)
+                && &signature.ownership == ownership
+        }) {
+            signature.occurrences.insert(occurrence);
+            return signature.id;
+        }
+        let id = self.fresh_effect_id();
+        signatures.push(SharedEffect {
+            operations: operations.clone(),
+            ownership: ownership.clone(),
+            id,
+            occurrences: HashSet::from([occurrence]),
+        });
+        id
+    }
+
     fn register_effect_declaration(&self, module: &str, value: &Value) {
         if let Some(id) = effect_value_id(value) {
-            self.effect_values
-                .borrow_mut()
-                .entry(id)
-                .or_default()
-                .declaration = Some((module.to_owned(), value.clone()));
+            let mut effects = self.effect_values.borrow_mut();
+            let resident = effects.entry(id).or_default();
+            resident.declarations.retain(|(owner, _)| owner != module);
+            resident
+                .declarations
+                .push((module.to_owned(), value.clone()));
         }
     }
 
@@ -1242,7 +1304,8 @@ impl Context {
     }
 
     pub(crate) fn remove_effect_state(&self, paths: &HashSet<String>) {
-        let removed = self.effect_ids_referencing(paths);
+        let mut removed = self.effect_ids_referencing(paths);
+        removed.extend(self.shared_effects.borrow_mut().remove_modules(paths));
         self.effect_ids
             .borrow_mut()
             .retain(|identity, _| !paths.iter().any(|path| identity.references_module(path)));
@@ -5293,8 +5356,27 @@ fn run_special_or_primitive(
     expected_result: Option<&Value>,
     application: ApplicationSite,
 ) -> Computation {
-    if name == "@effect" || name == "@effect.host" {
-        let Some(Value::Shape(operations)) = arguments.first() else {
+    if matches!(name, "@effect" | "@effect.host" | "@effect.shared") {
+        let (key, operation_argument) = if name == "@effect.shared" {
+            let [Value::Text(key), operations] = arguments.as_slice() else {
+                return Computation::error(Diagnostic::new(
+                    "BLOT_TYPE",
+                    "`@effect.shared` takes a nonempty text key and a shape of operation types.",
+                    span,
+                ));
+            };
+            if key.is_empty() {
+                return Computation::error(Diagnostic::new(
+                    "BLOT_TYPE",
+                    "`@effect.shared` requires a nonempty text key.",
+                    span,
+                ));
+            }
+            (Some(key.as_ref()), operations)
+        } else {
+            (None, &arguments[0])
+        };
+        let Value::Shape(operations) = operation_argument else {
             return Computation::error(Diagnostic::new(
                 "BLOT_TYPE",
                 format!("`{name}` takes a shape of operation types."),
@@ -5307,15 +5389,28 @@ fn run_special_or_primitive(
             Err(error) => return Computation::error(error),
         };
         let host = name == "@effect.host";
-        let value = Value::Effect {
-            id: context.effect_id(
+        let id = if let Some(key) = key {
+            context.shared_effect_id(
+                key,
+                &runtime,
+                application,
+                &operations,
+                &operation_ownership,
+            )
+        } else {
+            context.effect_id(
                 &runtime,
                 application,
                 &operations,
                 &operation_ownership,
                 host,
-            ),
-            name: "Effect".to_owned(),
+            )
+        };
+        let value = Value::Effect {
+            id,
+            name: key
+                .map(|key| format!("Shared:{key}"))
+                .unwrap_or_else(|| "Effect".to_owned()),
             operations,
             operation_ownership,
             host,
@@ -7054,6 +7149,94 @@ mod tests {
             first_id,
             effect_id_for_instance(&context, second, dependency_revision)
         );
+    }
+
+    #[test]
+    fn shared_effects_survive_until_their_last_occurrence_is_removed() {
+        let context = Context::default();
+        let first = Runtime::new(Phase::Comptime, "first.blot".to_owned());
+        let second = Runtime::new(Phase::Comptime, "second.blot".to_owned());
+        let operations = OrderedFields::default();
+        let ownership = BTreeMap::new();
+        let first_site =
+            ApplicationSite::expression(ModuleRevision::new("first.blot"), ExpressionId(1));
+        let second_site =
+            ApplicationSite::expression(ModuleRevision::new("second.blot"), ExpressionId(2));
+        let id = context.shared_effect_id("counter", &first, first_site, &operations, &ownership);
+        assert_eq!(
+            id,
+            context.shared_effect_id(
+                "counter",
+                &second,
+                second_site.clone(),
+                &operations,
+                &ownership
+            )
+        );
+        let effect = Value::Effect {
+            id,
+            name: "Shared:counter".to_owned(),
+            operations: operations.clone(),
+            operation_ownership: ownership.clone(),
+            host: false,
+        };
+        context.register_effect_declaration("first.blot", &effect);
+        context.register_effect_declaration("second.blot", &effect);
+        context.remove_effect_state(&HashSet::from(["second.blot".to_owned()]));
+        assert!(
+            context
+                .effect_value(&format!("effect:{id}:Shared:counter"))
+                .is_some()
+        );
+        assert_eq!(context.shared_effects.borrow().keys["counter"][0].id, id);
+        context.remove_effect_state(&HashSet::from(["first.blot".to_owned()]));
+        assert!(
+            context
+                .effect_value(&format!("effect:{id}:Shared:counter"))
+                .is_none()
+        );
+        assert!(context.shared_effects.borrow().keys.is_empty());
+        assert_ne!(
+            id,
+            context.shared_effect_id("counter", &second, second_site, &operations, &ownership)
+        );
+    }
+
+    #[test]
+    fn shared_effects_reclaim_invalidated_import_provenance() {
+        let context = Context::default();
+        let dependency = ModuleRevision::new("dependency.blot");
+        let source = ApplicationSite::expression(dependency.clone(), ExpressionId(1));
+        let base = Runtime::new(Phase::Comptime, "dependency.blot".to_owned());
+        for importer in ["first.blot", "second.blot"] {
+            let runtime = enter_module_instance(
+                base.clone(),
+                dependency.clone(),
+                ApplicationSite::expression(ModuleRevision::new(importer), ExpressionId(1)),
+            );
+            context.shared_effect_id(
+                "counter",
+                &runtime,
+                source.clone(),
+                &OrderedFields::default(),
+                &BTreeMap::new(),
+            );
+        }
+        assert_eq!(
+            context.shared_effects.borrow().keys["counter"][0]
+                .occurrences
+                .len(),
+            2
+        );
+        context.remove_effect_state(&HashSet::from(["first.blot".to_owned()]));
+        assert_eq!(
+            context.shared_effects.borrow().keys["counter"][0]
+                .occurrences
+                .len(),
+            1
+        );
+        context.remove_effect_state(&HashSet::from(["second.blot".to_owned()]));
+        assert!(context.shared_effects.borrow().keys.is_empty());
     }
 
     #[test]
