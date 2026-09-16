@@ -3156,13 +3156,29 @@ and result. The relationship includes array elements, matching constructor
 payloads, and resource payloads. Passing those values to the host preserves the
 checked aggregate type, including every admitted constructor.
 
-Ordinary effects are generative by semantic occurrence. Two written calls of an
-effect-producing function create distinct effect values even when their
-arguments print alike, while aliasing one result preserves its identity.
+Effects created by `@effect` are generative by semantic occurrence. Two written
+calls of an effect-producing function create distinct effect values even when
+their arguments print alike, while aliasing one result preserves its identity.
 Re-evaluating the same written occurrence in the same source and dependency
 revision recovers that occurrence's identity. A changed operation signature,
 source revision, observable dependency revision, or module-import occurrence
 creates a different identity.
+
+`@effect.shared key operations` constructs a source effect identified by a
+nonempty compile-time text key and its complete normalized operation contract.
+The same key and contract yield the same effect across factory calls and module
+imports, regardless of the local binding names. Operation types compare exactly,
+including alpha-equivalence of quantified variables. A different key, operation
+type, ownership contract, or suspension contract denotes a different effect. Use
+qualified keys to distinguish independently defined interfaces.
+
+Shared effects use ordinary source handlers and effect inference. Sharing an
+effect identity creates no global state or host authority: separate handlers can
+supply separate state for the same interface. Imports still create distinct
+module instances, and their initialization behavior is unchanged. Both shared
+and generative source effects must be handled before the module boundary.
+`examples/shared_effects.blot` demonstrates independently constructed interfaces
+handled by one provider.
 
 Projecting an operation from an effect and calling it performs that operation:
 
@@ -3411,17 +3427,18 @@ Everything not listed here belongs in source, normally the prelude.
 
 ### 13.1 Control, files, and effects
 
-| primitive      | meaning                                                                   |
-| -------------- | ------------------------------------------------------------------------- |
-| `@include`     | parse a dependency-tracked file at compile time                           |
-| `@json.parse`  | decode JSON under an explicit compile-time inference policy               |
-| `@effect`      | create a fresh source effect from operation types                         |
-| `@effect.host` | create a fresh host effect                                                |
-| `@handle`      | discharge one effect from a nullary computation                           |
-| `@forall`      | evaluate a type function with a fresh rigid variable                      |
-| `@satisfies`   | refine an open value by a type, or prove its closed type with a predicate |
-| `@fail`        | refuse compile-time evaluation with a diagnostic                          |
-| `@panic`       | trap with a text message                                                  |
+| primitive        | meaning                                                                   |
+| ---------------- | ------------------------------------------------------------------------- |
+| `@include`       | parse a dependency-tracked file at compile time                           |
+| `@json.parse`    | decode JSON under an explicit compile-time inference policy               |
+| `@effect`        | create a fresh source effect from operation types                         |
+| `@effect.host`   | create a fresh host effect                                                |
+| `@effect.shared` | construct a source effect from a shared text key and operation contract   |
+| `@handle`        | discharge one effect from a nullary computation                           |
+| `@forall`        | evaluate a type function with a fresh rigid variable                      |
+| `@satisfies`     | refine an open value by a type, or prove its closed type with a predicate |
+| `@fail`          | refuse compile-time evaluation with a diagnostic                          |
+| `@panic`         | trap with a text message                                                  |
 
 ### 13.2 Numeric and text operations
 
