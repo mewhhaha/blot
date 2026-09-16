@@ -1,0 +1,31 @@
+diff --git a/compiler/src/typecheck.rs b/compiler/src/typecheck.rs
+index 8c2d9a4d7..d3867268a 100644
+--- a/compiler/src/typecheck.rs
++++ b/compiler/src/typecheck.rs
+@@ -13292,11 +13292,10 @@ fn comparison_refinements(
+     let (projection, witness) =
+         if let Some(value) = integer_refinement_witness(module, right, environment, values) {
+             (expression_field_path(module, left)?, value)
+-        } else if let Some(value) = integer_refinement_witness(module, left, environment, values) {
++        } else {
++            let value = integer_refinement_witness(module, left, environment, values)?;
+             orderings = mirror_orderings(&orderings);
+             (expression_field_path(module, right)?, value)
+-        } else {
+-            return None;
+         };
+     let original = refined_original_integer_type(checker, environment, &projection)?;
+     let accepted = ordering_type(&orderings, &witness);
+diff --git a/generated/language-health.json b/generated/language-health.json
+index 4e9dcdefc..fef58d19e 100644
+--- a/generated/language-health.json
++++ b/generated/language-health.json
+@@ -783,7 +783,7 @@
+   "hotspots": [
+     {
+       "path": "compiler/src/typecheck.rs",
+-      "lines": 18257
++      "lines": 18256
+     },
+     {
+       "path": "compiler/src/hir.rs",
