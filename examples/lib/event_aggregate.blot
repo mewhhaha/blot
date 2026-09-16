@@ -1,0 +1,59 @@
+open import "blot:prelude"
+
+// An event-sourced aggregate separates deciding what happened from folding an
+// accepted event back into state. The four type parameters keep state,
+// commands, events, and failures related at every call site.
+const Aggregate = fn (state, command, event, error) => {
+  .initial = state;
+  .decide = (state, command) -> Result ([event], error);
+  .evolve = (state, event) -> state;
+}
+
+const Execution = fn (state, event) => {
+  .state;
+  .events = [event];
+}
+
+const replay :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), [Event]) -> State))))
+const replay = fn (aggregate, events) => fold (events, aggregate.initial, aggregate.evolve)
+
+const execute :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), State, Command) -> Result (Execution (State, Event), Error)))))
+const execute = fn (aggregate, state, command) => case aggregate.decide (state, command) of
+  #Error error => Error error
+  #Ok events => Ok {
+    .state = fold (events, state, aggregate.evolve);
+    .events;
+  }
+
+const ProductCommand = fn (left, right) => #Left left | #Right right
+const ProductEvent = fn (left, right) => #Left left | #Right right
+const ProductError = fn (left, right) => #Left left | #Right right
+
+const product :: @forall (fn LeftState => @forall (fn LeftCommand => @forall (fn LeftEvent => @forall (fn LeftError => @forall (fn RightState => @forall (fn RightCommand => @forall (fn RightEvent => @forall (fn RightError => (Aggregate (LeftState, LeftCommand, LeftEvent, LeftError), Aggregate (RightState, RightCommand, RightEvent, RightError)) -> Aggregate ((LeftState, RightState), ProductCommand (LeftCommand, RightCommand), ProductEvent (LeftEvent, RightEvent), ProductError (LeftError, RightError))))))))))
+const product = fn (left, right) => {
+  .initial = (left.initial, right.initial);
+  .decide = fn (state, command) => case command of
+    #Left command => case left.decide (state.0, command) of
+      #Error error => Error (#Left error)
+      #Ok events => Ok (map (events, fn event => #Left event))
+
+    #Right command => case right.decide (state.1, command) of
+      #Error error => Error (#Right error)
+      #Ok events => Ok (map (events, fn event => #Right event))
+  ;
+  .evolve = fn (state, event) => case event of
+    #Left event => (left.evolve (state.0, event), state.1)
+    #Right event => (state.0, right.evolve (state.1, event))
+  ;
+}
+
+return {
+  .Aggregate;
+  .Execution;
+  .replay;
+  .execute;
+  .ProductCommand;
+  .ProductEvent;
+  .ProductError;
+  .product;
+}

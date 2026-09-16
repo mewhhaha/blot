@@ -1773,3 +1773,28 @@ that signature when used as a value, including immediate re-export. Direct
 application is not required to recover its parameter, result, or effect types.
 Polymorphic signatures instantiate at the use site; unresolved attached members
 retain their existing specialization obligations.
+
+### Generic argument diagnostic provenance
+
+An imported closure's compile-time argument-pattern mismatch remains a source
+diagnostic. When it propagates through a non-synthetic application, the checker
+reports the caller's argument span and preserves the original module and span in
+its context. This changes neither pattern acceptance nor the inferred type; it
+must not relabel target refusals or compiler invariants as source errors.
+
+### Preserving checked application results
+
+A higher-order application's result selection must not freeze an unresolved
+numeric literal as bottom. Argument constraints may settle a numeric literal
+before result selection only when exactly one representation is admissible.
+Candidate probes remain transactional; multiple admissible representations leave
+the literal pending until the enclosing expected type or the existing defaulting
+boundary resolves it.
+
+An explicitly quantified result of a checked function is retained as that result
+scheme, not constrained into a fresh monotype hole. A plain binding preserves
+this closed scheme even when closure capture rechecking produces a less
+informative monotype. This preserves an already checked Rank-N result; it does
+not add impredicative inference or invent a polymorphic type from a monotype.
+Source argument checking, effect accumulation, and residual validation still run
+before the result is published.
