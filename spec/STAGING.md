@@ -187,8 +187,8 @@ semantic identity.
 
 ### 5.1 Ordinary effects
 
-Source effects created by `@effect` are generative. Evaluating a declaration allocates
-under:
+Source effects created by `@effect` are generative. Evaluating a declaration
+allocates under:
 
 ```text
 (module instance, declaration node, compile-time scope, signature)

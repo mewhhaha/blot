@@ -7,6 +7,7 @@ export const projectionDestructuring: LintRule = {
   name: "projection-destructuring",
   code: "BLOT_LINT_PROJECTION_DESTRUCTURING",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       module: ({ node }) =>

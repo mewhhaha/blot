@@ -5,6 +5,7 @@ export const publicPrimitive: LintRule = {
   name: "public-primitive",
   code: "BLOT_LINT_PUBLIC_PRIMITIVE",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression({ node }) {

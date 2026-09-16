@@ -11,6 +11,7 @@ export const stableShadowing: LintRule = {
   name: "stable-shadowing",
   code: "BLOT_LINT_STABLE_SHADOWING",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     const nestedControlBindings = new Set<string>();
     collectNestedControlBindings(context.cst, false, nestedControlBindings);

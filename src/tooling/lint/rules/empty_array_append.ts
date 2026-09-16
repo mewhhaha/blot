@@ -6,6 +6,7 @@ export const emptyArrayAppend: LintRule = {
   name: "empty-array-append",
   code: "BLOT_LINT_EMPTY_ARRAY_APPEND",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression(path) {
