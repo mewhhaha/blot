@@ -21,37 +21,47 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Capture exact sources and check results
+      - name: Capture exact sources, review feedback, and check results
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p repair-snapshot
-          gh api 'repos/mewhhaha/blot/pulls?state=open&per_page=100' > repair-snapshot/prs.json
+          gh api 'repos/mewhhaha/blot/pulls?state=all&sort=created&direction=desc&per_page=100' > repair-snapshot/prs.json
           gh api repos/mewhhaha/blot/git/ref/heads/main > repair-snapshot/main.json
           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           python3 - <<'PY'
-          import gzip, json, pathlib, subprocess
+          import concurrent.futures, gzip, json, pathlib, subprocess
           root = pathlib.Path('repair-snapshot')
           prs = json.loads((root / 'prs.json').read_text())
-          statuses = {}
-          for pr in prs:
+          selected = [pr for pr in prs if 122 <= pr['number'] <= 164]
+          def api(endpoint):
+              return json.loads(subprocess.check_output(['gh', 'api', endpoint]))
+          def inspect(pr):
+              number = pr['number']
               sha = pr['head']['sha']
-              subprocess.run(['git', 'cat-file', '-e', sha + '^{commit}'], check=True)
-              subprocess.run(['git', 'update-ref', 'refs/heads/snapshot/pr-' + str(pr['number']), sha], check=True)
-              endpoint = 'repos/mewhhaha/blot/actions/runs?head_sha=' + sha + '&per_page=30'
-              runs = json.loads(subprocess.check_output(['gh', 'api', endpoint]))
-              statuses[str(pr['number'])] = [{k: run.get(k) for k in ('id', 'name', 'status', 'conclusion', 'head_sha', 'html_url')} for run in runs['workflow_runs']]
-              if pr['number'] == 161:
-                  for run in runs['workflow_runs']:
+              subprocess.run(['git', 'fetch', '--no-tags', 'origin', 'refs/pull/' + str(number) + '/head:refs/heads/snapshot/pr-' + str(number)], check=True)
+              runs = api('repos/mewhhaha/blot/actions/runs?head_sha=' + sha + '&per_page=30')['workflow_runs']
+              (root / ('pr-' + str(number) + '-comments.json')).write_text(json.dumps(api('repos/mewhhaha/blot/issues/' + str(number) + '/comments?per_page=100'), indent=2) + '\n')
+              (root / ('pr-' + str(number) + '-reviews.json')).write_text(json.dumps(api('repos/mewhhaha/blot/pulls/' + str(number) + '/reviews?per_page=100'), indent=2) + '\n')
+              (root / ('pr-' + str(number) + '-review-comments.json')).write_text(json.dumps(api('repos/mewhhaha/blot/pulls/' + str(number) + '/comments?per_page=100'), indent=2) + '\n')
+              if pr['state'] == 'open':
+                  for run in runs:
                       if run['conclusion'] != 'failure':
                           continue
-                      jobs = json.loads(subprocess.check_output(['gh', 'api', run['jobs_url']]))
+                      jobs = api(run['jobs_url'])
+                      (root / ('pr-' + str(number) + '-jobs-' + str(run['id']) + '.json')).write_text(json.dumps(jobs, indent=2) + '\n')
                       for job in jobs['jobs']:
                           if job['conclusion'] == 'failure':
-                              log = subprocess.check_output(['gh', 'api', '--allow-escape-sequences', 'repos/mewhhaha/blot/actions/jobs/' + str(job['id']) + '/logs'])
-                              (root / ('failure-' + str(job['id']) + '.log.gz')).write_bytes(gzip.compress(log))
+                              try:
+                                  log = subprocess.check_output(['gh', 'api', '--allow-escape-sequences', 'repos/mewhhaha/blot/actions/jobs/' + str(job['id']) + '/logs'], stderr=subprocess.PIPE)
+                                  (root / ('pr-' + str(number) + '-failure-' + str(job['id']) + '.log.gz')).write_bytes(gzip.compress(log))
+                              except subprocess.CalledProcessError as exc:
+                                  (root / ('pr-' + str(number) + '-log-error-' + str(job['id']) + '.txt')).write_bytes(exc.stderr)
+              return str(number), [{k: run.get(k) for k in ('id', 'name', 'status', 'conclusion', 'head_sha', 'html_url')} for run in runs]
+          with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+              statuses = dict(pool.map(inspect, selected))
           (root / 'statuses.json').write_text(json.dumps(statuses, indent=2) + '\n')
           PY
           git bundle create repair-snapshot/repair-sources.bundle --all
