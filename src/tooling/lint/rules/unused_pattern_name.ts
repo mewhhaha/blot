@@ -11,6 +11,7 @@ export const unusedPatternName: LintRule = {
   name: "unused-pattern-name",
   code: "BLOT_LINT_UNUSED_PATTERN_NAME",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     const reported = new Set<string>();
     return {

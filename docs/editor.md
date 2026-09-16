@@ -60,19 +60,41 @@ identifiers and does not claim that a generated or dynamic name has a stable
 source location. These features use the same resident analysis and syntax
 revision as diagnostics and hover.
 
-LSP requests run through an explicit host queue. `$/cancelRequest` removes work
-that has not reached the compiler; cancellation or a newer document revision
-marks an in-flight synchronous Wasm result stale and discards it. The compiler
-does not yet run in a terminable worker, so this is not preemptive interruption
-of a Wasm call. Document close is a queue barrier: prior requests finish or are
-discarded, then the server releases the document root and clears its overlay.
-Every completed request releases both its document tracking and cancellation
-state, including requests cancelled before dispatch. A cancellation arriving
-after completion is ignored and cannot cancel a later request reusing that ID.
-Shared dependencies remain resident while another open root reaches them, and
-closing a standalone unsaved document does not require a file on disk. A closed
-overlay still reached by another root must rebind that root to disk; the close
-reports any disk-load failure.
+LSP requests run through a coordinator with two lanes. Text synchronization
+applies immediately in received order, while requests flow into the syntax lane
+(formatting only — the one request that never touches the compiler) or the
+semantic lane (every other request and diagnostics), one active job per worker
+host. Formatting carries a deadline, diagnostics keep one latest debounced job
+per document, and shutdown drains the lanes before exit. `$/cancelRequest`
+settles a pending request as cancelled; a newer document revision settles
+in-flight work as content-modified instead of answering against stale text.
+Overload, crashes, and backend failures settle documented errors rather than
+hanging or returning silent empty results. A cancellation arriving after
+completion is ignored and cannot cancel a later request reusing that ID.
+
+The shipped entries run worker-backed: one thread per lane, so analysis blocks
+only its own thread and formatting never waits on the compiler. Deno workers
+through `src/deno/lsp_worker_host.ts` and Node worker threads through
+`src/node/lsp_worker_host.ts`, with the syntax and semantic worker entries
+beside them under `src/lsp/workers/`. Workers run one job at a time per thread;
+the semantic worker owns its compiler replica, and document synchronization
+reaches it through priority lane jobs, so the replica never serves a revision
+the coordinator has moved past. The syntax worker is compiler-free by
+construction: format jobs carry their own text and need no service replica. A
+worker that fails to boot rejects loudly through the lane startup path; there is
+no silent inline fallback. Inline hosts remain for tests and embedders that
+inject their own lanes.
+
+Closing a document invalidates its pending requests, drops its lane work,
+releases its root, and clears its overlay and diagnostics. Shared dependencies
+remain resident while another open root reaches them, and closing a standalone
+unsaved document does not require a file on disk.
+
+The server advertises incremental text sync with open/close and save
+notifications, definition, type definition, references, rename, hover,
+completion (`.` and `#` triggers), signature help, inlay hints, document and
+workspace symbols, document formatting, and resolving code actions (`quickfix`,
+`refactor.rewrite`, `source.fixAll.blot`).
 
 Hover is broader than definition lookup. A value hover shows its full inferred
 signature and, for a source-local binding, the declaration that introduced it.
@@ -110,8 +132,15 @@ expand when that removes an overlong line. It also removes trailing whitespace,
 writes LF line endings, leaves one final newline, and removes parentheses made
 redundant by postfix precedence or left-associative application while retaining
 groupings that affect the AST. Comments remain source text in the gaps between
-Baba CST nodes, so formatting cannot discard them. Use it from the command line
-with:
+Baba CST nodes, so formatting cannot discard them.
+
+The style is fixed: 80 columns, two-space indentation, LF line endings, one
+final newline. Formatting options are validated — mistyped values fail the
+request as invalid params — but never override the house style. Every repository
+formatting path (the `fmt` CLI, the repo format scripts, and the LSP request)
+runs the one `formatSource` engine with identical style resolution, and a parity
+test proves the CLI and the LSP emit identical bytes for the same input. Use it
+from the command line with:
 
 ```bash
 just format source.blot
@@ -119,6 +148,39 @@ just format-check source.blot
 just lint-check source.blot
 just lint-fix source.blot
 ```
+
+The formatter runs a fixed-cost pipeline: one buffer snapshot feeds a typed
+formatting IR, the IR prints through a document algebra, and changed output is
+validated with exactly one output parse. There is no rewrite/reparse loop —
+layout decisions compose bottom-up, and no production helper invokes the
+frontend. Changed output costs at most two frontend invocations (one when the
+caller supplies a matching snapshot); unchanged output returns without an output
+parse. Validation is a typed invariant failure, never unvalidated changed text:
+the printed output must lower to the same representation as the input, modulo
+spans, empty-block collapse, and compiler-minted name suffixes. The corpus proof
+formats every accepted file under `examples/`, `case-studies/`, and
+`src/prelude/` twice and requires byte-stability plus representation equality;
+generated round-trip properties cover idempotence, snapshot-independence, and
+trivia preservation.
+
+Snapshots and caches are content-keyed. A buffer snapshot carries its source
+bytes plus a frontend revision key, so a stale or foreign snapshot parses fresh
+instead of serving wrong results. The language service keeps one cache per open
+document plus a workspace epoch and dependency closure, so a stale request can
+never regress a newer revision. Lint detection runs against staged overlays
+without loading; quick-fix candidates validate in an isolated scratch session
+that leaves live diagnostics untouched, and clients without `codeAction/resolve`
+receive eagerly validated edits for at most 32 deterministically ordered
+candidates per request.
+
+Performance is gated, not hoped for. `gate:editor` asserts exact frontend
+invocation counts (deterministic, immune to machine speed) plus wall-clock smoke
+caps with large headroom. Burst responsiveness — every request settles exactly
+once while the semantic lane is held, and shutdown always settles — is proven by
+deterministic scheduler tests, not by timing. The scheduled performance workflow
+records wall-clock formatter and language server medians as observations; only
+formatting round-trips are timed on the server side, because semantic timing
+depends on compiler-cache warmth.
 
 `lint-check` reports findings without changing the file. `lint-fix` selects
 non-overlapping rewrites, checks each combined revision with the Rust compiler,
@@ -292,6 +354,71 @@ since a same-typed shadowed member may have different behavior.
 
 Re-running replaces the managed block rather than appending to it. Removing blot
 from Helix means deleting that one delimited region.
+
+The managed block points the server at
+`deno run --allow-read <checkout>/src/cli.ts lsp`, keeps `auto-format = true`,
+and sets no timeout override; the installer tests pin all three. An end-to-end
+test spawns that exact command over stdio, drives a burst session, and proves it
+settles every request, emits protocol frames only, initializes no GPU device,
+invokes no native toolchain, and exits cleanly.
+
+## Entry points, distributions, and checks
+
+The Deno CLI (`src/cli.ts`) serves `fmt` and `lsp`; the Node CLI
+(`src/node/cli.ts`, the `blot` binary) serves `format` and `lsp` with the same
+engine behind them. Both formatting spellings run `formatSource` with default
+controls, so bytes are identical across runtimes; both `lsp` commands run the
+coordinator over stdio with the inline service.
+
+Two distributions ship the editor runtime. The JSR package publishes the
+TypeScript sources plus the generated parser plan, parser Wasm, compiler Wasm,
+and prelude snapshot; it deliberately excludes tests and `src/node/`, which is
+npm-only. The npm tarball ships the compiled `dist/` tree, including the worker
+hosts, the Deno and Node worker entries, and the same generated inputs.
+Distribution tests fail when any required path is missing, and the npm check
+additionally boots a worker thread and the built `format` and `lsp` commands
+from the packed, isolated install.
+
+Run the editor suites explicitly (exact file lists, no ambient globs):
+
+```bash
+pnpm test:formatter   # formatter, properties, snapshots, text primitives, CLI/LSP parity
+pnpm test:lsp         # server, soak, services, workspace, lint, installer, distributions
+pnpm gate:editor      # formatter latency and invocation budgets
+pnpm benchmark:formatter --only arrays-20 --samples 1
+pnpm benchmark:lsp --out /tmp/lsp-bench.json
+```
+
+The same five commands exist as `deno task` entries with the same file lists;
+the `pnpm test:lsp` script additionally runs the Node worker-host and Node CLI
+suites, which need the Node runner. CI runs the suites and the gate on every
+push, and the scheduled performance workflow records both benchmarks.
+
+## Degradation and known limitations
+
+Value providers degrade on broken source inputs and stay loud on broken
+machinery. A check diagnostic, an unloadable module, a corrupt package capsule,
+or a missing filesystem input yields degraded results — hover, signature help,
+and definition answer null; completion, inlay hints, document symbols, and
+references answer empty; code actions answer empty (the unreachable-statement
+fallback still applies on broken buffers); and rename refuses. Anything else (a
+missing compiler artifact, an invariant break) fails the request explicitly.
+Formatting never degrades: it is the toolchain canary, so a broken installation
+still surfaces on the next format.
+
+Three boundaries keep HEAD behavior deliberately. Diagnostics and workspace
+symbols propagate a missing-input failure instead of degrading: there is no
+honest degrade target — an empty publish would clear real diagnostics without
+evidence, and the project forbids synthetic span-zero diagnostics — so the
+last-good publish stands and the coordinator settles an explicit error.
+Attribute the failure to its import span before changing this. The eager
+32-candidate validation cap has no overflow marker: over-budget candidates are
+withheld in deterministic span order, and resolve-capable clients are unaffected
+because they defer every candidate. And stale resolves stay asymmetric: a
+single-fix resolve on a moved revision returns empty edits (the candidate may
+simply be gone), while a fix-all resolve on a moved revision errors asking for
+fresh actions (the whole action is void and a silent no-op would lie about an
+explicit command).
 
 ## Two targets, one grammar
 

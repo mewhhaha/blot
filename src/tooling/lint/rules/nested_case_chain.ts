@@ -25,6 +25,7 @@ export const nestedCaseChain: LintRule = {
   name: "nested-case-chain",
   code: "BLOT_LINT_NESTED_CASE_CHAIN",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     const covered = new Set<string>();
     return {
