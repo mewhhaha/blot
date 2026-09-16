@@ -286,7 +286,7 @@ impl CompilerSession {
                 matches!(
                     expression,
                     Expression::Intrinsic { name, .. }
-                        if matches!(name.as_str(), "@effect" | "@effect.host")
+                        if matches!(name.as_str(), "@effect" | "@effect.host" | "@effect.shared")
                 )
             });
         let result_template = use_cached_interface.then(|| {
@@ -526,7 +526,7 @@ impl CompilerSession {
                     matches!(
                         expression,
                         Expression::Intrinsic { name, .. }
-                            if matches!(name.as_str(), "@effect" | "@effect.host")
+                            if matches!(name.as_str(), "@effect" | "@effect.host" | "@effect.shared")
                     )
                 })
                 && loaded.imports.values().all(|dependency| {

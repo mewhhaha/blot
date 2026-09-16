@@ -1,0 +1,16 @@
+open import "blot:prelude"
+
+const counter = fn () => @effect.shared "example.counter.read" {
+  .get = Unit -> Int;
+}
+const First = counter ()
+const Second = counter ()
+
+let run = fn (count :: Int) => @handle (
+  First,
+  fn () => Second.get (),
+  {
+    .get = fn ((), ?resume) => resume count;
+  }
+)
+return { .run; }

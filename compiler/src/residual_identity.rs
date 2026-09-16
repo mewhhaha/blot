@@ -1073,8 +1073,10 @@ impl<'a> Builder<'a> {
 }
 
 fn portable_primitive(name: &str) -> bool {
-    !matches!(name, "@effect" | "@effect.host" | "@handle" | "@import")
-        && !name.starts_with("@continuation.")
+    !matches!(
+        name,
+        "@effect" | "@effect.host" | "@effect.shared" | "@handle" | "@import"
+    ) && !name.starts_with("@continuation.")
 }
 
 #[cfg(test)]

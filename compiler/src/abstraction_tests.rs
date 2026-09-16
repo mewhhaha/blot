@@ -43,6 +43,110 @@ fn check(source: &str) -> serde_json::Value {
 }
 
 #[test]
+fn shared_effects_use_the_key_and_complete_operation_contract() {
+    with_compiler(
+        r#"open import "blot:prelude"
+const First = @effect.shared "test.counter" { .get = Unit -> Int; }
+const Second = @effect.shared "test.counter" { .get = Unit -> Int; }
+const OtherKey = @effect.shared "test.other" { .get = Unit -> Int; }
+const OtherType = @effect.shared "test.counter" { .get = Unit -> Text; }
+const Suspending = @effect.shared "test.counter" { .get = Effect.suspends (Unit -> Int); }
+const Owned = @effect.shared "test.counter" { .get = Effect.produces (Unit -> Int); }
+const Fresh = @effect { .get = Unit -> Int; }
+const FreshAgain = @effect { .get = Unit -> Int; }
+const Generic = @effect.shared "test.identity" { .apply = @forall (fn a => a -> a); }
+const RenamedGeneric = @effect.shared "test.identity" { .apply = @forall (fn b => b -> b); }
+return @type.equal First Second
+  && not (@type.equal First OtherKey)
+  && not (@type.equal First OtherType)
+  && not (@type.equal First Suspending)
+  && not (@type.equal First Owned)
+  && not (@type.equal First Fresh)
+  && not (@type.equal Fresh FreshAgain)
+  && @type.equal Generic RenamedGeneric
+"#,
+        |session| {
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let evaluated = session.evaluate_module("main.blot");
+            assert_eq!(evaluated["display"], "#True", "{evaluated}");
+            session.compile_module("main.blot").unwrap();
+        },
+    );
+}
+
+#[test]
+fn shared_effects_reject_invalid_keys_and_unhandled_operations() {
+    for source in [
+        "const Read = @effect.shared \"\" { .get = @type.unit -> @type.int; }\nreturn Read",
+        "const Read = @effect.shared 42 { .get = @type.unit -> @type.int; }\nreturn Read",
+        "const Read = @effect.shared \"test.unhandled\" { .get = @type.unit -> @type.int; }\nreturn Read.get ()",
+    ] {
+        let checked = check(source);
+        assert_eq!(checked["ok"], false, "{checked}");
+        assert!(
+            matches!(
+                checked["diagnostic"]["code"].as_str(),
+                Some("BLOT_TYPE" | "BLOT_TYPE_ERROR" | "BLOT_UNHANDLED_EFFECT")
+            ),
+            "{checked}"
+        );
+    }
+}
+
+#[test]
+fn shared_effects_connect_independent_imports_and_snapshots() {
+    with_compiler("return ()", |mut session| {
+        let left = r#"const Read = @effect.shared "test.shared.read" { .get = @type.unit -> @type.int; }
+return { .Read; .get = Read.get; }
+"#;
+        let right = left.replace("Read", "ReadElsewhere");
+        for (path, source) in [("left.blot", left), ("right.blot", right.as_str())] {
+            session
+                .add_source(path.into(), source.encode_utf16().collect())
+                .unwrap();
+            session
+                .configure_module(path, BTreeMap::new(), BTreeMap::new())
+                .unwrap();
+        }
+        let caller = r#"const Left = import "./left.blot"
+const Right = import "./right.blot"
+return @handle (Left.Read, fn () => Right.get (), {
+  .get = fn ((), ?resume) => resume 42;
+})
+"#;
+        session
+            .add_source("caller.blot".into(), caller.encode_utf16().collect())
+            .unwrap();
+        session
+            .configure_module(
+                "caller.blot",
+                BTreeMap::from([
+                    ("./left.blot".into(), "left.blot".into()),
+                    ("./right.blot".into(), "right.blot".into()),
+                ]),
+                BTreeMap::new(),
+            )
+            .unwrap();
+        for use_snapshots in [false, true] {
+            if use_snapshots {
+                for path in ["left.blot", "right.blot"] {
+                    let snapshot = session.module_snapshot(path).unwrap();
+                    session
+                        .install_trusted_module_snapshot(path, &snapshot)
+                        .unwrap();
+                }
+            }
+            let checked = session.check_module("caller.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let evaluated = session.evaluate_module("caller.blot");
+            assert_eq!(evaluated["display"], "42", "{evaluated}");
+            session.compile_module("caller.blot").unwrap();
+        }
+    });
+}
+
+#[test]
 fn traversal_specialization_rejects_a_changed_element_carrier() {
     with_compiler(
         "open import \"blot:prelude\"\nconst T = import \"traversal.blot\"\nconst values :: [Text]\nconst values = [\"a\", \"b\"]\nreturn T.over (T.each, values, fn _ => 1)\n",

@@ -250,6 +250,13 @@ async function formatOneStatementValue(
   collectRules(root, "binding", statements);
   collectRules(root, "result", statements);
   statements.sort((left, right) => left.span.start - right.span.start);
+  // Every candidate in this pass shares one source/CST snapshot. Recomputing
+  // structural indentation for each signature makes large modules quadratic.
+  let signatureLayout: {
+    lineStarts: readonly number[];
+    sourceLines: readonly string[];
+    indentedLines: readonly string[];
+  } | undefined;
   for (const statement of statements) {
     let introducer = directToken(statement, "return");
     if (statement.name === "signature") {
@@ -310,9 +317,16 @@ async function formatOneStatementValue(
       statement.name === "signature" && !valueStartsOnIntroducerLine &&
       valueIsMultiline
     ) {
-      const lineStarts = sourceLineStarts(source);
-      const sourceLines = source.split("\n");
-      const indentedLines = structurallyIndentedLines(source, root, lineStarts);
+      if (signatureLayout === undefined) {
+        const lineStarts = sourceLineStarts(source);
+        signatureLayout = {
+          lineStarts,
+          sourceLines: source.split("\n"),
+          indentedLines: structurallyIndentedLines(source, root, lineStarts),
+        };
+      }
+      const { lineStarts, indentedLines } = signatureLayout;
+      const sourceLines = [...signatureLayout.sourceLines];
       const startsAtLine = lineAtOffset(lineStarts, statement.span.start);
       const endsAtLine = lineAtOffset(
         lineStarts,
