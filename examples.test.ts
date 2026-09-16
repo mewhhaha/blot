@@ -448,7 +448,12 @@ const PENDING: Record<
   string,
   | { code: string; stage: "check" | "run" }
   | { type: string; stage: "type" }
-> = {};
+> = {
+  "versioned_nominal_migration": {
+    "stage": "type",
+    "type": "⊥",
+  },
+};
 
 async function blotFiles(directory: string): Promise<string[]> {
   const found: string[] = [];

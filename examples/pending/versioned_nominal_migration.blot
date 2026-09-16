@@ -1,0 +1,30 @@
+open import "blot:prelude"
+
+// Pain point: sealed nominal versions are the natural zero-tag representation
+// for a schema migration, but the checker currently loses this exact source
+// requirement through staged specialization. Keep this in `pending/` until the
+// checker either rejects the wrong version or publishes a sound non-bottom type.
+const Migration = fn (from, to, error) => from -> Result (to, error)
+const make = fn (from, to, error) => fn run => do:
+  let checked = @satisfies run (Migration (from, to, error))
+  return fn input => checked (@satisfies input from)
+
+const Payload = { .endpoint = Text; .timeout = Int; .retry_limit = Int; }
+const V1 =
+  seal ("ConfigV1", Payload) <+ {
+    .of = fn value => seal ("ConfigV1", value);
+  }
+const V2 =
+  seal ("ConfigV2", Payload) <+ {
+    .of = fn value => seal ("ConfigV2", value);
+  }
+const Error = #Invalid Int
+
+const migrate =
+  make (V1, V2, Error) (fn value => Ok (V2.of (unseal value)))
+
+return migrate (V2.of {
+  .endpoint = "api";
+  .timeout = 10;
+  .retry_limit = 3;
+})

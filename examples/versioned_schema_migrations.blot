@@ -1,0 +1,80 @@
+open import "blot:prelude"
+const M = import "./lib/versioned_migration.blot"
+
+// V1 and V2 intentionally carry the same structural record. Their tags encode
+// the semantic difference: `.timeout` is seconds in V1 and milliseconds in V2.
+// That relationship would be invisible if the two versions were bare records.
+const Payload = { .endpoint = Text; .timeout = Int; .retry_limit = Int; }
+const V1 = #V1 Payload
+const V2 = #V2 Payload
+
+const RetryLimit = range (1, 5)
+const V3Payload =
+  { .endpoint = Text; .timeout_ms = Int; .retry_limit = RetryLimit; }
+const V3 = #V3 V3Payload
+
+const SecondsError = #InvalidSeconds Int
+const RetryError = #InvalidRetryLimit Int
+const UpgradeError = #First SecondsError | #Second RetryError
+
+let seconds_to_millis :: M.Migration (V1, V2, SecondsError)
+let seconds_to_millis = fn source => case source of
+  #V1 value => do:
+    if value.timeout < 0 || value.timeout > 60:
+      return Error (#InvalidSeconds value.timeout)
+
+    return Ok (#V2 {
+      .endpoint = value.endpoint;
+      .timeout = value.timeout * 1000;
+      .retry_limit = value.retry_limit;
+    })
+
+let finalize :: M.Migration (V2, V3, RetryError)
+let finalize = fn source => case source of
+  #V2 value => do:
+    if value.retry_limit < 1 || value.retry_limit > 5:
+      return Error (#InvalidRetryLimit value.retry_limit)
+
+    return Ok (#V3 {
+      .endpoint = value.endpoint;
+      .timeout_ms = value.timeout;
+      .retry_limit = value.retry_limit;
+    })
+
+// `and_then` shares V2 between the first result and the second input. Reversing
+// the two migrations is therefore rejected before execution.
+let upgrade :: M.Migration (V1, V3, UpgradeError)
+let upgrade = M.and_then (seconds_to_millis, finalize)
+
+const Summary = { .status = Text; .timeout_ms = Int; .retry_limit = Int; }
+
+let summarize :: Result (V3, UpgradeError) -> Summary
+let summarize = fn result => case result of
+  #Ok (#V3 value) => {
+    .status = "ok";
+    .timeout_ms = value.timeout_ms;
+    .retry_limit = value.retry_limit;
+  }
+
+  #Error (#First (#InvalidSeconds value)) => {
+    .status = "seconds";
+    .timeout_ms = value;
+    .retry_limit = 0;
+  }
+
+  #Error (#Second (#InvalidRetryLimit value)) => {
+    .status = "retry";
+    .timeout_ms = 0;
+    .retry_limit = value;
+  }
+
+let run = fn payload => summarize (upgrade (#V1 payload))
+
+return {
+  .default = {
+    .valid = run { .endpoint = "api"; .timeout = 30; .retry_limit = 3; };
+    .invalid_seconds = run { .endpoint = "api"; .timeout = 90; .retry_limit = 3; };
+    .invalid_retry = run { .endpoint = "api"; .timeout = 30; .retry_limit = 8; };
+    .boundary = run { .endpoint = "api"; .timeout = 60; .retry_limit = 5; };
+  };
+}
