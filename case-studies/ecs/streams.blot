@@ -1,7 +1,8 @@
 open import "blot:prelude"
 
 
-const Iterator = fn (State, Element) => { .state = State; .step = State -> Option (Element, State); }
+const Iterator =
+  fn (State, Element) => { .state = State; .step = State -> Option (Element, State); }
 
 const choose = fn (source, select) => {
   .state = source.state;

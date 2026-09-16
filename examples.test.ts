@@ -448,7 +448,12 @@ const PENDING: Record<
   string,
   | { code: string; stage: "check" | "run" }
   | { type: string; stage: "type" }
-> = {};
+> = {
+  "record_edit_guarded_increment": {
+    "stage": "check",
+    "code": "BLOT_TYPE_ERROR",
+  },
+};
 
 async function blotFiles(directory: string): Promise<string[]> {
   const found: string[] = [];

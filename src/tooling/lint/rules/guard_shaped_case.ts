@@ -6,6 +6,7 @@ export const guardShapedCase: LintRule = {
   name: "guard-shaped-case",
   code: "BLOT_LINT_GUARD_SHAPED_CASE",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression(path) {

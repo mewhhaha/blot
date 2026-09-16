@@ -9,8 +9,8 @@ staged `field (Whole, name)` constructor computes one field's `Part` with
 
 That small relationship makes nesting fall out of ordinary function typing. An
 `Edit Limits` already has type `Limits -> Limits`, exactly the callback expected
-by the outer service `.limits` field's `modify`, so a nested edit lifts without a
-second optic/composition API. Refinements remain attached to each `Part`: the
+by the outer service `.limits` field's `modify`, so a nested edit lifts without
+a second optic/composition API. Refinements remain attached to each `Part`: the
 port editor accepts `1..65535`, the burst editor accepts `1..100`, and unrelated
 record edits cannot be sequenced by `then`. Unknown field names fail while the
 field descriptor is staged.
@@ -39,9 +39,9 @@ node --import tsx --test src/node/typed_record_edits.test.ts
 
 The focused rejection cases cover an out-of-range replacement, composition of
 edits for unrelated record schemas, and an unknown compile-time field name. The
-pending pressure case at
-`examples/pending/record_edit_guarded_increment.blot` records a separate
-language-design limitation: guarding `value < 100` narrows the input, but
-`value + 1` currently has type `Int` rather than a range-derived result. A
-redundant bounds check on the computed successor can recover the refinement;
-the supported example does not claim that range arithmetic postcondition today.
+pending pressure case at `examples/pending/record_edit_guarded_increment.blot`
+records a separate language-design limitation: guarding `value < 100` narrows
+the input, but `value + 1` currently has type `Int` rather than a range-derived
+result. A redundant bounds check on the computed successor can recover the
+refinement; the supported example does not claim that range arithmetic
+postcondition today.

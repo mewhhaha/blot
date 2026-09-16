@@ -16,7 +16,7 @@ const guardedIncrementPath =
   "examples/pending/record_edit_guarded_increment.blot";
 
 const principalType =
-  '{ .default = { .updated = { .host = Text; .port = 1..65535; .limits = { .burst = 1..100; .window_seconds = 1..3600 }; .note = #None | #Some Text }; .unchanged = { .host = Text; .port = 1..65535; .limits = { .burst = 1..100; .window_seconds = 1..3600 }; .note = #None | #Some Text }; .overridden_port = 9443; .max_port = 65535; .profile = { .name = Text; .active = #True | #False } } }';
+  "{ .default = { .updated = { .host = Text; .port = 1..65535; .limits = { .burst = 1..100; .window_seconds = 1..3600 }; .note = #None | #Some Text }; .unchanged = { .host = Text; .port = 1..65535; .limits = { .burst = 1..100; .window_seconds = 1..3600 }; .note = #None | #Some Text }; .overridden_port = 9443; .max_port = 65535; .profile = { .name = Text; .active = #True | #False } } }";
 
 const interfaceType = principalType.replace("#True | #False", "#False | #True");
 
@@ -50,7 +50,8 @@ test("typed record edits preserve schema-indexed field relationships", async () 
     assert.deepEqual(evaluated.writes, []);
     assert.equal(
       evaluated.display,
-      (await readFile("examples/expected/typed_record_edits.txt", "utf8")).trim(),
+      (await readFile("examples/expected/typed_record_edits.txt", "utf8"))
+        .trim(),
     );
     assert.equal(
       await runArtifact(await compiler.compile(examplePath)),

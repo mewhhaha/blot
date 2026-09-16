@@ -6,6 +6,7 @@ export const arrayFind: LintRule = {
   name: "array-find",
   code: "BLOT_LINT_ARRAY_FIND",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       concrete(rule) {
