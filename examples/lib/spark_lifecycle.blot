@@ -2,7 +2,8 @@ open import "blot:prelude"
 const Spark = import "blot:spark"
 const Clock = @effect.host { .tick = Effect.suspends (Int -> Int); }
 
-let run :: { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect, Clock }
+let run ::
+  { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect, Clock }
 let run = fn io => fn mode => do:
   let body :: Spark.Scope -> Int ~ { Spark.Effect, Clock }
   let body = fn scope => do:

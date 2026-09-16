@@ -5,6 +5,7 @@ export const selectiveOpen: LintRule = {
   name: "selective-open",
   code: "BLOT_LINT_SELECTIVE_OPEN",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     return {
       declaration({ node }) {

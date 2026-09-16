@@ -12802,6 +12802,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             curried(vec![value.clone(), checker.fresh()], value)
         }
         "@fail" | "@panic" => curried(vec![text], Type::Bottom),
+        "@effect.shared" => curried(vec![text, checker.fresh()], checker.fresh()),
         "@effect" | "@effect.host" | "@forall" | "@import" => {
             curried(vec![checker.fresh()], checker.fresh())
         }
