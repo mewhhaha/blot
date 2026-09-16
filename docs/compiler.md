@@ -205,6 +205,34 @@ canonical development revision. A host failure publishes neither the Rust
 candidate nor the host identity map, so retry starts from the previous committed
 pair.
 
+## Editor runtime
+
+The language server is a coordinator over two lanes and worker hosts; the full
+contract lives in [editor support](editor.md). The syntax lane serves formatting
+only — the one compiler-free request — and the semantic lane serves every other
+request and diagnostics, one active job per host. Text synchronization applies
+immediately; freshness gates at dispatch and at result arrival settle stale work
+as content-modified instead of answering against old text. A watchdog gives
+obsolete work a bounded grace before terminating and reconstructing its host;
+crashes fail the active job explicitly, hold the queue, resync open documents,
+and resume. The shipped entries run worker-backed by default — Deno workers and
+Node worker threads — so analysis blocks only its own thread; only the semantic
+replica owns a compiler, fed by priority sync jobs, while format jobs carry
+their own text to the compiler-free syntax worker. Inline hosts remain for tests
+and embedders that inject their own lanes.
+
+The formatter is fixed-cost and syntax-only: one buffer snapshot builds a
+formatting IR, the IR prints once, and changed output validates with a single
+output parse — at most two frontend invocations, one with a matching supplied
+snapshot. Output must lower to the same representation as the input or the
+pipeline throws a typed invariant failure. Snapshots carry a frontend revision
+key so stale or foreign snapshots parse fresh; content-keyed host caches reuse
+by content identity plus scope, never by revision. Lint detection runs against
+staged overlays without loading, and quick-fix candidates validate in an
+isolated scratch session. No editor path checks, evaluates, specializes, or
+emits: Rust/Wasm remains the only semantic implementation, and the editor never
+initializes WebGPU or a native toolchain.
+
 ## Conformance and benchmark
 
 `pnpm conformance` compares the Rust evaluator with emitted Wasm on the focused

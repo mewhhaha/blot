@@ -21,6 +21,7 @@ import {
   parseLintArguments,
 } from "./tooling/lint_command.ts";
 import { runLanguageServer } from "./lsp.ts";
+import { createDenoLspWorkerHost } from "./deno/lsp_worker_host.ts";
 
 const [command, ...rest] = Deno.args;
 
@@ -34,7 +35,13 @@ if (command === "lsp") {
     printUsage();
     Deno.exit(2);
   }
-  await runLanguageServer();
+  // Worker-backed lanes: analysis blocks only its own thread, so formatting
+  // never waits on the compiler. A worker that fails to boot rejects loudly
+  // through the lane startup path; there is no silent inline fallback.
+  await runLanguageServer(Deno.stdin.readable, Deno.stdout.writable, {
+    syntaxHost: createDenoLspWorkerHost("syntax"),
+    semanticHost: createDenoLspWorkerHost("semantic"),
+  });
   Deno.exit(0);
 }
 

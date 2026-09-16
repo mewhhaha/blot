@@ -16,6 +16,7 @@ export const equalityCase: LintRule = {
   name: "equality-case",
   code: "BLOT_LINT_EQUALITY_CASE",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     return {
       expression(path) {

@@ -47,5 +47,5 @@ node --import tsx --test src/node/shared_service_contracts.test.ts
 
 The focused suite checks canonical Blot formatting, type/effect closure, the
 evaluator golden, emitted-Wasm golden, and the three intentional rejections.
-`deno task verify:showcase` includes the supported executable in the repository's
-showcase index.
+`deno task verify:showcase` includes the supported executable in the
+repository's showcase index.

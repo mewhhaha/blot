@@ -6,6 +6,7 @@ export const identicalConditionalBranches: LintRule = {
   name: "identical-conditional-branches",
   code: "BLOT_LINT_IDENTICAL_CONDITIONAL_BRANCHES",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression(path) {
