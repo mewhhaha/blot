@@ -277,3 +277,9 @@ When a pending case is implemented, move it to the top-level catalog, add its
 golden value, and remove its entry from `PENDING` in `examples.test.ts`. When a
 trap becomes total by design, promote it the same way rather than weakening the
 expected diagnostic.
+
+### Checked subtyping witnesses
+
+[`typed_subtyping_witnesses.blot`](typed_subtyping_witnesses.blot) derives and
+composes checked no-op views for refined records and closed sums. See the
+[design and test instructions](typed_subtyping_witnesses.md).
