@@ -713,6 +713,130 @@ return (nested, called)
   assertEquals(formatted.source, source);
 });
 
+Deno.test("formatting drops applications in function and element position", async () => {
+  await assertStableFormatting(
+    `let nested = ((apply 1)) 2
+let paired = fold ((apply 1), seed)
+let single = ((1))
+return (nested, paired, single)
+`,
+    `let nested = apply 1 2
+let paired = fold (apply 1, seed)
+let single = 1
+return (nested, paired, single)
+`,
+  );
+});
+
+Deno.test("formatting keeps argument applications and suffixed heads", async () => {
+  await assertStableFormatting(
+    `let paired = fold (apply 1) seed
+let field = (read).Position
+return (paired, field)
+`,
+    `let paired = fold (apply 1) seed
+let field = (read).Position
+return (paired, field)
+`,
+  );
+});
+
+Deno.test("formatting keeps lambdas in argument and non-last element position", async () => {
+  await assertStableFormatting(
+    `let applied = apply (fn value => value)
+let paired = fold ((fn x => pair (x, 0)), seed)
+let fns = [(fn value => value), last]
+return (applied, paired, fns)
+`,
+    `let applied = apply (fn value => value)
+let paired = fold ((fn x => pair (x, 0)), seed)
+let fns = [(fn value => value), last]
+return (applied, paired, fns)
+`,
+  );
+});
+
+Deno.test("formatting drops lambdas as last elements and plain values", async () => {
+  await assertStableFormatting(
+    `let identity = (fn value => value)
+let fns = [first, (fn value => value)]
+return (identity, fns)
+`,
+    `let identity = fn value => value
+let fns = [first, fn value => value]
+return (identity, fns)
+`,
+  );
+});
+
+Deno.test("formatting indents a broken scrutinee closer with the case arms", async () => {
+  await assertStableFormatting(
+    `let result = case Slice.partition_range (
+  (!ranged),
+  1
+  ) of
+  #Partitioned updated => updated
+return result
+`,
+    `let result = case Slice.partition_range (
+  (!ranged),
+  1
+  ) of
+  #Partitioned updated => updated
+return result
+`,
+  );
+});
+
+Deno.test("formatting preserves file-leading comments", async () => {
+  await assertStableFormatting(
+    `// Leading comment.
+
+open import "blot:prelude"
+return 1
+`,
+    `// Leading comment.
+
+open import "blot:prelude"
+return 1
+`,
+  );
+});
+
+Deno.test("formatting nests suffix continuations below their head", async () => {
+  await assertStableFormatting(
+    `let projected = base
+  .value
+return projected
+`,
+    `let projected = base
+  .value
+return projected
+`,
+  );
+});
+
+Deno.test("formatting lays union arms flat inside a broken group", async () => {
+  await assertStableFormatting(
+    `const Error =
+  (
+    #Empty |
+    #Invalid Int |
+    #Overflow
+  )
+return Error
+`,
+    `const Error =
+  (
+    #Empty |
+    #Invalid Int |
+    #Overflow
+  )
+return Error
+`,
+  );
+});
+
 Deno.test("formatting indents scoped returns as statements", async () => {
   const source = `let result = do:
  if 1 == 1:
@@ -857,6 +981,17 @@ return (increment 2, fields.one, -42, text)
   );
 });
 
+Deno.test("formatting counts a trailing comment in the statement width", async () => {
+  // The array alone fits the statement width; with its trailing comment the
+  // joined line overflows, so the value moves as a whole instead of the
+  // statement and the value planners disagreeing forever.
+  const source =
+    "let   g2   =   [v6, 25911, v0, v2, 12291, v4, v7, v4, v6, v2, v0, 46225, v3] // trailing 2\nreturn g2\n";
+  const expected =
+    "let g2 =\n  [v6, 25911, v0, v2, 12291, v4, v7, v4, v6, v2, v0, 46225, v3] // trailing 2\nreturn g2\n";
+  await assertStableFormatting(source, expected);
+});
+
 Deno.test("formatting returned records has one style across indentation and line endings", async () => {
   const expected = `let build = fn () => do:
   let values = [1, 2, 3]
@@ -874,4 +1009,25 @@ return build ()
       await assertStableFormatting(source, expected);
     }
   }
+});
+
+Deno.test("formatting many signatures shares layout without changing their trees", async () => {
+  const declarations = Array.from(
+    { length: 32 },
+    (_, index) =>
+      `const step${index} ::
+  @forall (fn T => @forall (fn S => do:
+      return ([T], S, (S, T) -> S) -> S
+    ))
+const step${index} = fn value => value
+`,
+  );
+  const source = `${declarations.join("\n")}return step31\n`;
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("signature corpus did not format");
+  assertEquals(
+    semanticTree(await parse(formatted.source)),
+    semanticTree(await parse(source)),
+  );
+  assertEquals(await formatSource(formatted.source), formatted);
 });

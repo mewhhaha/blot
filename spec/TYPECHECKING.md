@@ -500,6 +500,18 @@ already-applied text member argument; that argument, not the wrapper's field
 name, determines the ordering set. An unrecognized attached implementation
 produces no comparison fact. Member spelling is never a fallback proof.
 
+Integer interval refinement accepts a source integer literal as its witness, or
+a value obtained from a binding whose recorded phase is `Comptime`. A record
+projection qualifies only when its root is stable by the same phase check and
+the projected compile-time value is an integer. This lookup reads existing
+compile-time values; it does not evaluate arbitrary expressions or infer a
+constant from a runtime binding's type. The subject retains the existing
+integer-domain check, and the comparison closure must supply recognized ordering
+evidence. For a witness on the left, mirror the ordering before constructing the
+accepted and rejected intervals. A runtime parameter shadowing a compile-time
+name is ineligible even when the value environment contains an older value with
+that spelling.
+
 An application whose member target is `@type.inferred` resolves that member
 through the current subject's checked type. Static attached-member
 specialization must not evaluate that target using expression facts from another

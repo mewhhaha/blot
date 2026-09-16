@@ -74,6 +74,18 @@ the accepted editor revision. The TypeScript Baba parser remains only as a
 fresh-equivalence oracle and for validating proposed formatted or quick-fix
 candidate text before publication.
 
+Host buffer snapshots parse unsaved editor text through that same Baba frontend
+and bundle the token tape, CST, layout map, and lowered module for one source. A
+buffer snapshot carries a frontend revision key (`blot-syntax-snapshot/1`): a
+snapshot presented for other bytes or another revision is ignored and the input
+parses fresh, so a frontend change cannot serve snapshots parsed by another
+frontend. Content-keyed host caches reuse results by content identity plus
+scope: identical content yields identical results whatever revision produced it,
+which is what makes version reuse after close/reopen and undo/redo safe. Buffer
+snapshots are host-side parse results, not a second syntax contract and not
+compiler facts: checking, staging, and emission consume only the resident
+session above.
+
 Semantic lints consume compiler facts attached to that same accepted revision.
 The tooling layer may check concrete syntax, preserve comments, and render a
 replacement, but a rule that depends on resolved functions, types, effects, or

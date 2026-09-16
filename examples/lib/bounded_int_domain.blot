@@ -1,53 +1,41 @@
 open import "blot:prelude"
 
-// Derive one runtime admission/clamping API from a concrete integer range type.
-// The type is the single source of truth: reflection supplies the same low/high
-// endpoints used by every generated operation.
-//
-// Pain point: the seemingly simpler `bounded (low, high)` cannot currently use
-// `range (low, high)` in a local function signature: generic endpoints leave
-// that expression as a value the checker will not accept as a type. Reflecting
-// an already-concrete range keeps the public API checked without a cast.
-const bounded = fn Type => case Reflect.of Type of
-  #Range info => case info.domain of
-    #Int => do:
-      const low = info.low
-      const high = info.high
+// Reflect one closed range once; the type and generated runtime operations
+// therefore share the same endpoints rather than maintaining parallel bounds.
+const bounded = fn T => do:
+  const info = case Reflect.of T of
+    #Range interval => case interval.domain of
+      #Int => interval
+      _ => @fail "bounded requires an integer range type"
 
-      let contains :: Int -> Bool
-      let contains = fn value => value >= low && value <= high
+    _ => @fail "bounded requires a range type"
 
-      let admit :: Int -> Option Type
-      let admit = fn value => do:
-        if value < low:
-          return None
+  const low :: T
+  const low = info.low
+  const high :: T
+  const high = info.high
 
-        if value > high:
-          return None
+  let contains :: Int -> Bool
+  let contains = fn value => value >= low && value <= high
 
-        return Some value
+  let admit :: Int -> Option T
+  let admit = fn value => do:
+    if value < low:
+      return None
+    else if value > high:
+      return None
+    else:
+      return #Some value
 
-      let clamp :: Int -> Type
-      let clamp = fn value => do:
-        if value < low:
-          return low
+  let clamp :: Int -> T
+  let clamp = fn value => do:
+    if value < low:
+      return low
+    else if value > high:
+      return high
+    else:
+      return value
 
-        if value > high:
-          return high
-
-        return value
-
-      return {
-        .lower = low;
-        .upper = high;
-        .Type;
-        .contains;
-        .admit;
-        .clamp;
-      }
-
-    _ => @fail "bounded requires an integer range type"
-
-  _ => @fail "bounded requires a range type"
+  return { .Type = T; .lower = low; .upper = high; .contains; .admit; .clamp; }
 
 return { .bounded; }

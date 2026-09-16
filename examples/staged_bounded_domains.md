@@ -27,12 +27,20 @@ constructed `-40..85` types are structurally the same even if an application
 informally calls one Celsius and the other Fahrenheit; semantic units need a
 distinct data model or nominal representation.
 
-The reflected design also records a staging boundary discovered while building
-the natural alternative. A generic `bounded (low, high)` can compute
-`range (low, high)` as a value, but that computed value is not accepted as a
-type in a local signature: the checker reports `BLOT_SIGNATURE_NOT_A_TYPE`.
-Taking an already-concrete range type avoids weakening the public API and keeps
-the source-of-truth relationship intact.
+The first draft did not execute: it attempted to bind generated signatures
+inside a reflection case, and the checker only used literal integer bounds as
+branch evidence. The generator now selects reflection metadata before declaring
+its API, and the Rust checker accepts stable compile-time bound bindings and
+record fields. It does not use runtime parameters or arbitrary comparison
+callbacks as proof. Native and evaluator/Wasm regressions cover that boundary.
+
+`admit` constructs `#Some value` directly. During this repair, the generic
+prelude `Some` wrapper was observed accepting an out-of-range payload under an
+expected refinement even without a guard; the direct variant constructor
+correctly rejects it. This is a pre-existing generic-application checking
+defect, not a claim that the repaired domain admits invalid values. The public
+domain's refinement proof is checked before the variant leaves the generated
+function.
 
 ## Run it
 
@@ -47,9 +55,9 @@ node --import tsx --test src/node/staged_bounded_domains.test.ts
 ```
 
 The focused test also checks canonical formatting, the evaluator golden,
-independently emitted Wasm output, and three rejection fixtures: narrowing a
-general `0..100` value into `5..25`, constructing `1..5` with `6`, and passing
-text to an integer domain.
+independently emitted Wasm output, and rejection fixtures for runtime-only
+bounds, unrecognized comparisons, and: narrowing a general `0..100` value into
+`5..25`, constructing `1..5` with `6`, and passing text to an integer domain.
 
 ## Edge cases
 

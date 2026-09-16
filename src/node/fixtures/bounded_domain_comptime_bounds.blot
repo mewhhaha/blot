@@ -1,0 +1,31 @@
+open import "blot:prelude"
+
+const lower = Int.add 2 3
+const bounds = { .upper = 25; }
+const Window = range (5, 25)
+
+let admit :: Int -> Option Window
+let admit = fn value => do:
+  if value >= lower && value <= bounds.upper:
+    return #Some value
+
+  return None
+
+let mirrored :: Int -> Option Window
+let mirrored = fn value => do:
+  if lower <= value && bounds.upper >= value:
+    return #Some value
+
+  return None
+
+return {
+  .default = {
+    .lower = admit 5;
+    .upper = admit 25;
+    .below = admit 4;
+    .above = admit 26;
+    .mirrored = mirrored 17;
+    .mirrored_below = mirrored 4;
+    .mirrored_above = mirrored 26;
+  };
+}

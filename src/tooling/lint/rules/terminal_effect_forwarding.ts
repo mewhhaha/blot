@@ -5,6 +5,7 @@ export const terminalEffectForwarding: LintRule = {
   name: "terminal-effect-forwarding",
   code: "BLOT_LINT_TERMINAL_EFFECT_FORWARDING",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     return {
       module(path) {

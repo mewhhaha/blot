@@ -2,7 +2,7 @@
 // compile-time integer range type. The same abstraction is reused for
 // deployment, scheduling, and sensor domains without duplicating bounds.
 
-open import "blot:prelude"
+const { .Text; .range; } = import "blot:prelude"
 const Domain = import "./lib/bounded_int_domain.blot"
 
 const Percent = Domain.bounded (range (0, 100))
@@ -16,7 +16,7 @@ let as_percent :: CanaryPercent.Type -> Percent.Type
 let as_percent = fn value => value
 
 let render_percent :: Percent.Type -> Text
-let render_percent = fn value => Text.append (Text.of_int value) "%"
+let render_percent = fn value => Text.of_int value <> "%"
 
 const canary = CanaryPercent.clamp 99
 const scheduled = Priority.clamp 9
