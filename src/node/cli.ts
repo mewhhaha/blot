@@ -2,10 +2,13 @@
 
 import { readFile, watch, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { Readable, Writable } from "node:stream";
 import { Compiler, explanationAt } from "../compiler.ts";
+import { runCoordinatorServer } from "../lsp/server.ts";
 import { DevelopmentProject } from "../development.ts";
 import { render } from "../diagnostic.ts";
 import { buildPackage } from "../package.ts";
+import { formatSource } from "../tooling/formatter.ts";
 import { parse } from "../syntax/parse.ts";
 import {
   fixLintSource,
@@ -15,6 +18,7 @@ import {
   parseLintArguments,
 } from "../tooling/lint_command.ts";
 import { runArtifact } from "./run.ts";
+import { createNodeLspWorkerHost } from "./lsp_worker_host.ts";
 import {
   parseExplainArguments,
   renderExplanation,
@@ -33,23 +37,37 @@ async function main(arguments_: readonly string[]): Promise<void> {
   const [command, ...paths] = arguments_;
   if ((command === "--help" || command === "help") && paths.length === 0) {
     console.log(
-      "usage: blot <build|check|ast|run|lint|dev|pack|explain> <path>...",
+      "usage: blot <build|check|ast|run|lint|dev|pack|explain|format|lsp> <path>...",
     );
     console.log("       blot pack <blot.json>");
     console.log("       blot explain [--json] <file.blot> <line>:<column>");
+    console.log("       blot format [--check] <file.blot>...");
+    console.log("       blot lsp");
     return;
   }
   if (
     command === undefined ||
-    paths.length === 0 ||
-    !["build", "check", "ast", "run", "dev", "lint", "pack", "explain"]
-      .includes(command)
+    (command !== "lsp" && paths.length === 0) ||
+    ![
+      "build",
+      "check",
+      "ast",
+      "run",
+      "dev",
+      "lint",
+      "pack",
+      "explain",
+      "format",
+      "lsp",
+    ].includes(command)
   ) {
     console.error(
-      "usage: blot <build|check|ast|run|lint|dev|pack|explain> <path>...",
+      "usage: blot <build|check|ast|run|lint|dev|pack|explain|format|lsp> <path>...",
     );
     console.error("       pnpm blot lint [--check|--fix] <file.blot>...");
     console.error("       pnpm blot dev <blot.json>");
+    console.error("       pnpm blot format [--check] <file.blot>...");
+    console.error("       pnpm blot lsp");
     process.exitCode = 2;
   } else if (command === "pack") {
     if (paths.length !== 1 || paths[0].startsWith("--")) {
@@ -101,6 +119,14 @@ async function main(arguments_: readonly string[]): Promise<void> {
       const failed = await lintFiles(invocation.mode, invocation.paths);
       if (failed) process.exitCode = 1;
     }
+  } else if (command === "format") {
+    const failed = await formatFiles(paths);
+    if (failed) process.exitCode = 1;
+  } else if (command === "lsp") {
+    if (paths.length !== 0) {
+      console.error("usage: blot lsp");
+      process.exitCode = 2;
+    } else await runNodeLanguageServer();
   } else if (command === "ast") {
     let failed = false;
     for (const path of paths) {
@@ -163,6 +189,55 @@ async function main(arguments_: readonly string[]): Promise<void> {
     }
     if (failed) process.exitCode = 1;
   }
+}
+
+async function formatFiles(
+  arguments_: readonly string[],
+): Promise<boolean> {
+  const checkOnly = arguments_.includes("--check");
+  const paths = arguments_.filter((argument) => argument !== "--check");
+  if (paths.length === 0) {
+    console.error("blot format requires at least one .blot file");
+    return true;
+  }
+  let failed = false;
+  for (const path of paths) {
+    try {
+      const source = await readFile(resolve(path), "utf8");
+      const formatted = await formatSource(source);
+      if (!formatted.ok) {
+        failed = true;
+        for (const diagnostic of formatted.diagnostics) {
+          console.error(render(path, source, diagnostic));
+        }
+        continue;
+      }
+      if (formatted.source === source) continue;
+      if (checkOnly) {
+        failed = true;
+        console.error(`${path}: needs formatting`);
+        continue;
+      }
+      await writeFile(resolve(path), formatted.source);
+      console.log(path);
+    } catch (error) {
+      failed = true;
+      report(path, error);
+    }
+  }
+  return failed;
+}
+
+async function runNodeLanguageServer(): Promise<void> {
+  const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
+  const output = Writable.toWeb(process.stdout) as WritableStream<Uint8Array>;
+  // Worker-backed lanes: analysis blocks only its own thread, so formatting
+  // never waits on the compiler. A worker that fails to boot rejects loudly
+  // through the lane startup path; there is no silent inline fallback.
+  await runCoordinatorServer(input, output, {
+    syntaxHost: createNodeLspWorkerHost("syntax"),
+    semanticHost: createNodeLspWorkerHost("semantic"),
+  });
 }
 
 async function lintFiles(

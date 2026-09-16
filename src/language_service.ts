@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { fromFileUrl, resolve, toFileUrl } from "@std/path";
 import {
+  type CheckedModule,
   Compiler,
   type CompilerAnalysis,
   type CompilerSyntaxSnapshot,
@@ -16,6 +17,7 @@ import {
 } from "./package_format.ts";
 import type { Decl, Expr, Module, Pattern, Span } from "./syntax/ast.ts";
 import { parse } from "./syntax/parse.ts";
+import { snapshotSource } from "./syntax/snapshot.ts";
 import {
   definitionAt,
   fieldDefinitionAt,
@@ -23,24 +25,52 @@ import {
   signatureTypeAt,
   signatureTypeContaining,
 } from "./tooling/definition.ts";
+import { assertEditReconstructs, deriveEdit } from "./tooling/format/edits.ts";
 import { formatSource } from "./tooling/formatter.ts";
 import { hoverAt } from "./tooling/hover.ts";
-import { lineAtOffset, sourceLineStarts } from "./tooling/formatter.ts";
+import {
+  type ContentChange,
+  offsetAtPosition,
+  type Position,
+  positionAtOffset,
+  type Range,
+  rangeOf,
+} from "./text/document.ts";
+import {
+  type AnalysisResult,
+  captureOverlayManifest,
+  DependencyCache,
+  diffOverlayManifest,
+  failedAnalysis,
+  type OverlayManifest,
+  overlayManifestDigest,
+  successfulAnalysis,
+} from "./lsp/analysis.ts";
+import {
+  analysisCacheKey,
+  SYNTAX_FRONTEND_ID,
+  syntaxCacheKey,
+} from "./text/cache.ts";
+import { type DocumentSnapshot, DocumentStore } from "./text/store.ts";
 import { DEFAULT_LINT_RULES, lintModule } from "./tooling/lint.ts";
-import type { LintDiagnostic } from "./tooling/lint.ts";
+import type {
+  LintCandidateIdentity,
+  LintDiagnostic,
+  SplitLintDiagnostics,
+} from "./tooling/lint.ts";
+import {
+  findLintCandidate,
+  lintCandidateIdentity,
+  splitLintDiagnostics,
+} from "./tooling/lint.ts";
+import { ScratchValidationSession } from "./tooling/lint.ts";
 import { sourceCodeSpan } from "./tooling/lint/syntax.ts";
-import { validateLintDiagnostics } from "./tooling/lint.ts";
 import { fixLintSource } from "./tooling/lint_command.ts";
+import type { StagedOverlay } from "./workspace_graph.ts";
 
-export interface Position {
-  readonly line: number;
-  readonly character: number;
-}
-
-export interface Range {
-  readonly start: Position;
-  readonly end: Position;
-}
+export type { ContentChange, Position, Range } from "./text/document.ts";
+export type { DocumentSnapshot } from "./text/store.ts";
+export { offsetAtPosition, positionAtOffset, rangeOf };
 
 export interface LanguageDiagnostic {
   readonly range: Range;
@@ -109,10 +139,28 @@ export interface WorkspaceEdit {
   readonly changes: Readonly<Record<string, readonly TextEdit[]>>;
 }
 
-export interface ContentChange {
-  readonly range?: Range;
-  readonly rangeLength?: number;
-  readonly text: string;
+/**
+ * The deferred-action binding carried by every resolvable code action.
+ *
+ * The action describes a candidate observed at one request: `uri` names the
+ * document, `version`/`lifecycle`/`revision` pin the exact open revision the
+ * candidate was described against, and `workspaceEpoch` names the workspace
+ * the description assumed. `rule` scopes fix-all actions and names the
+ * single-fix rule; `candidate` identifies one selected fix within its
+ * revision (absent for fix-all). Resolve re-detects on the current revision
+ * and validates only the selected candidate, returning edits only when that
+ * validation succeeds. A revision move (close, lifecycle, revision, or
+ * version mismatch) is stale and never returns edits; a workspace move with
+ * an unchanged revision re-proves against the current workspace.
+ */
+export interface CodeActionData {
+  readonly uri: string;
+  readonly version: number;
+  readonly lifecycle: number;
+  readonly revision: number;
+  readonly workspaceEpoch: number;
+  readonly rule?: string;
+  readonly candidate?: LintCandidateIdentity;
 }
 
 export interface CodeAction {
@@ -122,11 +170,7 @@ export interface CodeAction {
     | "refactor.rewrite"
     | `source.fixAll.blot${string}`;
   readonly diagnostics: readonly LanguageDiagnostic[];
-  readonly data?: {
-    readonly uri: string;
-    readonly version: number;
-    readonly rule?: string;
-  };
+  readonly data?: CodeActionData;
   readonly edit: {
     readonly documentChanges: readonly [{
       readonly textDocument: {
@@ -138,48 +182,106 @@ export interface CodeAction {
   };
 }
 
-interface OpenDocument {
-  readonly source: string;
-  readonly version: number;
+/**
+ * The compiler surface the language service drives. `Compiler` satisfies
+ * this; tests inject fakes to count analyses and control ordering without
+ * the Wasm artifact.
+ */
+export interface SemanticCompiler {
+  analyzeSource(path: string, source: string): Promise<CompilerAnalysis>;
+  syntaxSnapshot(path: string, source: string): Promise<CompilerSyntaxSnapshot>;
+  stageOverlays(entries: ReadonlyMap<string, StagedOverlay>): Promise<void>;
+  workspaceClosure(path: string): Promise<readonly string[]>;
+  refreshDiskInputs(): Promise<void>;
+  releaseRoot(path: string): Promise<void>;
+  clearOverlay(path: string): Promise<void>;
+  destroy(): void;
+}
+
+/**
+ * The compiler surface behind lint-fix validation. Validation runs fixed
+ * source variants that must never clobber the service workspace, so it
+ * stays on a separate compiler behind the scratch validation session, which
+ * seeds it with the requesting revision's overlay snapshot before checking
+ * anything; `Compiler` satisfies this too.
+ */
+export interface ValidationCompiler {
+  analyzeSource(path: string, source: string): Promise<CompilerAnalysis>;
+  syntaxSnapshot(path: string, source: string): Promise<CompilerSyntaxSnapshot>;
+  checkSource(path: string, source: string): Promise<CheckedModule>;
+  stageOverlays(entries: ReadonlyMap<string, StagedOverlay>): Promise<void>;
+  clearOverlay(path: string): Promise<void>;
+  destroy(): void;
+}
+
+export interface LanguageServiceOptions {
+  readonly createCompiler?: () => Promise<SemanticCompiler>;
+  readonly createValidationCompiler?: () => Promise<ValidationCompiler>;
+}
+
+interface DocumentCaches {
+  readonly lifecycle: number;
+  readonly syntax: DependencyCache<CompilerSyntaxSnapshot>;
+  readonly semantic: DependencyCache<AnalysisResult>;
+}
+
+interface EpochChange {
+  readonly epoch: number;
+  readonly paths: ReadonlySet<string>;
 }
 
 const maximumInlayHintLength = 60;
 const inlayHintSegments = new Intl.Segmenter("en", { granularity: "grapheme" });
+// Syntax and analysis results cached per open document. The key is content
+// identity (plus the frontend identity for syntax), so repeated or restored
+// content hits across revisions while every distinct edit fills one slot.
+// Entries also carry their workspace epoch and dependency closure, so an
+// overlay, disk, or configuration change invalidates exactly the entries
+// whose observed inputs moved.
+const maximumCachedContents = 16;
+// The epoch log bounds how far back lazy invalidation can reach. Entries
+// older than the retained window recompute instead of serving.
+const maximumEpochLog = 512;
+// Clients without resolve support receive eagerly validated edits, but one
+// code-action request validates at most this many relevant candidates:
+// detection still describes every candidate while validation stays bounded.
+// Resolve-capable clients defer every candidate instead and validate only
+// the selected action, so this bound never drops their actions.
+export const MAX_EAGER_ACTION_VALIDATIONS = 32;
 
 export class LanguageService {
-  readonly #documents = new Map<string, OpenDocument>();
-  readonly #hoverChecks = new Map<
-    string,
-    {
-      readonly version: number;
-      readonly checked: Promise<CompilerAnalysis | null>;
-    }
-  >();
-  readonly #syntaxSnapshots = new Map<
-    string,
-    {
-      readonly version: number;
-      readonly snapshot: Promise<CompilerSyntaxSnapshot>;
-    }
-  >();
-  readonly #compiler: Promise<Compiler>;
+  readonly #store = new DocumentStore();
+  readonly #caches = new Map<string, DocumentCaches>();
+  readonly #compiler: Promise<SemanticCompiler>;
+  readonly #createValidationCompiler: () => Promise<ValidationCompiler>;
+  #scratch: ScratchValidationSession | undefined = undefined;
+  #workspaceEpoch = 1;
+  readonly #epochChanges: EpochChange[] = [];
+  #syncedManifest: OverlayManifest | null = null;
+  #diskRefreshPending = false;
 
-  constructor() {
-    this.#compiler = Compiler.create();
+  constructor(options: LanguageServiceOptions = {}) {
+    if (options.createCompiler !== undefined) {
+      this.#compiler = options.createCompiler();
+    } else {
+      this.#compiler = Compiler.create();
+    }
+    if (options.createValidationCompiler !== undefined) {
+      this.#createValidationCompiler = options.createValidationCompiler;
+    } else {
+      this.#createValidationCompiler = () => Compiler.create();
+    }
   }
 
   open(uri: string, source: string, version: number): void {
-    this.#documents.set(uri, { source, version });
-    this.#hoverChecks.delete(uri);
-    this.#syntaxSnapshots.delete(uri);
+    const snapshot = this.#store.open(uri, source, version);
+    this.#caches.set(uri, this.#freshCaches(snapshot.lifecycle));
+    this.#noteWorkspaceChange(editorPath(uri));
   }
 
   change(uri: string, source: string, version: number): void {
-    const current = this.#requiredDocument(uri);
-    this.#requireNextVersion(uri, current.version, version);
-    this.#documents.set(uri, { source, version });
-    this.#hoverChecks.delete(uri);
-    this.#syntaxSnapshots.delete(uri);
+    this.#store.change(uri, source, version);
+    this.#noteWorkspaceChange(editorPath(uri));
   }
 
   changeRanges(
@@ -187,101 +289,135 @@ export class LanguageService {
     changes: readonly ContentChange[],
     version: number,
   ): void {
-    const current = this.#requiredDocument(uri);
-    this.#requireNextVersion(uri, current.version, version);
-    let source = current.source;
-    for (const change of changes) {
-      if (change.range === undefined) {
-        source = change.text;
-        continue;
-      }
-      const start = offsetAtPosition(source, change.range.start);
-      const end = offsetAtPosition(source, change.range.end);
-      if (end < start) {
-        throw new Error(`document ${uri} change range ends before it starts`);
-      }
-      if (
-        change.rangeLength !== undefined &&
-        change.rangeLength !== end - start
-      ) {
-        throw new Error(
-          `document ${uri} change range length ${change.rangeLength} does not match ${
-            end - start
-          }`,
-        );
-      }
-      source = source.slice(0, start) + change.text + source.slice(end);
-    }
-    this.#documents.set(uri, { source, version });
-    this.#hoverChecks.delete(uri);
-    this.#syntaxSnapshots.delete(uri);
+    this.#store.changeRanges(uri, changes, version);
+    this.#noteWorkspaceChange(editorPath(uri));
   }
 
   async close(uri: string): Promise<void> {
-    this.#documents.delete(uri);
-    this.#hoverChecks.delete(uri);
-    this.#syntaxSnapshots.delete(uri);
-    const compiler = await this.#compiler;
     const path = editorPath(uri);
+    this.#store.close(uri);
+    this.#caches.delete(uri);
+    this.#noteWorkspaceChange(path);
+    const compiler = await this.#compiler;
     await compiler.releaseRoot(path);
     await compiler.clearOverlay(path);
   }
 
+  /**
+   * Records an out-of-band disk or configuration change (watcher events,
+   * package or include edits outside the editor) so dependent semantic
+   * entries invalidate. The next computation refreshes the compiler's disk
+   * inputs before analyzing; recording itself loads nothing.
+   */
+  markChanged(path: string): void {
+    this.#noteWorkspaceChange(resolve(path));
+    this.#diskRefreshPending = true;
+  }
+
+  /** Reads cache shape for tests: per-open-document entry counts. */
+  debugCacheStats(): {
+    readonly documents: number;
+    readonly entries: ReadonlyArray<{
+      readonly uri: string;
+      readonly syntax: number;
+      readonly semantic: number;
+    }>;
+  } {
+    const entries: Array<
+      {
+        readonly uri: string;
+        readonly syntax: number;
+        readonly semantic: number;
+      }
+    > = [];
+    for (const [uri, caches] of this.#caches) {
+      entries.push({
+        uri,
+        syntax: caches.syntax.size,
+        semantic: caches.semantic.size,
+      });
+    }
+    return { documents: this.#caches.size, entries };
+  }
+
   version(uri: string): number | null {
-    const document = this.#documents.get(uri);
-    if (document === undefined) return null;
-    return document.version;
+    return this.#store.version(uri);
+  }
+
+  snapshot(uri: string): DocumentSnapshot | null {
+    return this.#store.snapshot(uri);
   }
 
   async diagnostics(uri: string): Promise<readonly LanguageDiagnostic[]> {
-    const document = this.#requiredDocument(uri);
+    const snapshot = this.#requiredSnapshot(uri);
+    const source = snapshot.document.source;
     const path = editorPath(uri);
+    const overlays = this.#requestOverlays();
     let parsed: CompilerSyntaxSnapshot;
     try {
-      parsed = await this.#syntaxRevision(uri, document);
+      parsed = await this.#syntaxRevision(snapshot);
     } catch (error) {
       const rejected = diagnosticsFromError(path, error);
       if (rejected !== null) {
         return rejected.map((diagnostic) =>
-          languageDiagnostic(document.source, diagnostic, 1)
+          languageDiagnostic(source, diagnostic, 1)
         );
       }
       throw error;
     }
 
     const diagnostics: LanguageDiagnostic[] = [];
-    try {
-      const analysis = await (await this.#compiler).analyzeSource(
-        path,
-        document.source,
-      );
+    const result = await this.#analysisRevision(snapshot);
+    const failure = result.failure;
+    if (failure !== null) {
+      for (const diagnostic of failure.diagnostics) {
+        diagnostics.push(languageDiagnostic(source, diagnostic, 1));
+      }
+    } else {
+      const analysis = result.analysis;
+      if (analysis === null) {
+        throw new Error(
+          `analysis of ${uri} returned neither facts nor a source failure`,
+        );
+      }
       if (!analysis.targetPreflight.supported) {
         let message = analysis.targetPreflight.unsupportedComponent;
         if (message === null) {
           message =
             "The inferred export is not supported by the selected Wasm target.";
         }
-        diagnostics.push(languageDiagnostic(document.source, {
+        diagnostics.push(languageDiagnostic(source, {
           code: "BLOT_TARGET_REFUSAL",
           message,
           span: { start: 0, end: 0 },
         }, 1));
       }
-    } catch (error) {
-      const rejected = diagnosticsFromError(path, error);
-      if (rejected !== null) {
-        for (const diagnostic of rejected) {
-          diagnostics.push(languageDiagnostic(document.source, diagnostic, 1));
+    }
+    // Detection publishes without speculative compilation: claims
+    // established by current syntax or semantic facts need no fix check.
+    // Rewrite-validation claims keep their validation in the lower-priority
+    // stage below and never publish unproven.
+    const detected = await this.#lintSplit(snapshot, parsed);
+    const proven = new Set<LintDiagnostic>();
+    if (detected.split.rewriteCandidates.length > 0) {
+      const session = this.#scratchSession();
+      for (const candidate of detected.split.rewriteCandidates) {
+        const fix = candidate.fix;
+        if (fix === null) continue;
+        if (
+          await session.validateFix({ path, source, overlays, fix })
+        ) {
+          proven.add(candidate);
         }
-      } else {
-        throw error;
       }
     }
-    for (const diagnostic of await this.#validatedLints(uri, parsed)) {
+    const held = new Set(detected.split.rewriteCandidates);
+    for (const diagnostic of detected.detected) {
+      if (held.has(diagnostic) && !proven.has(diagnostic)) continue;
       diagnostics.push(languageDiagnostic(
-        document.source,
+        source,
         diagnostic,
-        diagnostic.severity === "warning" ? 2 : 4,
+        lintLanguageSeverity(diagnostic.severity),
       ));
     }
     return diagnostics;
@@ -295,7 +431,10 @@ export class LanguageService {
       readonly resolveEdits?: boolean;
     } = {},
   ): Promise<readonly CodeAction[]> {
-    const document = this.#requiredDocument(uri);
+    const snapshot = this.#requiredSnapshot(uri);
+    const document = snapshot.document;
+    const workspaceEpoch = this.#workspaceEpoch;
+    const overlays = this.#requestOverlays();
     const accepts = (kind: string) =>
       context.only === undefined ||
       context.only.some((requested) =>
@@ -305,7 +444,7 @@ export class LanguageService {
     const requestedEnd = offsetAtPosition(document.source, range.end);
     let parsed: CompilerSyntaxSnapshot;
     try {
-      parsed = await this.#syntaxRevision(uri, document);
+      parsed = await this.#syntaxRevision(snapshot);
     } catch (error) {
       const rejected = diagnosticsFromError(editorPath(uri), error);
       if (rejected !== null) {
@@ -329,7 +468,7 @@ export class LanguageService {
             diagnostics: [languageDiagnostic(document.source, diagnostic, 1)],
             edit: {
               documentChanges: [{
-                textDocument: { uri, version: document.version },
+                textDocument: { uri, version: snapshot.version },
                 edits: [{
                   range: rangeOf(document.source, editSpan),
                   newText: "",
@@ -342,52 +481,117 @@ export class LanguageService {
           actions.filter((action) => accepts(action.kind)),
         );
       }
-      throw error;
+      // A deleted or unloadable dependency leaves no diagnostics to act on;
+      // operational failures stay loud.
+      if (!isSourceFailure(error)) throw error;
+      return [];
     }
     const actions: CodeAction[] = [];
-    const lints = await this.#validatedLints(uri, parsed);
+    const detected = await this.#lintSplit(snapshot, parsed);
+    const deferred = context.resolveEdits === true;
     if (
-      context.resolveEdits === true ||
+      deferred ||
       context.only?.some((kind) =>
         kind === "source" || kind.startsWith("source.fixAll")
       )
     ) {
       actions.push(
         ...await this.#fixAllActions(
-          uri,
-          document,
+          snapshot,
+          workspaceEpoch,
           range,
           accepts,
-          lints,
-          context.resolveEdits === true,
+          detected.detected,
+          deferred,
         ),
       );
     }
-    for (const diagnostic of lints) {
-      if (diagnostic.fix === null) continue;
-      if (
-        requestedEnd < diagnostic.span.start ||
-        requestedStart > diagnostic.span.end
-      ) continue;
-      const language = languageDiagnostic(
-        document.source,
-        diagnostic,
-        diagnostic.severity === "warning" ? 2 : 4,
+    // Detection describes every candidate with zero fix validations. Clients
+    // with resolve support receive deferred descriptions bound to this
+    // revision; clients without it receive eagerly validated edits for the
+    // requested relevant candidates only, under a bounded request.
+    const relevant = detected.detected.filter((diagnostic) =>
+      diagnostic.fix !== null &&
+      requestedEnd >= diagnostic.span.start &&
+      requestedStart <= diagnostic.span.end &&
+      accepts(diagnostic.fix.kind)
+    );
+    if (deferred) {
+      const publishable = new Set(detected.split.publishable);
+      for (const diagnostic of relevant) {
+        const fix = diagnostic.fix;
+        if (fix === null) continue;
+        const identity = lintCandidateIdentity(diagnostic);
+        if (identity === null) continue;
+        let actionDiagnostics: readonly LanguageDiagnostic[] = [];
+        if (publishable.has(diagnostic)) {
+          actionDiagnostics = [languageDiagnostic(
+            document.source,
+            diagnostic,
+            lintLanguageSeverity(diagnostic.severity),
+          )];
+        }
+        actions.push({
+          title: fix.title,
+          kind: fix.kind,
+          diagnostics: actionDiagnostics,
+          data: {
+            uri,
+            version: snapshot.version,
+            lifecycle: snapshot.lifecycle,
+            revision: snapshot.revision,
+            workspaceEpoch,
+            rule: diagnostic.code,
+            candidate: identity,
+          },
+          edit: {
+            documentChanges: [{
+              textDocument: { uri, version: snapshot.version },
+              edits: [],
+            }],
+          },
+        });
+      }
+    } else {
+      const budgeted = new Set(
+        relevant.toSorted(compareActionCandidates).slice(
+          0,
+          MAX_EAGER_ACTION_VALIDATIONS,
+        ),
       );
-      actions.push({
-        title: diagnostic.fix.title,
-        kind: diagnostic.fix.kind,
-        diagnostics: [language],
-        edit: {
-          documentChanges: [{
-            textDocument: { uri, version: document.version },
-            edits: diagnostic.fix.edits.map((edit) => ({
-              range: rangeOf(document.source, edit.span),
-              newText: edit.replacement,
-            })),
-          }],
-        },
-      });
+      const session = this.#scratchSession();
+      const path = editorPath(uri);
+      for (const diagnostic of relevant) {
+        if (!budgeted.has(diagnostic)) continue;
+        const fix = diagnostic.fix;
+        if (fix === null) continue;
+        if (
+          !await session.validateFix({
+            path,
+            source: document.source,
+            overlays,
+            fix,
+          })
+        ) continue;
+        actions.push({
+          title: fix.title,
+          kind: fix.kind,
+          diagnostics: [languageDiagnostic(
+            document.source,
+            diagnostic,
+            lintLanguageSeverity(diagnostic.severity),
+          )],
+          edit: {
+            documentChanges: [{
+              textDocument: { uri, version: snapshot.version },
+              edits: fix.edits.map((edit) => ({
+                range: rangeOf(document.source, edit.span),
+                newText: edit.replacement,
+              })),
+            }],
+          },
+        });
+      }
     }
     let lineEnding = "\n";
     if (document.source.includes("\r\n")) lineEnding = "\r\n";
@@ -416,7 +620,7 @@ export class LanguageService {
         diagnostics: [],
         edit: {
           documentChanges: [{
-            textDocument: { uri, version: document.version },
+            textDocument: { uri, version: snapshot.version },
             edits: [{
               range: rangeOf(document.source, {
                 start: correction.signatureSpan.start,
@@ -450,7 +654,7 @@ export class LanguageService {
         diagnostics: [],
         edit: {
           documentChanges: [{
-            textDocument: { uri, version: document.version },
+            textDocument: { uri, version: snapshot.version },
             edits: [{
               range: rangeOf(document.source, {
                 start: lineStart,
@@ -469,13 +673,15 @@ export class LanguageService {
   }
 
   async #fixAllActions(
-    uri: string,
-    document: OpenDocument,
+    snapshot: DocumentSnapshot,
+    workspaceEpoch: number,
     range: Range,
     accepts: (kind: string) => boolean,
     diagnostics: readonly LintDiagnostic[],
     resolveEdits: boolean,
   ): Promise<readonly CodeAction[]> {
+    const uri = snapshot.uri;
+    const document = snapshot.document;
     if (
       !diagnostics.some((diagnostic) => diagnostic.fix?.kind === "quickfix")
     ) return [];
@@ -511,10 +717,17 @@ export class LanguageService {
         title: selection.title,
         kind: selection.kind,
         diagnostics: [],
-        data: { uri, version: document.version, rule: selection.rule },
+        data: {
+          uri,
+          version: snapshot.version,
+          lifecycle: snapshot.lifecycle,
+          revision: snapshot.revision,
+          workspaceEpoch,
+          rule: selection.rule,
+        },
         edit: {
           documentChanges: [{
-            textDocument: { uri, version: document.version },
+            textDocument: { uri, version: snapshot.version },
             edits: [],
           }],
         },
@@ -528,67 +741,170 @@ export class LanguageService {
   async resolveCodeAction(action: CodeAction): Promise<CodeAction> {
     const selection = action.data;
     if (selection === undefined) return action;
+    const candidate = selection.candidate;
+    if (candidate === undefined) {
+      return await this.#resolveFixAllAction(action, selection);
+    }
     if (
       typeof selection.uri !== "string" ||
       !Number.isSafeInteger(selection.version) ||
+      !Number.isSafeInteger(selection.lifecycle) ||
+      !Number.isSafeInteger(selection.revision) ||
+      !Number.isSafeInteger(selection.workspaceEpoch) ||
+      typeof selection.rule !== "string" ||
+      !DEFAULT_LINT_RULES.some((rule) => rule.code === selection.rule) ||
+      typeof candidate.start !== "number" ||
+      !Number.isSafeInteger(candidate.start) ||
+      candidate.start < 0 ||
+      typeof candidate.end !== "number" ||
+      !Number.isSafeInteger(candidate.end) ||
+      candidate.end < candidate.start ||
+      typeof candidate.title !== "string" ||
+      candidate.title.length === 0
+    ) {
+      throw new Error("Invalid Blot code action");
+    }
+    const snapshot = this.#store.snapshot(selection.uri);
+    const overlays = this.#requestOverlays();
+    if (
+      snapshot === null ||
+      snapshot.lifecycle !== selection.lifecycle ||
+      snapshot.revision !== selection.revision ||
+      snapshot.version !== selection.version
+    ) {
+      return emptyResolvedAction(action, selection.uri, selection.version);
+    }
+    const document = snapshot.document;
+    // Re-detection performs zero validations; only the selected candidate is
+    // validated, in the scratch session, and edits return only when that
+    // validation succeeds. A workspace move under an unchanged revision
+    // re-proves against the current workspace instead of going stale.
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(snapshot);
+    } catch (error) {
+      if (diagnosticsFromError(editorPath(selection.uri), error) === null) {
+        throw error;
+      }
+      return emptyResolvedAction(action, selection.uri, selection.version);
+    }
+    const detected = await this.#lintSplit(snapshot, parsed);
+    const match = findLintCandidate(
+      detected.detected,
+      selection.rule,
+      candidate,
+    );
+    if (match === null || match.fix === null) {
+      return emptyResolvedAction(action, selection.uri, selection.version);
+    }
+    const proven = await this.#scratchSession().validateFix({
+      path: editorPath(selection.uri),
+      source: document.source,
+      overlays,
+      fix: match.fix,
+    });
+    if (!proven) {
+      return emptyResolvedAction(action, selection.uri, selection.version);
+    }
+    return {
+      title: action.title,
+      kind: action.kind,
+      diagnostics: [languageDiagnostic(
+        document.source,
+        match,
+        lintLanguageSeverity(match.severity),
+      )],
+      edit: {
+        documentChanges: [{
+          textDocument: { uri: selection.uri, version: snapshot.version },
+          edits: match.fix.edits.map((edit) => ({
+            range: rangeOf(document.source, edit.span),
+            newText: edit.replacement,
+          })),
+        }],
+      },
+    };
+  }
+
+  async #resolveFixAllAction(
+    action: CodeAction,
+    selection: CodeActionData,
+  ): Promise<CodeAction> {
+    if (
+      typeof selection.uri !== "string" ||
+      !Number.isSafeInteger(selection.version) ||
+      !Number.isSafeInteger(selection.lifecycle) ||
+      !Number.isSafeInteger(selection.revision) ||
+      !Number.isSafeInteger(selection.workspaceEpoch) ||
       (selection.rule !== undefined &&
         !DEFAULT_LINT_RULES.some((rule) => rule.code === selection.rule))
     ) {
       throw new Error("Invalid Blot fix-all action");
     }
-    const document = this.#requiredDocument(selection.uri);
-    if (document.version !== selection.version) {
+    const snapshot = this.#requiredSnapshot(selection.uri);
+    const overlays = this.#requestOverlays();
+    const document = snapshot.document;
+    if (
+      snapshot.lifecycle !== selection.lifecycle ||
+      snapshot.revision !== selection.revision ||
+      snapshot.version !== selection.version
+    ) {
       throw new Error("The document changed; request code actions again");
     }
-    const analysis = await Compiler.create();
-    const validation = await Compiler.create();
-    try {
-      const fixed = await fixLintSource(
-        { analysis, validation },
-        editorPath(selection.uri),
-        document.source,
-        { rule: selection.rule },
-      );
-      return {
-        title: action.title,
-        kind: action.kind,
-        diagnostics: action.diagnostics,
-        edit: {
-          documentChanges: [{
-            textDocument: { uri: selection.uri, version: document.version },
-            edits: [{
-              range: rangeOf(document.source, {
-                start: 0,
-                end: document.source.length,
-              }),
-              newText: fixed.source,
-            }],
+    const path = editorPath(selection.uri);
+    const source = document.source;
+    const fixed = await this.#scratchSession().runExclusive(
+      { path, source, overlays },
+      (compiler) =>
+        fixLintSource(
+          { analysis: compiler, validation: compiler },
+          path,
+          source,
+          { rule: selection.rule },
+        ),
+    );
+    return {
+      title: action.title,
+      kind: action.kind,
+      diagnostics: action.diagnostics,
+      edit: {
+        documentChanges: [{
+          textDocument: { uri: selection.uri, version: snapshot.version },
+          edits: [{
+            range: rangeOf(document.source, {
+              start: 0,
+              end: document.source.length,
+            }),
+            newText: fixed.source,
           }],
-        },
-      };
-    } finally {
-      analysis.destroy();
-      validation.destroy();
-    }
+        }],
+      },
+    };
   }
 
   async definition(
     uri: string,
     position: Position,
   ): Promise<Location | null> {
-    const document = this.#requiredDocument(uri);
+    const snapshot = this.#requiredSnapshot(uri);
+    const workspace = this.#store.snapshots();
+    return await this.#definitionAt(snapshot, workspace, position);
+  }
+
+  async #definitionAt(
+    snapshot: DocumentSnapshot,
+    workspace: readonly DocumentSnapshot[],
+    position: Position,
+  ): Promise<Location | null> {
+    const uri = snapshot.uri;
+    const document = snapshot.document;
     let module: Module;
     let sourceGraphLoaded = false;
     try {
-      module = (await this.#syntaxRevision(uri, document)).module;
+      module = (await this.#syntaxRevision(snapshot)).module;
       sourceGraphLoaded = true;
     } catch (error) {
-      const sourceFailure = error instanceof BlotError ||
-        error instanceof LoadError || error instanceof PackageArtifactError ||
-        (error instanceof Error && "code" in error &&
-          (error.code === "ENOENT" || error.code === "ENOTDIR" ||
-            error.code === "EISDIR"));
-      if (!sourceFailure) throw error;
+      if (!isSourceFailure(error)) throw error;
       // A broken dependency must not prevent syntax-only source navigation.
       const parsed = await parse(document.source);
       if (!parsed.ok) return null;
@@ -597,7 +913,7 @@ export class LanguageService {
     const offset = offsetAtPosition(document.source, position);
     for (const [expression, specifier] of importExpressions(module)) {
       if (offset >= expression.span.start && offset < expression.span.end) {
-        return await this.#importedDefinition(uri, specifier);
+        return await this.#importedDefinition(uri, workspace, specifier);
       }
     }
     const span = definitionAt(module, document.source, offset);
@@ -614,6 +930,7 @@ export class LanguageService {
     ) {
       const target = await this.#importedDefinition(
         uri,
+        workspace,
         imported.specifier,
         imported.name,
       );
@@ -626,17 +943,19 @@ export class LanguageService {
     uri: string,
     position: Position,
   ): Promise<readonly Location[]> {
-    const document = this.#requiredDocument(uri);
+    const snapshot = this.#requiredSnapshot(uri);
+    const workspace = this.#store.snapshots();
+    const document = snapshot.document;
     let parsed: CompilerSyntaxSnapshot;
     try {
-      parsed = await this.#syntaxRevision(uri, document);
+      parsed = await this.#syntaxRevision(snapshot);
     } catch (error) {
       if (diagnosticsFromError(editorPath(uri), error) !== null) return [];
       throw error;
     }
     const offset = offsetAtPosition(document.source, position);
     if (signatureTypeContaining(parsed.module, offset) !== null) {
-      const selected = await this.definition(uri, position);
+      const selected = await this.#definitionAt(snapshot, workspace, position);
       if (selected === null) return [];
       return [selected];
     }
@@ -645,8 +964,9 @@ export class LanguageService {
     const locations: Location[] = [];
     const seen = new Set<string>();
     for (const reference of typeReferenceSpans(type, document.source)) {
-      const location = await this.definition(
-        uri,
+      const location = await this.#definitionAt(
+        snapshot,
+        workspace,
         positionAtOffset(document.source, reference.start),
       );
       if (location === null) continue;
@@ -660,15 +980,18 @@ export class LanguageService {
   }
 
   async hover(uri: string, position: Position): Promise<Hover | null> {
-    const document = this.#requiredDocument(uri);
+    const snapshot = this.#requiredSnapshot(uri);
+    const document = snapshot.document;
     let parsed: CompilerSyntaxSnapshot;
     try {
-      parsed = await this.#syntaxRevision(uri, document);
+      parsed = await this.#syntaxRevision(snapshot);
     } catch (error) {
-      if (diagnosticsFromError(editorPath(uri), error) !== null) return null;
-      throw error;
+      // A broken input leaves no facts to describe; operational failures
+      // stay loud. Missing inputs surface through diagnostics.
+      if (!isSourceFailure(error)) throw error;
+      return null;
     }
-    const checked = await this.#typedRevision(uri, document);
+    const checked = await this.#typedRevision(snapshot);
     const offset = offsetAtPosition(document.source, position);
     const description = hoverAt(
       parsed.module,
@@ -696,9 +1019,18 @@ export class LanguageService {
     uri: string,
     position: Position,
   ): Promise<readonly CompletionItem[]> {
-    const document = this.#requiredDocument(uri);
-    const parsed = await this.#syntaxRevision(uri, document);
-    const analysis = await this.#typedRevision(uri, document);
+    const snapshot = this.#requiredSnapshot(uri);
+    const document = snapshot.document;
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(snapshot);
+    } catch (error) {
+      // A broken input leaves no bindings to complete, mirroring the
+      // analysis-stage degrade below; operational failures stay loud.
+      if (!isSourceFailure(error)) throw error;
+      return [];
+    }
+    const analysis = await this.#typedRevision(snapshot);
     const offset = offsetAtPosition(document.source, position);
     const items = new Map<string, CompletionItem>();
     for (const binding of moduleBindings(parsed.module)) {
@@ -751,9 +1083,18 @@ export class LanguageService {
     uri: string,
     position: Position,
   ): Promise<SignatureHelp | null> {
-    const document = this.#requiredDocument(uri);
-    const parsed = await this.#syntaxRevision(uri, document);
-    const analysis = await this.#typedRevision(uri, document);
+    const snapshot = this.#requiredSnapshot(uri);
+    const document = snapshot.document;
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(snapshot);
+    } catch (error) {
+      // A broken input leaves no application to describe, mirroring the
+      // analysis-stage degrade below; operational failures stay loud.
+      if (!isSourceFailure(error)) throw error;
+      return null;
+    }
+    const analysis = await this.#typedRevision(snapshot);
     if (analysis === null) return null;
     const offset = offsetAtPosition(document.source, position);
     const application = applicationAt(parsed.module, offset);
@@ -780,9 +1121,18 @@ export class LanguageService {
     uri: string,
     range?: Range,
   ): Promise<readonly InlayHint[]> {
-    const document = this.#requiredDocument(uri);
-    const parsed = await this.#syntaxRevision(uri, document);
-    const analysis = await this.#typedRevision(uri, document);
+    const snapshot = this.#requiredSnapshot(uri);
+    const document = snapshot.document;
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(snapshot);
+    } catch (error) {
+      // A deleted or unloadable dependency leaves no facts to hint at; the
+      // missing input surfaces through diagnostics, not an empty provider.
+      if (!isSourceFailure(error)) throw error;
+      return [];
+    }
+    const analysis = await this.#typedRevision(snapshot);
     if (analysis === null) return [];
     let start = 0;
     let end = document.source.length;
@@ -810,9 +1160,18 @@ export class LanguageService {
   }
 
   async documentSymbols(uri: string): Promise<readonly DocumentSymbol[]> {
-    const document = this.#requiredDocument(uri);
-    const parsed = await this.#syntaxRevision(uri, document);
-    const analysis = await this.#typedRevision(uri, document);
+    const snapshot = this.#requiredSnapshot(uri);
+    const document = snapshot.document;
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(snapshot);
+    } catch (error) {
+      // A broken input leaves no bindings to outline, mirroring the
+      // analysis-stage degrade below; operational failures stay loud.
+      if (!isSourceFailure(error)) throw error;
+      return [];
+    }
+    const analysis = await this.#typedRevision(snapshot);
     return moduleBindings(parsed.module).map((binding) => {
       let detail: string | undefined;
       if (analysis !== null) {
@@ -836,8 +1195,30 @@ export class LanguageService {
     position: Position,
     includeDeclaration = true,
   ): Promise<readonly Location[]> {
-    const document = this.#requiredDocument(uri);
-    const parsed = await this.#syntaxRevision(uri, document);
+    return await this.#referencesAt(
+      this.#requiredSnapshot(uri),
+      position,
+      includeDeclaration,
+    );
+  }
+
+  async #referencesAt(
+    snapshot: DocumentSnapshot,
+    position: Position,
+    includeDeclaration: boolean,
+  ): Promise<readonly Location[]> {
+    const uri = snapshot.uri;
+    const document = snapshot.document;
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(snapshot);
+    } catch (error) {
+      // A broken input leaves no bindings to resolve, so references and
+      // rename (which refuses empty matches) degrade; operational failures
+      // stay loud.
+      if (!isSourceFailure(error)) throw error;
+      return [];
+    }
     const offset = offsetAtPosition(document.source, position);
     const definition = definitionAt(parsed.module, document.source, offset);
     if (definition === null) return [];
@@ -873,7 +1254,8 @@ export class LanguageService {
     if (!/^[\p{L}_][\p{L}\p{N}_]*$/u.test(newName)) {
       throw new Error(`\`${newName}\` is not a valid Blot binding name`);
     }
-    const references = await this.references(uri, position, true);
+    const snapshot = this.#requiredSnapshot(uri);
+    const references = await this.#referencesAt(snapshot, position, true);
     if (references.length === 0) return null;
     return {
       changes: {
@@ -888,8 +1270,13 @@ export class LanguageService {
   async workspaceSymbols(query: string): Promise<readonly WorkspaceSymbol[]> {
     const symbols: WorkspaceSymbol[] = [];
     const folded = query.toLocaleLowerCase();
-    for (const [uri, document] of this.#documents) {
-      const parsed = await this.#syntaxRevision(uri, document);
+    // One frozen workspace capture at entry: every document below is the
+    // revision the request started with, never a mid-request re-read.
+    const workspace = this.#store.snapshots();
+    for (const snapshot of workspace) {
+      const uri = snapshot.uri;
+      const document = snapshot.document;
+      const parsed = await this.#syntaxRevision(snapshot);
       for (const binding of moduleBindings(parsed.module)) {
         if (!binding.name.toLocaleLowerCase().includes(folded)) continue;
         let kind: 12 | 13 = 13;
@@ -904,68 +1291,171 @@ export class LanguageService {
     return symbols.sort((left, right) => left.name.localeCompare(right.name));
   }
 
-  async formatting(uri: string): Promise<readonly TextEdit[]> {
-    const document = this.#requiredDocument(uri);
-    let snapshot: CompilerSyntaxSnapshot;
-    try {
-      snapshot = await this.#syntaxRevision(uri, document);
-    } catch (error) {
-      if (diagnosticsFromError(editorPath(uri), error) !== null) return [];
-      throw error;
-    }
-    const formatted = await formatSource(document.source, {
-      ok: true,
-      module: snapshot.module,
-      cst: snapshot.cst,
-    });
+  async formatting(
+    uri: string,
+    options?: unknown,
+  ): Promise<readonly TextEdit[]> {
+    const documentSnapshot = this.#requiredSnapshot(uri);
+    const document = documentSnapshot.document;
+    // Formatting is syntax-only: the source snapshot never touches the
+    // workspace graph, resolves no imports, and instantiates no semantic
+    // compiler. Invalid source yields no edits; an operational failure inside
+    // the snapshot (missing Wasm, an invariant break) propagates so the
+    // coordinator settles an explicit backend failure instead of silently
+    // dropping the format. Options are validated (misconfigured clients fail
+    // loudly) but the house style never varies; the returned edit is the
+    // minimal prefix/suffix replacement, verified to reconstruct the
+    // validated output exactly.
+    const snapshot = await snapshotSource(document.source);
+    if (!snapshot.ok) return [];
+    const formatted = await formatSource(
+      document.source,
+      snapshot.snapshot,
+      undefined,
+      { options },
+    );
     if (!formatted.ok || formatted.source === document.source) return [];
-    return [{
-      range: {
-        start: { line: 0, character: 0 },
-        end: positionAtOffset(document.source, document.source.length),
-      },
-      newText: formatted.source,
-    }];
+    const edit = deriveEdit(document.source, formatted.source);
+    if (edit === null) return [];
+    assertEditReconstructs(document.source, formatted.source, edit);
+    return [{ range: edit.range, newText: edit.newText }];
   }
 
   async destroy(): Promise<void> {
     (await this.#compiler).destroy();
-    this.#documents.clear();
-    this.#hoverChecks.clear();
-    this.#syntaxSnapshots.clear();
+    const scratch = this.#scratch;
+    this.#scratch = undefined;
+    if (scratch !== undefined) await scratch.destroy();
+    this.#store.clear();
+    this.#caches.clear();
   }
 
-  #typedRevision(
-    uri: string,
-    document: OpenDocument,
-  ): Promise<CompilerAnalysis | null> {
-    const cached = this.#hoverChecks.get(uri);
-    if (cached !== undefined && cached.version === document.version) {
-      return cached.checked;
-    }
+  /**
+   * The one shared semantic computation per revision. The first subscriber
+   * synchronizes every open overlay, runs the analysis, and records the
+   * observed dependency closure; concurrent same-key subscribers share the
+   * in-flight promise. Structured source failures cache as results;
+   * infrastructure failures are shared in-flight but never served again.
+   */
+  #analysisRevision(snapshot: DocumentSnapshot): Promise<AnalysisResult> {
+    const source = snapshot.document.source;
+    const caches = this.#cachesFor(snapshot);
+    const key = analysisCacheKey(source);
+    const cached = caches.semantic.get(
+      key,
+      source,
+      (epoch) => this.#changesSince(epoch),
+    );
+    if (cached !== undefined) return cached;
+    const uri = snapshot.uri;
     const path = editorPath(uri);
-    const checked = this.#compiler.then((compiler) =>
-      compiler.analyzeSource(path, document.source)
-    ).catch((error) => {
-      if (
-        error instanceof BlotError || error instanceof LoadError ||
-        (error instanceof Error && "code" in error && error.code === "ENOENT")
-      ) return null;
-      throw error;
-    });
-    this.#hoverChecks.set(uri, { version: document.version, checked });
-    return checked;
+    const revision = snapshot.revision;
+    const lifecycle = snapshot.lifecycle;
+    const startEpoch = this.#workspaceEpoch;
+    const manifest = this.#captureManifest();
+    const manifestDigest = overlayManifestDigest(manifest);
+    const computed = (async (): Promise<AnalysisResult> => {
+      const syncMs = await this.#syncOverlays(manifest);
+      await this.#refreshDiskInputsIfNeeded();
+      const compiler = await this.#compiler;
+      const start = Date.now();
+      try {
+        const analysis = await compiler.analyzeSource(path, source);
+        const result = successfulAnalysis(
+          {
+            uri,
+            lifecycle,
+            revision,
+            workspaceEpoch: startEpoch,
+            manifestDigest,
+          },
+          analysis,
+          await compiler.workspaceClosure(path),
+          { syncMs, analysisMs: Date.now() - start },
+        );
+        this.#noteSettled(
+          caches.semantic,
+          key,
+          revision,
+          startEpoch,
+          path,
+          result.dependencies,
+          "ok",
+        );
+        return result;
+      } catch (error) {
+        const work = { syncMs, analysisMs: Date.now() - start };
+        const mapped = diagnosticsFromError(path, error);
+        if (mapped === null) {
+          caches.semantic.noteSettled(key, revision, {
+            revision,
+            dependencies: null,
+            outcome: "infrastructure-failure",
+          });
+          throw error;
+        }
+        const dependencies = await this.#closureAfterSourceFailure(
+          path,
+          error,
+        );
+        const result = failedAnalysis(
+          {
+            uri,
+            lifecycle,
+            revision,
+            workspaceEpoch: startEpoch,
+            manifestDigest,
+          },
+          { diagnostics: mapped },
+          dependencies,
+          work,
+        );
+        this.#noteSettled(
+          caches.semantic,
+          key,
+          revision,
+          startEpoch,
+          path,
+          result.dependencies,
+          "ok",
+        );
+        return result;
+      }
+    })();
+    caches.semantic.set(key, source, revision, startEpoch, path, computed);
+    return computed;
   }
 
-  async #validatedLints(
-    uri: string,
+  async #typedRevision(
+    snapshot: DocumentSnapshot,
+  ): Promise<CompilerAnalysis | null> {
+    try {
+      return (await this.#analysisRevision(snapshot)).analysis;
+    } catch (error) {
+      if (isSourceFailure(error)) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * Runs lint detection for one revision and splits it into publishable
+   * diagnostics and rewrite-validation candidates. Detection performs zero
+   * fix validations; callers validate candidates where they use them.
+   */
+  async #lintSplit(
+    snapshot: DocumentSnapshot,
     parsed: CompilerSyntaxSnapshot,
-  ): Promise<readonly LintDiagnostic[]> {
-    const document = this.#requiredDocument(uri);
-    const analysis = await this.#typedRevision(uri, document);
-    const diagnostics = lintModule(
+  ): Promise<
+    {
+      readonly detected: readonly LintDiagnostic[];
+      readonly split: SplitLintDiagnostics;
+    }
+  > {
+    const source = snapshot.document.source;
+    const analysis = await this.#typedRevision(snapshot);
+    const detected = lintModule(
       parsed.module,
-      document.source,
+      source,
       parsed.cst,
       DEFAULT_LINT_RULES,
       {
@@ -974,52 +1464,256 @@ export class LanguageService {
         readability: analysis?.readability,
       },
     );
-    if (
-      !diagnostics.some((diagnostic) =>
-        diagnostic.fix !== null && diagnostic.fix.validation !== "parse"
-      )
-    ) return diagnostics;
-    return await validateLintDiagnostics(
-      editorPath(uri),
-      document.source,
-      diagnostics,
-    );
+    return { detected, split: splitLintDiagnostics(detected) };
   }
 
   #syntaxRevision(
-    uri: string,
-    document: OpenDocument,
+    snapshot: DocumentSnapshot,
   ): Promise<CompilerSyntaxSnapshot> {
-    const cached = this.#syntaxSnapshots.get(uri);
-    if (cached !== undefined && cached.version === document.version) {
-      return cached.snapshot;
-    }
-    const snapshot = this.#compiler.then((compiler) =>
-      compiler.syntaxSnapshot(editorPath(uri), document.source)
+    const source = snapshot.document.source;
+    const caches = this.#cachesFor(snapshot);
+    const key = syntaxCacheKey(source, SYNTAX_FRONTEND_ID);
+    const cached = caches.syntax.get(
+      key,
+      source,
+      (epoch) => this.#changesSince(epoch),
     );
-    this.#syntaxSnapshots.set(uri, {
-      version: document.version,
-      snapshot,
+    if (cached !== undefined) return cached;
+    const path = editorPath(snapshot.uri);
+    const revision = snapshot.revision;
+    const startEpoch = this.#workspaceEpoch;
+    const manifest = this.#captureManifest();
+    const computed = (async (): Promise<CompilerSyntaxSnapshot> => {
+      await this.#syncOverlays(manifest);
+      await this.#refreshDiskInputsIfNeeded();
+      const compiler = await this.#compiler;
+      try {
+        const parsed = await compiler.syntaxSnapshot(path, source);
+        let dependencies: readonly string[] | null = null;
+        try {
+          dependencies = await compiler.workspaceClosure(path);
+        } catch {
+          dependencies = null;
+        }
+        this.#noteSettled(
+          caches.syntax,
+          key,
+          revision,
+          startEpoch,
+          path,
+          dependencies,
+          "ok",
+        );
+        return parsed;
+      } catch (error) {
+        if (error instanceof LoadError || error instanceof BlotError) {
+          const dependencies = await this.#closureAfterSourceFailure(
+            path,
+            error,
+          );
+          this.#noteSettled(
+            caches.syntax,
+            key,
+            revision,
+            startEpoch,
+            path,
+            dependencies,
+            "source-failure",
+          );
+        } else {
+          caches.syntax.noteSettled(key, revision, {
+            revision,
+            dependencies: null,
+            outcome: "infrastructure-failure",
+          });
+        }
+        throw error;
+      }
+    })();
+    caches.syntax.set(key, source, revision, startEpoch, path, computed);
+    return computed;
+  }
+
+  /**
+   * Reads the dependency closure behind a source failure. Check-phase
+   * failures observed the full graph, so their closure invalidates
+   * precisely; load-phase failures never did, so they stay coarse.
+   */
+  async #closureAfterSourceFailure(
+    path: string,
+    error: unknown,
+  ): Promise<readonly string[] | null> {
+    if (!(error instanceof BlotError)) return null;
+    try {
+      return await (await this.#compiler).workspaceClosure(path);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Records one settlement, then drops completions whose closure moved
+   * mid-flight so a stale result never serves. The root is pinned by its
+   * own bytes (each compiler call sets the root overlay atomically with
+   * its load), so only non-root dependency changes drop.
+   */
+  #noteSettled<Value>(
+    cache: DependencyCache<Value>,
+    key: string,
+    revision: number,
+    startEpoch: number,
+    root: string,
+    dependencies: readonly string[] | null,
+    outcome: "ok" | "source-failure",
+  ): void {
+    cache.noteSettled(key, revision, { revision, dependencies, outcome });
+    const changed = this.#changesSince(startEpoch);
+    if (changed === null) {
+      cache.delete(key, revision);
+      return;
+    }
+    if (dependencies === null) {
+      if (changed.size > 0) cache.delete(key, revision);
+      return;
+    }
+    for (const dependency of dependencies) {
+      if (dependency !== root && changed.has(dependency)) {
+        cache.delete(key, revision);
+        return;
+      }
+    }
+  }
+
+  /** Captures one immutable overlay manifest over every open document. */
+  #captureManifest(): OverlayManifest {
+    return captureOverlayManifest(
+      this.#store.snapshots().map((snapshot) => ({
+        uri: snapshot.uri,
+        path: editorPath(snapshot.uri),
+        version: snapshot.version,
+        source: snapshot.document.source,
+      })),
+      this.#workspaceEpoch,
+    );
+  }
+
+  /**
+   * Stages every changed open overlay in one compiler slot before analysis.
+   * Staging always reads current store text (never the possibly older
+   * captured manifest), so a stale request can never regress a newer
+   * overlay, and versions always auto-increment: the analysis calls below
+   * advance the same overlay sequence, so explicit LSP versions would fall
+   * behind and throw. Returns the measured sync work in milliseconds.
+   */
+  async #syncOverlays(manifest: OverlayManifest): Promise<number> {
+    const pending = diffOverlayManifest(this.#syncedManifest, manifest);
+    if (pending.length === 0) return 0;
+    const start = Date.now();
+    const staged = new Map<string, StagedOverlay>();
+    for (const entry of pending) {
+      const snapshot = this.#store.snapshot(entry.uri);
+      if (snapshot === null) continue;
+      staged.set(entry.path, { source: snapshot.document.source });
+    }
+    if (staged.size > 0) {
+      await (await this.#compiler).stageOverlays(staged);
+    }
+    this.#syncedManifest = manifest;
+    return Date.now() - start;
+  }
+
+  async #refreshDiskInputsIfNeeded(): Promise<void> {
+    if (!this.#diskRefreshPending) return;
+    this.#diskRefreshPending = false;
+    await (await this.#compiler).refreshDiskInputs();
+  }
+
+  /**
+   * The one isolated scratch session for speculative fix validation. Fixed
+   * source variants must never clobber the service workspace, so every
+   * speculative check runs here, seeded with the requesting revision's
+   * overlay snapshot, and never rewrites the live semantic session root.
+   */
+  #scratchSession(): ScratchValidationSession {
+    const existing = this.#scratch;
+    if (existing !== undefined) return existing;
+    const session = new ScratchValidationSession(
+      this.#createValidationCompiler,
+    );
+    this.#scratch = session;
+    return session;
+  }
+
+  /**
+   * Captures the open-document overlays for one request's validations.
+   * Callers invoke this synchronously at request entry, so every
+   * speculative check in the request shares the entry snapshot instead of
+   * re-reading the store mid-request.
+   */
+  #requestOverlays(): ReadonlyMap<string, StagedOverlay> {
+    const overlays = new Map<string, StagedOverlay>();
+    for (const open of this.#store.snapshots()) {
+      overlays.set(editorPath(open.uri), { source: open.document.source });
+    }
+    return overlays;
+  }
+
+  #noteWorkspaceChange(path: string): void {
+    this.#workspaceEpoch += 1;
+    this.#epochChanges.push({
+      epoch: this.#workspaceEpoch,
+      paths: new Set([path]),
     });
+    while (this.#epochChanges.length > maximumEpochLog) {
+      this.#epochChanges.shift();
+    }
+  }
+
+  /**
+   * Collects the paths changed after one epoch. Returns null when the
+   * bounded log no longer reaches the epoch, forcing a recompute instead
+   * of a possibly stale hit.
+   */
+  #changesSince(epoch: number): ReadonlySet<string> | null {
+    if (epoch >= this.#workspaceEpoch) return new Set<string>();
+    const oldest = this.#epochChanges[0];
+    if (oldest === undefined || epoch < oldest.epoch) return null;
+    const changed = new Set<string>();
+    for (const entry of this.#epochChanges) {
+      if (entry.epoch > epoch) {
+        for (const path of entry.paths) changed.add(path);
+      }
+    }
+    return changed;
+  }
+
+  #requiredSnapshot(uri: string): DocumentSnapshot {
+    const snapshot = this.#store.snapshot(uri);
+    if (snapshot === null) throw new Error(`document ${uri} is not open`);
     return snapshot;
   }
 
-  #requiredDocument(uri: string): OpenDocument {
-    const document = this.#documents.get(uri);
-    if (document === undefined) throw new Error(`document ${uri} is not open`);
-    return document;
+  #cachesFor(snapshot: DocumentSnapshot): DocumentCaches {
+    const cached = this.#caches.get(snapshot.uri);
+    if (cached !== undefined && cached.lifecycle === snapshot.lifecycle) {
+      return cached;
+    }
+    const fresh = this.#freshCaches(snapshot.lifecycle);
+    this.#caches.set(snapshot.uri, fresh);
+    return fresh;
   }
 
-  #requireNextVersion(uri: string, current: number, next: number): void {
-    if (next <= current) {
-      throw new Error(
-        `document ${uri} version ${next} does not follow ${current}`,
-      );
-    }
+  #freshCaches(lifecycle: number): DocumentCaches {
+    return {
+      lifecycle,
+      syntax: new DependencyCache(maximumCachedContents),
+      semantic: new DependencyCache(maximumCachedContents),
+    };
   }
 
   async #importedDefinition(
     importerUri: string,
+    workspace: readonly DocumentSnapshot[],
     specifier: string,
     name?: string,
   ): Promise<Location | null> {
@@ -1039,10 +1733,13 @@ export class LanguageService {
     }
     let targetUri = toFileUrl(targetPath).href;
     let targetSource: string | undefined;
-    for (const [openUri, document] of this.#documents) {
-      if (editorPath(openUri) !== targetPath) continue;
-      targetUri = openUri;
-      targetSource = document.source;
+    // Open targets resolve against the request-entry workspace snapshot, so
+    // navigation never re-reads the store mid-request: the answer always
+    // describes the world the request started in.
+    for (const open of workspace) {
+      if (editorPath(open.uri) !== targetPath) continue;
+      targetUri = open.uri;
+      targetSource = open.document.source;
       break;
     }
     const openTarget = targetSource !== undefined;
@@ -1555,12 +2252,64 @@ function unreachableStatementRemovalSpan(source: string, span: Span): Span {
 
   let end = code.end;
   const lineEnd = source.indexOf("\n", code.end);
-  const contentEnd = lineEnd < 0 ? source.length : lineEnd;
+  let contentEnd = lineEnd;
+  if (lineEnd < 0) contentEnd = source.length;
   if (/^[ \t\r]*$/.test(source.slice(code.end, contentEnd))) {
     end = contentEnd;
     if (lineEnd >= 0) end += 1;
   }
   return { start, end };
+}
+
+function lintLanguageSeverity(severity: LintDiagnostic["severity"]): 2 | 4 {
+  if (severity === "warning") return 2;
+  return 4;
+}
+
+/** Orders eager validation budgets deterministically, independent of input. */
+function compareActionCandidates(
+  left: LintDiagnostic,
+  right: LintDiagnostic,
+): number {
+  if (left.span.start !== right.span.start) {
+    return left.span.start - right.span.start;
+  }
+  if (left.span.end !== right.span.end) return left.span.end - right.span.end;
+  if (left.code !== right.code) {
+    if (left.code < right.code) return -1;
+    return 1;
+  }
+  const leftFix = left.fix;
+  const rightFix = right.fix;
+  if (leftFix === null && rightFix === null) return 0;
+  if (leftFix === null) return -1;
+  if (rightFix === null) return 1;
+  if (leftFix.title === rightFix.title) return 0;
+  if (leftFix.title < rightFix.title) return -1;
+  return 1;
+}
+
+/**
+ * Answers a resolve that proved nothing: the same action with no diagnostics
+ * and no edits. Stale, vanished, and unproven candidates all settle this
+ * way instead of returning edits.
+ */
+function emptyResolvedAction(
+  action: CodeAction,
+  uri: string,
+  version: number,
+): CodeAction {
+  return {
+    title: action.title,
+    kind: action.kind,
+    diagnostics: [],
+    edit: {
+      documentChanges: [{
+        textDocument: { uri, version },
+        edits: [],
+      }],
+    },
+  };
 }
 
 export function deduplicateCodeActions(
@@ -1613,6 +2362,25 @@ function languageDiagnosticKey(diagnostic: LanguageDiagnostic): string {
   ]);
 }
 
+/**
+ * Whether a workspace failure names broken source inputs rather than broken
+ * machinery: a check diagnostic, an unloadable module, a corrupt package
+ * capsule, or a missing filesystem input. Providers degrade on these (empty
+ * results, diagnostics) instead of failing the request; anything else is an
+ * operational failure the coordinator must settle explicitly.
+ */
+function isSourceFailure(error: unknown): boolean {
+  if (
+    error instanceof BlotError || error instanceof LoadError ||
+    error instanceof PackageArtifactError
+  ) {
+    return true;
+  }
+  return error instanceof Error && "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR" ||
+      error.code === "EISDIR");
+}
+
 function diagnosticsFromError(
   path: string,
   error: unknown,
@@ -1649,28 +2417,6 @@ function languageDiagnostic(
     source: "blot",
     message: diagnostic.message,
   };
-}
-
-export function rangeOf(source: string, span: Span): Range {
-  return {
-    start: positionAtOffset(source, span.start),
-    end: positionAtOffset(source, span.end),
-  };
-}
-
-export function positionAtOffset(source: string, offset: number): Position {
-  const lineStarts = sourceLineStarts(source);
-  const boundedOffset = Math.max(0, Math.min(offset, source.length));
-  const line = lineAtOffset(lineStarts, boundedOffset);
-  return { line, character: boundedOffset - lineStarts[line] };
-}
-
-export function offsetAtPosition(source: string, position: Position): number {
-  const lineStarts = sourceLineStarts(source);
-  const line = Math.max(0, Math.min(position.line, lineStarts.length - 1));
-  let lineEnd = source.indexOf("\n", lineStarts[line]);
-  if (lineEnd < 0) lineEnd = source.length;
-  return Math.min(lineStarts[line] + Math.max(0, position.character), lineEnd);
 }
 
 function filePath(uri: string): string | null {
