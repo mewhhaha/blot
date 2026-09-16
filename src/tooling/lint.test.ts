@@ -28,6 +28,7 @@ function rendererSimplificationFacts(
     name: "collect-renderer-expressions",
     code: "BLOT_LINT_EQUALITY_CASE",
     severity: "hint",
+    evidence: "semantic-fact",
     create() {
       return { expression: (path) => expressions.push(path.node) };
     },
@@ -1903,6 +1904,7 @@ Deno.test("a registered rule receives typed AST and concrete syntax visits", asy
     name: "chosen-name",
     code: "BLOT_LINT_TEST_CHOSEN_NAME",
     severity: "hint",
+    evidence: "syntax-only",
     create(context) {
       return {
         expression(path) {
@@ -2057,6 +2059,7 @@ return (
     name: "surface-coverage",
     code: "BLOT_LINT_TEST_SURFACE_COVERAGE",
     severity: "hint",
+    evidence: "syntax-only",
     create() {
       return {
         declaration(path) {
