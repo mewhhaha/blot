@@ -1,0 +1,297 @@
+diff --git a/examples/README.md b/examples/README.md
+index 2c3193da..f38e9af6 100644
+--- a/examples/README.md
++++ b/examples/README.md
+@@ -277,3 +277,9 @@ When a pending case is implemented, move it to the top-level catalog, add its
+ golden value, and remove its entry from `PENDING` in `examples.test.ts`. When a
+ trap becomes total by design, promote it the same way rather than weakening the
+ expected diagnostic.
++
++### Checked subtyping witnesses
++
++[`typed_subtyping_witnesses.blot`](typed_subtyping_witnesses.blot) derives and
++composes checked no-op views for refined records and closed sums. See the
++[design and test instructions](typed_subtyping_witnesses.md).
+diff --git a/examples/expected/typed_subtyping_witnesses.txt b/examples/expected/typed_subtyping_witnesses.txt
+index 704f16e9..b9876925 100644
+--- a/examples/expected/typed_subtyping_witnesses.txt
++++ b/examples/expected/typed_subtyping_witnesses.txt
+@@ -1 +1 @@
+-{ .endpoint = "/v1/🐱:65535"; .route = "/v1/🐱"; .degraded = "degraded: cache warmup"; .ready = "ready" }
++{ .default = { .endpoint = "/v1/🐱:65535"; .route = "/v1/🐱"; .degraded = "degraded: cache warmup"; .ready = "ready"; }; }
+diff --git a/examples/expected/typed_subtyping_witnesses.wasm.txt b/examples/expected/typed_subtyping_witnesses.wasm.txt
+index 704f16e9..3a525c61 100644
+--- a/examples/expected/typed_subtyping_witnesses.wasm.txt
++++ b/examples/expected/typed_subtyping_witnesses.wasm.txt
+@@ -1 +1 @@
+-{ .endpoint = "/v1/🐱:65535"; .route = "/v1/🐱"; .degraded = "degraded: cache warmup"; .ready = "ready" }
++{ .degraded = "degraded: cache warmup"; .endpoint = "/v1/🐱:65535"; .ready = "ready"; .route = "/v1/🐱" }
+diff --git a/examples/lib/subtyping_witness.blot b/examples/lib/subtyping_witness.blot
+index 75442b1c..beb65d06 100644
+--- a/examples/lib/subtyping_witness.blot
++++ b/examples/lib/subtyping_witness.blot
+@@ -1,5 +1,3 @@
+-open import "blot:prelude"
+-
+ // A witness is an ordinary function packaged with the relationship it proves.
+ // `Source` may be more precise than `Target`; applying the witness performs no
+ // runtime conversion, it only exposes the statically safe view.
+@@ -7,16 +5,15 @@ const Witness = fn (Source, Target) => {
+   .apply = Source -> Target;
+ }
+ 
+-// Derivation happens at compile time because types and `refines` are ordinary
+-// compile-time values. Invalid directions fail while specializing the program
+-// rather than introducing a runtime branch or unchecked cast.
++// The identity implementation is checked against the requested arrow. That
++// makes the compiler's actual subtype relation the authority, including closed
++// sums, rather than duplicating it through a reflection predicate.
+ const derive = fn (Source, Target) => do:
+-  if refines (Source, Target):
+-    let apply :: Source -> Target
+-    let apply = fn value => value
+-    return { .apply = apply; }
+-
+-  return @fail "subtyping witness requires Source to refine Target"
++  let apply :: Source -> Target
++  let apply = fn value => value
++  let witness :: Witness (Source, Target)
++  let witness = { .apply; }
++  return witness
+ 
+ const identity :: @forall (fn Value => Witness (Value, Value))
+ const identity = {
+@@ -37,9 +34,9 @@ const adapt :: @forall (fn Source => @forall (fn Target => @forall (fn Output =>
+ const adapt = fn (witness, consume) => fn value => consume (witness.apply value)
+ 
+ return {
+-  .Witness = Witness;
+-  .derive = derive;
+-  .identity = identity;
+-  .compose = compose;
+-  .adapt = adapt;
++  .Witness;
++  .derive;
++  .identity;
++  .compose;
++  .adapt;
+ }
+diff --git a/examples/typed_subtyping_witnesses.blot b/examples/typed_subtyping_witnesses.blot
+index a110b627..d77bfc25 100644
+--- a/examples/typed_subtyping_witnesses.blot
++++ b/examples/typed_subtyping_witnesses.blot
+@@ -3,24 +3,30 @@ const W = import "./lib/subtyping_witness.blot"
+ 
+ // Rich internal requests carry fields that narrower consumers do not need, and
+ // their port is statically restricted to the valid TCP range.
+-const Port = 1..65535
+-const InternalRequest = {
+-  .path = Text;
+-  .port = Port;
+-  .trace = Text;
+-  .retry = 0..3;
+-}
+-const PublicRequest = {
+-  .path = Text;
+-  .port = Int;
+-}
++const Port = range (1, 65535)
++const InternalRequest =
++  {
++    .path = Text;
++    .port = Port;
++    .trace = Text;
++    .retry = range (0, 3);
++  }
++const PublicRequest =
++  {
++    .path = Text;
++    .port = Int;
++  }
+ const PathRequest = { .path = Text; }
+ 
+-// These witnesses are generated from the actual subtype relation rather than
+-// restating record-copying code. Refinement weakening and record width
+-// subtyping compose through one exact intermediate type.
++// These no-op conversions are checked against the actual subtype relation.
++// Named Witness boundaries retain the source/target types when independently
++// derived values are passed into quantified composition. Refinement weakening
++// and record width subtyping compose through one exact intermediate type.
++const internal_to_public :: W.Witness (InternalRequest, PublicRequest)
+ const internal_to_public = W.derive (InternalRequest, PublicRequest)
++const public_to_path :: W.Witness (PublicRequest, PathRequest)
+ const public_to_path = W.derive (PublicRequest, PathRequest)
++const internal_to_path :: W.Witness (InternalRequest, PathRequest)
+ const internal_to_path = W.compose (internal_to_public, public_to_path)
+ 
+ let endpoint :: PublicRequest -> Text
+@@ -33,17 +39,19 @@ let endpoint_from_internal = W.adapt (internal_to_public, endpoint)
+ let route_from_internal = W.adapt (internal_to_path, route_name)
+ 
+ let request :: InternalRequest
+-let request = {
+-  .path = "/v1/🐱";
+-  .port = 65535;
+-  .trace = "trace-α";
+-  .retry = 3;
+-}
++let request =
++  {
++    .path = "/v1/🐱";
++    .port = 65535;
++    .trace = "trace-α";
++    .retry = 3;
++  }
+ 
+ // The same abstraction also witnesses closed-sum widening; it is not specific
+ // to records. `Healthy` values can be consumed by APIs that handle every status.
+ const Healthy = #Ready | #Degraded Text
+ const Status = Healthy | #Failed Text
++const healthy_to_status :: W.Witness (Healthy, Status)
+ const healthy_to_status = W.derive (Healthy, Status)
+ 
+ let describe_status :: Status -> Text
+@@ -54,7 +62,7 @@ let describe_status = fn status => case status of
+ 
+ let describe_healthy = W.adapt (healthy_to_status, describe_status)
+ 
+-// Pain point: `refines` proves representational/subtyping compatibility only.
++// Pain point: `Witness` proves representational/subtyping compatibility only.
+ // It cannot establish domain claims such as “this Int is milliseconds” versus
+ // “this Int is seconds”; semantic version/unit changes still need an explicit
+ // conversion rather than a witness derived solely from the type relation.
+diff --git a/examples/typed_subtyping_witnesses.md b/examples/typed_subtyping_witnesses.md
+new file mode 100644
+index 00000000..3c89be8c
+--- /dev/null
++++ b/examples/typed_subtyping_witnesses.md
+@@ -0,0 +1,41 @@
++# Checked subtyping witnesses
++
++`Witness (Source, Target)` packages a no-op `Source -> Target` conversion.
++`derive` asks the compiler to check the identity implementation against that
++arrow; it does not approximate the compiler with a second reflection predicate.
++`compose` shares the middle type, and `adapt` reuses a consumer of a wider view
++for a richer input. The executable composes record-width subtyping with a
++refined port and also widens a closed variant union.
++
++## Run and verify
++
++```sh
++pnpm blot check examples/typed_subtyping_witnesses.blot
++pnpm blot run examples/typed_subtyping_witnesses.blot
++pnpm blot build examples/typed_subtyping_witnesses.blot
++node --import tsx --test src/node/typed_subtyping_witnesses.test.ts
++```
++
++The evaluator and emitted Wasm independently produce the endpoint
++`/v1/🐱:65535`, route `/v1/🐱`, and descriptions of both healthy alternatives.
++Negative tests reject a missing required field, two incompatible composition
++carriers, and port `65536`. They assert `BLOT_TYPE_ERROR`, not an incidental
++syntax error or a refusal during creation of an otherwise valid witness.
++
++## Design boundaries
++
++The type proves that the identity implementation is a safe structural view. It
++does not prove a business conversion such as seconds to milliseconds. Named
++`Witness` signatures at the staged construction boundaries currently preserve
++more useful source/target information than inferred bindings; the example keeps
++those explicit rather than weakening either side of the relation.
++
++The earlier reflection-based derivation also rejected a valid union widening:
++`refines (#A | #B, #A | #B | #C)` evaluates to `False` on this compiler/prelude.
++Delegating the identity proof directly to the checked arrow removes that
++incomplete predicate from the abstraction's trust boundary.
++
++The three distinct record/union instantiations intentionally exercise reuse.
++Blot's lint therefore reports `BLOT_LINT_SPECIALIZATION_COUNT` for `derive` and
++`adapt` (three representations each). This is a visible specialization tradeoff,
++not suppressed or described as a measured performance defect.
+diff --git a/src/node/fixtures/subtyping_witness_bad_compose.blot b/src/node/fixtures/subtyping_witness_bad_compose.blot
+index f0aa46dc..5be2341b 100644
+--- a/src/node/fixtures/subtyping_witness_bad_compose.blot
++++ b/src/node/fixtures/subtyping_witness_bad_compose.blot
+@@ -6,7 +6,9 @@ const Path = { .path = Text; }
+ const Healthy = #Ready | #Degraded Text
+ const Status = Healthy | #Failed Text
+ 
++const to_path :: W.Witness (Rich, Path)
+ const to_path = W.derive (Rich, Path)
++const to_status :: W.Witness (Healthy, Status)
+ const to_status = W.derive (Healthy, Status)
+ 
+ // The first target and second source are unrelated, so there is no shared
+diff --git a/src/node/fixtures/subtyping_witness_invalid_refinement.blot b/src/node/fixtures/subtyping_witness_invalid_refinement.blot
+index b62792bf..fb40b1e8 100644
+--- a/src/node/fixtures/subtyping_witness_invalid_refinement.blot
++++ b/src/node/fixtures/subtyping_witness_invalid_refinement.blot
+@@ -1,6 +1,6 @@
+ open import "blot:prelude"
+ 
+-const Port = 1..65535
++const Port = range (1, 65535)
+ const Request = { .path = Text; .port = Port; }
+ 
+ let invalid :: Request
+diff --git a/src/node/fixtures/subtyping_witness_wrong_direction.blot b/src/node/fixtures/subtyping_witness_wrong_direction.blot
+index 2e69aa87..90f21ea4 100644
+--- a/src/node/fixtures/subtyping_witness_wrong_direction.blot
++++ b/src/node/fixtures/subtyping_witness_wrong_direction.blot
+@@ -4,7 +4,7 @@ const W = import "../../../examples/lib/subtyping_witness.blot"
+ const Internal = { .path = Text; .trace = Text; }
+ const Public = { .path = Text; }
+ 
+-// Public cannot be widened into a richer internal request: the missing field is
+-// observable, so derive must refuse this direction at compile time.
++// A missing field cannot be created by a no-op conversion. The generated
++// Source -> Target signature must reject this direction at compile time.
+ const invalid = W.derive (Public, Internal)
+ return invalid
+diff --git a/src/node/typed_subtyping_witnesses.test.ts b/src/node/typed_subtyping_witnesses.test.ts
+index 9e588c57..cd5b3ae7 100644
+--- a/src/node/typed_subtyping_witnesses.test.ts
++++ b/src/node/typed_subtyping_witnesses.test.ts
+@@ -13,7 +13,15 @@ const expectedType =
+ test("subtyping witnesses compose safe static views in both executions", async () => {
+   const compiler = await Compiler.create();
+   try {
+-    for (const sourcePath of [libraryPath, path]) {
++    for (
++      const sourcePath of [
++        libraryPath,
++        path,
++        "src/node/fixtures/subtyping_witness_wrong_direction.blot",
++        "src/node/fixtures/subtyping_witness_bad_compose.blot",
++        "src/node/fixtures/subtyping_witness_invalid_refinement.blot",
++      ]
++    ) {
+       const source = await readFile(sourcePath, "utf8");
+       const formatted = await formatSource(source);
+       assert.equal(formatted.ok, true);
+@@ -53,16 +61,21 @@ test("subtyping witnesses reject unsafe directions, composition, and refinements
+   try {
+     await assert.rejects(
+       () =>
+-        compiler.check("src/node/fixtures/subtyping_witness_wrong_direction.blot"),
+-      /subtyping witness requires Source to refine Target/,
++        compiler.check(
++          "src/node/fixtures/subtyping_witness_wrong_direction.blot",
++        ),
++      /BLOT_TYPE_ERROR/,
+     );
+     await assert.rejects(
+-      () => compiler.check("src/node/fixtures/subtyping_witness_bad_compose.blot"),
+-      /BLOT_(TYPE_ERROR|ARGUMENT_MISMATCH)/,
++      () =>
++        compiler.check("src/node/fixtures/subtyping_witness_bad_compose.blot"),
++      /BLOT_TYPE_ERROR/,
+     );
+     await assert.rejects(
+       () =>
+-        compiler.check("src/node/fixtures/subtyping_witness_invalid_refinement.blot"),
++        compiler.check(
++          "src/node/fixtures/subtyping_witness_invalid_refinement.blot",
++        ),
+       /BLOT_TYPE_ERROR/,
+     );
+   } finally {
