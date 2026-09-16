@@ -1,0 +1,87 @@
+// Build reusable immutable configuration edits from record schemas. A field
+// descriptor computes its Part type once; replacement, modification, nested
+// lifting, and composition all preserve that exact carrier.
+
+open import "blot:prelude"
+const Edit = import "./lib/record_edit.blot"
+
+const Limits =
+  {
+    .burst = range (1, 100);
+    .window_seconds = range (1, 3600);
+  }
+const Service =
+  {
+    .host = Text;
+    .port = range (1, 65535);
+    .limits = Limits;
+    .note = Option Text;
+  }
+
+const Host = Edit.field (Service, "host")
+const Port = Edit.field (Service, "port")
+const ServiceLimits = Edit.field (Service, "limits")
+const Burst = Edit.field (Limits, "burst")
+const Window = Edit.field (Limits, "window_seconds")
+const Note = Edit.field (Service, "note")
+
+// An Edit Limits is exactly Limits -> Limits, so it can be lifted through the
+// outer `.limits` field by ordinary `modify`; no second composition API is
+// needed for nesting.
+let nested_limits =
+  Edit.then (
+    Burst.replace 80,
+    Window.replace 45
+  )
+let rollout =
+  Edit.then (
+    Host.modify (fn host => host <> "/β"),
+    Edit.then (
+      Port.replace 8443,
+      Edit.then (
+        ServiceLimits.modify nested_limits,
+        Note.replace (Some "canary")
+      )
+    )
+  )
+
+let original :: Service
+let original =
+  {
+    .host = "api.example";
+    .port = 443;
+    .limits = { .burst = 100; .window_seconds = 30; };
+    .note = Some "stable";
+  }
+
+let updated = rollout original
+
+// Empty is the identity, and sequential edits are right-biased only because the
+// second endomorphism runs after the first one.
+let no_change :: Edit.Edit Service
+let no_change = Edit.empty
+let unchanged = no_change original
+let port_override = Edit.then (Port.replace 8080, Port.replace 9443)
+let overridden = port_override original
+let max_port = Port.replace 65535 original
+
+// The same abstraction is independent of this deployment domain.
+const Profile = { .name = Text; .active = Bool; }
+const Name = Edit.field (Profile, "name")
+const Active = Edit.field (Profile, "active")
+let profile_edit =
+  Edit.then (
+    Name.modify (fn name => name <> " 🐱"),
+    Active.replace False
+  )
+let profile = profile_edit { .name = "Ada"; .active = True; }
+
+return {
+  .default = {
+    .updated;
+    .unchanged;
+    .overridden_port = overridden.port;
+    .max_port = max_port.port;
+    .profile;
+  };
+}

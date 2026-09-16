@@ -1,0 +1,5 @@
+open import "blot:prelude"
+const Edit = import "../../../examples/lib/record_edit.blot"
+const Service = { .port = range (1, 65535); }
+const Missing = Edit.field (Service, "missing")
+return { .default = 0; }
