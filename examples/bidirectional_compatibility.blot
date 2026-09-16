@@ -1,0 +1,76 @@
+const P = import "blot:prelude"
+const Type = P.Type
+const B = import "./lib/bidirectional_bridge.blot"
+
+// Three independently versioned role vocabularies. A bridge is allowed to be
+// partial in either direction: compatibility policy is not the same thing as a
+// total rename.
+const LegacyRole = #Admin P.Text | #Member P.Text | #Bot P.Text | #Guest P.Text
+const Role =
+  #Privileged P.Text | #Standard P.Text | #Service P.Text | #Suspended P.Text
+const PartnerRole =
+  #Owner P.Text | #User P.Text | #Blocked P.Text | #Unknown P.Text
+
+const LegacyForwardError = #UnsupportedGuest P.Text
+const LegacyBackwardError = #NotLegacyRole P.Text
+const PartnerForwardError = #PartnerRejectsService P.Text
+const PartnerBackwardError = #UnknownPartnerRole P.Text
+
+const legacy ::
+  B.Bridge (LegacyRole, Role, LegacyForwardError, LegacyBackwardError)
+const legacy =
+  {
+    .to_right = fn value => case value of
+      #Admin name => #Ok (#Privileged name)
+      #Member name => #Ok (#Standard name)
+      #Bot name => #Ok (#Service name)
+      #Guest name => #Error (#UnsupportedGuest name)
+    ;
+    .to_left = fn value => case value of
+      #Privileged name => #Ok (#Admin name)
+      #Standard name => #Ok (#Member name)
+      #Service name => #Ok (#Bot name)
+      #Suspended name => #Error (#NotLegacyRole name)
+    ;
+  }
+
+const partner ::
+  B.Bridge (Role, PartnerRole, PartnerForwardError, PartnerBackwardError)
+const partner =
+  {
+    .to_right = fn value => case value of
+      #Privileged name => #Ok (#Owner name)
+      #Standard name => #Ok (#User name)
+      #Service name => #Error (#PartnerRejectsService name)
+      #Suspended name => #Ok (#Blocked name)
+    ;
+    .to_left = fn value => case value of
+      #Owner name => #Ok (#Privileged name)
+      #User name => #Ok (#Standard name)
+      #Blocked name => #Ok (#Suspended name)
+      #Unknown name => #Error (#UnknownPartnerRole name)
+    ;
+  }
+
+// The shared Role carrier is the only legal composition boundary. Result errors
+// retain whether the legacy (#First) or partner (#Second) boundary rejected.
+const combined = B.compose (legacy, partner)
+const reversed = B.reverse combined
+
+// Explicitly pin the otherwise-uninhabited error positions of identity to the
+// domain errors already used by this boundary.
+const legacy_identity ::
+  B.Bridge (LegacyRole, LegacyRole, LegacyForwardError, LegacyBackwardError)
+const legacy_identity = B.identity
+
+return {
+  .default = {
+    .admin = combined.to_right (#Admin "Ada 🐱");
+    .guest_rejected_first = combined.to_right (#Guest "Grace");
+    .bot_rejected_second = combined.to_right (#Bot "build-bot");
+    .blocked_rejected_first = combined.to_left (#Blocked "Lin");
+    .unknown_rejected_second = combined.to_left (#Unknown "mystery");
+    .reverse_owner = reversed.to_right (#Owner "Ada 🐱");
+    .identity = legacy_identity.to_right (#Member "Edsger");
+  };
+}
