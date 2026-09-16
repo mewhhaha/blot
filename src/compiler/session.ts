@@ -9,7 +9,7 @@ import {
   PRELUDE,
   type SourceInspection,
 } from "../load.ts";
-import { WorkspaceGraph } from "../workspace_graph.ts";
+import { type StagedOverlay, WorkspaceGraph } from "../workspace_graph.ts";
 import { babaRuntime } from "../syntax/baba_runtime.ts";
 import { materializeCpuCst } from "../syntax/cpu_cst.ts";
 import {
@@ -222,6 +222,9 @@ export interface CompilerHost {
     request: DevelopmentCompilationRequest,
   ): Promise<DevelopmentCompilation>;
   setOverlay(path: string, source: string, version?: number): Promise<void>;
+  stageOverlays(entries: ReadonlyMap<string, StagedOverlay>): Promise<void>;
+  workspaceClosure(path: string): Promise<readonly string[]>;
+  refreshDiskInputs(): Promise<void>;
   clearOverlay(path: string): Promise<void>;
   releaseRoot(path: string): Promise<void>;
   markChanged(path: string): Promise<void>;
@@ -801,6 +804,65 @@ export class Compiler implements CompilerHost {
           () => this.#workspace.updateOverlay(absolute, source, version),
         ),
       );
+    });
+  }
+
+  /**
+   * Records unsaved overlays in one serialized slot without loading or
+   * analyzing. The next analysis of an affected root picks them up in its
+   * own single load, so syncing N open documents costs one slot here plus
+   * the analysis itself instead of N eager setOverlay loads.
+   */
+  async stageOverlays(
+    entries: ReadonlyMap<string, StagedOverlay>,
+  ): Promise<void> {
+    await this.#request(() => {
+      this.#workspace.stageOverlays(entries);
+    });
+  }
+
+  /**
+   * Reads the root-inclusive workspace closure the last analysis of one
+   * root observed: the root plus its transitive import, include, and
+   * package-capsule inputs from the existing WorkspaceGraph. Unknown
+   * roots yield just the root; this reports graph facts and resolves
+   * nothing new.
+   */
+  async workspaceClosure(path: string): Promise<readonly string[]> {
+    return await this.#request(() => {
+      const absolute = resolve(path);
+      const closure = new Set<string>([absolute]);
+      const pending = [absolute];
+      while (pending.length > 0) {
+        const current = pending.pop();
+        if (current === undefined) continue;
+        const node = this.#workspace.node(current);
+        if (node === undefined) continue;
+        if (node.storage.tag === "capsule") closure.add(node.storage.path);
+        for (const included of node.includes.values()) {
+          if (!closure.has(included.path)) {
+            closure.add(included.path);
+            pending.push(included.path);
+          }
+        }
+        for (const dependency of node.imports.values()) {
+          if (!closure.has(dependency)) {
+            closure.add(dependency);
+            pending.push(dependency);
+          }
+        }
+      }
+      return [...closure];
+    });
+  }
+
+  /**
+   * Re-reads cached disk inputs in one serialized slot. Editors call this
+   * once per batch of out-of-band changes before their next analysis.
+   */
+  async refreshDiskInputs(): Promise<void> {
+    await this.#request(async () => {
+      await this.#workspace.refreshDiskInputs();
     });
   }
 
