@@ -54,6 +54,8 @@ jobs:
           ]
           out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'completed-audit'
           out.mkdir(exist_ok=True)
+          cleanup = out / 'pr155-clippy.patch'
+          cleanup.write_bytes(pathlib.Path('repair/staging/pr155-clippy.patch').read_bytes())
           published = []
           def run(*args):
               subprocess.run(args, check=True)
@@ -64,31 +66,7 @@ jobs:
               run('git', 'checkout', '--detach', old)
               run('git', 'merge', '--no-commit', '--no-ff', foundation)
               if number == 155:
-                  path = pathlib.Path('compiler/src/typecheck.rs')
-                  source = path.read_text()
-                  before = '''        } else if let Some(value) = integer_refinement_witness(module, left, environment, values) {
-                      orderings = mirror_orderings(&orderings);
-                      (expression_field_path(module, right)?, value)
-                  } else {
-                      return None;
-                  };'''
-                  # Preserve Rust indentation independently of YAML's script indentation.
-                  before = '\n'.join([before.splitlines()[0]] + [line[10:] for line in before.splitlines()[1:]])
-                  after = '''        } else {
-                      let value = integer_refinement_witness(module, left, environment, values)?;
-                      orderings = mirror_orderings(&orderings);
-                      (expression_field_path(module, right)?, value)
-                  };'''
-                  after = '\n'.join([after.splitlines()[0]] + [line[10:] for line in after.splitlines()[1:]])
-                  if source.count(before) != 1:
-                      raise RuntimeError('Rust lint patch context differs')
-                  path.write_text(source.replace(before, after))
-                  path = pathlib.Path('generated/language-health.json')
-                  source = path.read_text()
-                  if source.count('"lines": 18257') != 1:
-                      raise RuntimeError('health line-count patch context differs')
-                  path.write_text(source.replace('"lines": 18257', '"lines": 18256'))
-                  run('git', 'add', 'compiler/src/typecheck.rs', 'generated/language-health.json')
+                  run('git', 'apply', '--index', str(cleanup))
               tree = git('write-tree')
               if tree != expected:
                   raise RuntimeError(f'PR {number}: {tree} differs from locally reviewed {expected}')
@@ -96,7 +74,7 @@ jobs:
               run('git', 'commit', '-m', 'fix: complete native runtime regression routing and validation cleanup')
               head = git('rev-parse', 'HEAD')
               run('git', 'merge-base', '--is-ancestor', old, head)
-              branch = f'repair/completed-20260916/pr-{number}'
+              branch = f'repair/completed-v2-20260916/pr-{number}'
               run('git', 'push', 'origin', f'HEAD:refs/heads/{branch}')
               run('git', 'update-ref', f'refs/heads/completed-audit/pr-{number}', head)
               published.append({'number': number, 'old': old, 'head': head, 'tree': tree, 'candidate_branch': branch})
