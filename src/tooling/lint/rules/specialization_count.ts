@@ -4,6 +4,7 @@ export const specializationCount: LintRule = {
   name: "specialization-count",
   code: "BLOT_LINT_SPECIALIZATION_COUNT",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     return {
       module() {

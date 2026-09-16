@@ -7,6 +7,7 @@ export const unusedBinding: LintRule = {
   name: "unused-binding",
   code: "BLOT_LINT_UNUSED_BINDING",
   severity: "warning",
+  evidence: "syntax-only",
   create(context) {
     return {
       module(path) {

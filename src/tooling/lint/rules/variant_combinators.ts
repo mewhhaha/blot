@@ -12,6 +12,7 @@ export const variantMap: LintRule = {
   name: "variant-map",
   code: "BLOT_LINT_VARIANT_MAP",
   severity: "hint",
+  evidence: "syntax-only",
   create: (context) => ({
     expression: ({ node, ancestors }) =>
       inspect(node, "map", context, ancestors),
@@ -22,6 +23,7 @@ export const variantChaining: LintRule = {
   name: "variant-chaining",
   code: "BLOT_LINT_VARIANT_CHAINING",
   severity: "hint",
+  evidence: "syntax-only",
   create: (context) => ({
     expression: ({ node, ancestors }) =>
       inspect(node, "and_then", context, ancestors),
@@ -32,6 +34,7 @@ export const variantFallback: LintRule = {
   name: "variant-fallback",
   code: "BLOT_LINT_VARIANT_FALLBACK",
   severity: "hint",
+  evidence: "syntax-only",
   create: (context) => ({
     expression: ({ node, ancestors }) =>
       inspect(node, "unwrap_or_else", context, ancestors),

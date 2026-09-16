@@ -11,6 +11,7 @@ export const openShadow: LintRule = {
   name: "open-shadow",
   code: "BLOT_LINT_OPEN_SHADOW",
   severity: "hint",
+  evidence: "semantic-fact",
   create(context) {
     return {
       declaration(path) {

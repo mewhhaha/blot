@@ -6,6 +6,7 @@ export const terminalValueForwarding: LintRule = {
   name: "terminal-value-forwarding",
   code: "BLOT_LINT_TERMINAL_VALUE_FORWARDING",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       module: ({ node }) => inspect(node.declarations, node.result, context),

@@ -1,12 +1,18 @@
-import type { CheckedModule, Compiler } from "../compiler.ts";
+import type {
+  CheckedModule,
+  CompilerAnalysis,
+  CompilerSyntaxSnapshot,
+} from "../compiler.ts";
 import { compareCodeUnits } from "../text_order.ts";
 import type { LintDiagnostic, LintFix } from "./lint.ts";
 import { lintEditsOverlap } from "./lint/edits.ts";
 import { DEFAULT_LINT_RULES, lintModule } from "./lint.ts";
+import { splitLintDiagnostics } from "./lint/staged.ts";
 import {
   applyLintFix,
   isCompilerSourceRejection,
-  validateLintDiagnosticsWithCompiler,
+  type LintValidationCompiler,
+  validateFixCandidate,
 } from "./lint/validation.ts";
 
 export type LintMode = "report" | "check" | "fix";
@@ -25,9 +31,15 @@ export interface LintedSource {
   readonly appliedFixes: number;
 }
 
+/** The compiler surface behind lint revision analysis. */
+export interface LintAnalysisCompiler {
+  analyzeSource(path: string, source: string): Promise<CompilerAnalysis>;
+  syntaxSnapshot(path: string, source: string): Promise<CompilerSyntaxSnapshot>;
+}
+
 export interface LintCompilers {
-  readonly analysis: Compiler;
-  readonly validation: Compiler;
+  readonly analysis: LintAnalysisCompiler;
+  readonly validation: LintValidationCompiler;
 }
 
 interface LintRevision {
@@ -36,7 +48,7 @@ interface LintRevision {
   readonly checked: CheckedModule;
 }
 
-interface SelectedFix {
+export interface SelectedFix {
   readonly diagnostic: LintDiagnostic;
   readonly fix: LintFix;
 }
@@ -182,7 +194,7 @@ async function lintRevision(
 ): Promise<LintRevision> {
   const analysis = await compilers.analysis.analyzeSource(path, source);
   const syntax = await compilers.analysis.syntaxSnapshot(path, source);
-  const diagnostics = lintModule(
+  const detected = lintModule(
     syntax.module,
     source,
     syntax.cst,
@@ -193,15 +205,33 @@ async function lintRevision(
       readability: analysis.readability,
     },
   );
-  const validated = await validateLintDiagnosticsWithCompiler(
-    compilers.validation,
-    path,
-    source,
-    diagnostics,
-  );
+  // Detection publishes without compiling speculative fixes: only
+  // rewrite-validation claims keep their validation, in this lower-priority
+  // stage, against the revision analysis interface key. Ordinary fixes are
+  // validated where they are used: once per combined fix-all candidate, or
+  // when their code action is selected.
+  const split = splitLintDiagnostics(detected);
+  const proven: LintDiagnostic[] = [];
+  for (const candidate of split.rewriteCandidates) {
+    const fix = candidate.fix;
+    if (fix === null) {
+      throw new Error("a rewrite candidate lost its proposed fix");
+    }
+    if (
+      await validateFixCandidate(
+        compilers.validation,
+        path,
+        source,
+        analysis.interfaceKey,
+        fix,
+      )
+    ) {
+      proven.push(candidate);
+    }
+  }
   return {
     source,
-    diagnostics: validated.toSorted((left, right) => {
+    diagnostics: [...split.publishable, ...proven].toSorted((left, right) => {
       if (left.span.start !== right.span.start) {
         return left.span.start - right.span.start;
       }
@@ -215,7 +245,14 @@ async function lintRevision(
   };
 }
 
-function selectNonOverlappingFixes(
+/**
+ * Selects the fix-all candidates for one revision: quickfixes only, greedily
+ * skipping any candidate that overlaps an already selected edit. The input
+ * order never matters: candidates sort by total edited length, then first
+ * edit start, then rule code, so overlapping edits always resolve to the
+ * same winner.
+ */
+export function selectNonOverlappingFixes(
   diagnostics: readonly LintDiagnostic[],
 ): readonly SelectedFix[] {
   const candidates: SelectedFix[] = [];
@@ -256,7 +293,7 @@ function selectNonOverlappingFixes(
 }
 
 async function applyFixTransaction(
-  compiler: Compiler,
+  compiler: LintValidationCompiler,
   path: string,
   revision: LintRevision,
   fixes: readonly SelectedFix[],

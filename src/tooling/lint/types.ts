@@ -76,9 +76,35 @@ export interface LintVisitors {
   readonly concrete?: (rule: Rule, ancestors: readonly Rule[]) => void;
 }
 
+/**
+ * The evidence that establishes one rule's diagnostic claim.
+ *
+ * - `syntax-only`: the claim follows from the parsed syntax alone (AST plus
+ *   concrete origin queries). The diagnostic publishes without any compiler
+ *   work beyond parsing.
+ * - `semantic-fact`: the claim follows from compiler-provided semantic facts
+ *   (specializations, simplifications, readability) read during detection.
+ *   The diagnostic publishes once those facts confirm it, without checking
+ *   any proposed rewrite.
+ * - `rewrite-validation`: the claim itself depends on a proposed rewrite
+ *   checking (or preserving the module interface). The diagnostic publishes
+ *   only after that validation succeeds, in the lower-priority validation
+ *   stage; an unproven claim is never published.
+ *
+ * Evidence gates diagnostic publication only. Every fix keeps its own
+ * validation obligation (`LintFix.validation`): a `check` or
+ * `check-interface` fix is validated before its edits are returned, either
+ * eagerly for clients without resolve support or when its action resolves.
+ */
+export type LintEvidence =
+  | "syntax-only"
+  | "semantic-fact"
+  | "rewrite-validation";
+
 export interface LintRule {
   readonly name: string;
   readonly code: DiagnosticCode;
   readonly severity: LintSeverity;
+  readonly evidence: LintEvidence;
   create(context: LintRuleContext): LintVisitors;
 }

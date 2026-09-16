@@ -7,6 +7,7 @@ export const handlerPipeline: LintRule = {
   name: "handler-pipeline",
   code: "BLOT_LINT_HANDLER_PIPELINE",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     const pipe = resolveFixities(declaredFixities(context.cst)).find((fixity) =>
       fixity.operator === "|>" && fixity.associativity !== "prefix"

@@ -7,18 +7,23 @@ const Io = import "blot:io"
 const formula = import "./formula.blot"
 
 const View = Resource.of "Demo.View"
-const Ui = @effect.host {
-  .show = (View, Int, Int) -> Unit;
-  .activity = (View, Text) -> Unit;
-  .message = (View, Text) -> Unit;
-  .stopped = View -> Unit;
-}
+const Ui =
+  @effect.host {
+    .show = (View, Int, Int) -> Unit;
+    .activity = (View, Text) -> Unit;
+    .message = (View, Text) -> Unit;
+    .stopped = View -> Unit;
+  }
 
-const debounce :: (Events.Subscription Int, Io.Clock.Capability, Int) -> Option Int ~ { Select.Effect }
+const debounce ::
+  (Events.Subscription Int, Io.Clock.Capability, Int) -> Option Int ~ { Select.Effect }
 const debounce = fn (subscription, clock, initial) => do:
   let rec wait :: Int -> Option Int ~ { Select.Effect }
   let rec wait = fn latest => do:
-    use selected <- Select.wait [Select.events subscription, Select.after clock 150]
+    use selected <- Select.wait [
+      Select.events subscription,
+      Select.after clock 150
+    ]
     return case selected.outcome of
       #Timeout => #Some latest
       #Message event => case event of
@@ -27,15 +32,17 @@ const debounce = fn (subscription, clock, initial) => do:
 
   return wait initial
 
-let run :: {
-  .executor = Spark.Executor;
-  .changes = Events.Source Int;
-  .clock = Io.Clock.Capability;
-  .http = Io.Http.Capability;
-  .view = View;
-} -> Unit ~ { Spark.Effect, Events.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
+let run ::
+  {
+    .executor = Spark.Executor;
+    .changes = Events.Source Int;
+    .clock = Io.Clock.Capability;
+    .http = Io.Http.Capability;
+    .view = View;
+  } -> Unit ~ { Spark.Effect, Events.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
 let run = fn io => do:
-  let body :: Spark.Scope -> Unit ~ { Spark.Effect, Events.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
+  let body ::
+    Spark.Scope -> Unit ~ { Spark.Effect, Events.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
   let body = fn scope => do:
     let ?cleanup :: Unit -> Unit ~ { Ui } = fn () => Ui.stopped io.view
     use () <- Spark.on_exit scope (?cleanup)
@@ -56,7 +63,8 @@ let run = fn io => do:
       if let #Some quantity = settled else:
         break
 
-      let calculate :: Spark.Scope -> Select.Selection Int ~ { Spark.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Ui }
+      let calculate ::
+        Spark.Scope -> Select.Selection Int ~ { Spark.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Ui }
       let calculate = fn computation => do:
         use completed :: Channel.Ends Int <- Channel.bounded computation 1
         let ?produce :: Unit -> Unit ~ { Spark.Effect, Channel.Effect, Io.Clock.Effect } = fn () => do:
@@ -68,7 +76,10 @@ let run = fn io => do:
           return ()
         use producer <- Spark.spawn computation (?produce)
         use () <- Ui.activity (io.view, "Calculating")
-        use selected <- Select.wait [Select.events subscription, Select.channel completed.receiver]
+        use selected <- Select.wait [
+          Select.events subscription,
+          Select.channel completed.receiver
+        ]
         use () <- Spark.cancel producer
         return ?selected
       use selected :: Select.Selection Int <- Spark.child_scope scope calculate
