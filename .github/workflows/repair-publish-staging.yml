@@ -27,6 +27,7 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: 2.9.6
+      - run: pnpm install --frozen-lockfile
       - name: Reconstruct and publish only isolated, tree-verified candidates
         shell: bash
         run: |
@@ -35,7 +36,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           python3 - <<'PY'
-          import json, pathlib, subprocess
+          import json, os, pathlib, subprocess
           main = 'f5e0957db3f69a09022bb295c383454d05444568'
           foundation_old = 'e4719095634518a23b2acb2c24030cfad8b90307'
           expected_foundation = '0f912462a2f42d807ec7c9a06d17017bd71aa3e8'
@@ -66,8 +67,7 @@ jobs:
               157: {'packed_key_computed_word_range': {'stage': 'check', 'code': 'BLOT_TYPE_ERROR'}},
               162: {'nominal_domain_projected_eliminator': {'stage': 'check', 'code': 'BLOT_TYPE_ERROR'}},
           }
-          root = pathlib.Path.cwd()
-          out = root.parent / 'audit-candidates'
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'audit-candidates'
           out.mkdir(exist_ok=True)
           published = []
           def run(*args, **kwargs):
@@ -95,7 +95,7 @@ jobs:
               (out / 'candidates.json').write_text(json.dumps(published, indent=2) + '\n')
               return head
           run('git', 'checkout', '--detach', foundation_old)
-          merge = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', main])
+          subprocess.run(['git', 'merge', '--no-commit', '--no-ff', main])
           conflicts = git('diff', '--name-only', '--diff-filter=U').splitlines()
           if conflicts != ['src/tooling/formatter.ts']:
               raise RuntimeError(f'unexpected foundation conflicts: {conflicts}')
@@ -122,6 +122,6 @@ jobs:
         if: always()
         with:
           name: audited-pr-candidates-${{ github.event.pull_request.head.sha }}
-          path: ../audit-candidates/
+          path: ${{ runner.temp }}/audit-candidates/
           if-no-files-found: warn
           retention-days: 7
