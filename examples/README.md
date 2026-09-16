@@ -288,3 +288,13 @@ When a pending case is implemented, move it to the top-level catalog, add its
 golden value, and remove its entry from `PENDING` in `examples.test.ts`. When a
 trap becomes total by design, promote it the same way rather than weakening the
 expected diagnostic.
+
+The endpoint adapter's returned Rank-N scheme is now retained through an
+inferred binding. Its regression test asserts `Observed Text` through checking,
+evaluation, and emitted Wasm; repeating the `Natural (Maybe, Observed)`
+signature is no longer required. This uses the same compiler repair exercised by
+the aggregate example in PR #143.
+
+The deliberately heterogeneous endpoint instantiations currently emit one
+`BLOT_LINT_SPECIALIZATION_COUNT` advisory in `hoist`. The repair does not
+suppress that representation-count warning or claim a performance measurement.

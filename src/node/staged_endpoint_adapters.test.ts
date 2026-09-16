@@ -78,18 +78,25 @@ test("staged endpoint adapters reject broken payload relationships", async () =>
   }
 });
 
-test("staged endpoint adapters record current inferred-composition type loss", async () => {
+test("staged endpoint adapters retain an inferred composition's Rank-N result", async () => {
   const compiler = await Compiler.create();
   try {
     const checked = await compiler.check(inferredPath);
     assert.deepEqual(
       { type: checked.type, effects: checked.effects },
-      { type: "⊥", effects: "" },
+      {
+        type: "#Ok { .value = Text; .source = Text } | #Error Text",
+        effects: "",
+      },
     );
     const evaluated = await compiler.evaluate(inferredPath);
     assert.equal(
       evaluated.display,
       '#Ok { .value = "Żaneta"; .source = "registry"; }',
+    );
+    assert.equal(
+      await runArtifact(await compiler.compile(inferredPath)),
+      '#Ok { .source = "registry"; .value = "Żaneta" }',
     );
   } finally {
     compiler.destroy();
