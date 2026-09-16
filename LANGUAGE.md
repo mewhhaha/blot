@@ -2558,6 +2558,16 @@ predicate. No refinement object reaches inference, Runtime HIR, WebAssembly, or
 the ABI. Branch comparison facts can prove that an `Int` inhabits such a type in
 exactly the same way they prove an explicitly written range.
 
+A recognized integer comparison may use a literal bound or an integer stored in
+a stable compile-time binding, including a field projected from a compile-time
+record. For example, a staged range descriptor can bind `const low = info.low`
+and use `value >= low` to prove its lower bound. The comparison's other operand
+must still be an integer-valued binding or immutable field path. A runtime
+parameter or a shadowing runtime binding is not a compile-time witness, and an
+unrecognized comparison callback contributes no ordering evidence. Reversing the
+operands reverses the proven ordering; it does not change the requirement for
+stable evidence.
+
 Comparisons also refine immutable field paths, such as `raw.port` or
 `settings.http.port`. Repeating that same projection in the guarded branch uses
 the fact; another field does not. Shadowing or rebinding the root record
@@ -3157,8 +3167,8 @@ payloads, and resource payloads. Passing those values to the host preserves the
 checked aggregate type, including every admitted constructor.
 
 Effects created by `@effect` are generative by semantic occurrence. Two written
-calls of an effect-producing function create distinct effect values even when their
-arguments print alike, while aliasing one result preserves its identity.
+calls of an effect-producing function create distinct effect values even when
+their arguments print alike, while aliasing one result preserves its identity.
 Re-evaluating the same written occurrence in the same source and dependency
 revision recovers that occurrence's identity. A changed operation signature,
 source revision, observable dependency revision, or module-import occurrence
@@ -3169,8 +3179,8 @@ nonempty compile-time text key and its complete normalized operation contract.
 The same key and contract yield the same effect across factory calls and module
 imports, regardless of the local binding names. Operation types compare exactly,
 including alpha-equivalence of quantified variables. A different key, operation
-type, ownership contract, or suspension contract denotes a different effect.
-Use qualified keys to distinguish independently defined interfaces.
+type, ownership contract, or suspension contract denotes a different effect. Use
+qualified keys to distinguish independently defined interfaces.
 
 Shared effects use ordinary source handlers and effect inference. Sharing an
 effect identity creates no global state or host authority: separate handlers can
@@ -3427,18 +3437,18 @@ Everything not listed here belongs in source, normally the prelude.
 
 ### 13.1 Control, files, and effects
 
-| primitive      | meaning                                                                   |
-| -------------- | ------------------------------------------------------------------------- |
-| `@include`     | parse a dependency-tracked file at compile time                           |
-| `@json.parse`  | decode JSON under an explicit compile-time inference policy               |
-| `@effect`      | create a fresh source effect from operation types                         |
-| `@effect.host` | create a fresh host effect                                                |
-| `@effect.shared` | construct a source effect from a shared text key and operation contract |
-| `@handle`      | discharge one effect from a nullary computation                           |
-| `@forall`      | evaluate a type function with a fresh rigid variable                      |
-| `@satisfies`   | refine an open value by a type, or prove its closed type with a predicate |
-| `@fail`        | refuse compile-time evaluation with a diagnostic                          |
-| `@panic`       | trap with a text message                                                  |
+| primitive        | meaning                                                                   |
+| ---------------- | ------------------------------------------------------------------------- |
+| `@include`       | parse a dependency-tracked file at compile time                           |
+| `@json.parse`    | decode JSON under an explicit compile-time inference policy               |
+| `@effect`        | create a fresh source effect from operation types                         |
+| `@effect.host`   | create a fresh host effect                                                |
+| `@effect.shared` | construct a source effect from a shared text key and operation contract   |
+| `@handle`        | discharge one effect from a nullary computation                           |
+| `@forall`        | evaluate a type function with a fresh rigid variable                      |
+| `@satisfies`     | refine an open value by a type, or prove its closed type with a predicate |
+| `@fail`          | refuse compile-time evaluation with a diagnostic                          |
+| `@panic`         | trap with a text message                                                  |
 
 ### 13.2 Numeric and text operations
 

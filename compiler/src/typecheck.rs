@@ -13289,17 +13289,14 @@ fn comparison_refinements(
     let mut orderings = crate::recognise::comparison(&checker.context, &operator)?;
     let left = arguments[0];
     let right = arguments[1];
-    let (projection, witness) = match (
-        &module.arena.expressions[left.0 as usize],
-        &module.arena.expressions[right.0 as usize],
-    ) {
-        (_, Expression::Int { value, .. }) => (expression_field_path(module, left)?, value.clone()),
-        (Expression::Int { value, .. }, _) => {
+    let (projection, witness) =
+        if let Some(value) = integer_refinement_witness(module, right, environment, values) {
+            (expression_field_path(module, left)?, value)
+        } else {
+            let value = integer_refinement_witness(module, left, environment, values)?;
             orderings = mirror_orderings(&orderings);
-            (expression_field_path(module, right)?, value.clone())
-        }
-        _ => return None,
-    };
+            (expression_field_path(module, right)?, value)
+        };
     let original = refined_original_integer_type(checker, environment, &projection)?;
     let accepted = ordering_type(&orderings, &witness);
     let rejected = ordering_type(&complement_orderings(&orderings), &witness);
@@ -13308,6 +13305,27 @@ fn comparison_refinements(
         intersect_integer_types(&original, &accepted)?,
         intersect_integer_types(&original, &rejected)?,
     ))
+}
+
+// A bound must be a source literal or a stable compile-time integer value.
+// Runtime locals and parameters are not witnesses, even when their inferred
+// type or a provisional evaluator environment looks more precise.
+fn integer_refinement_witness(
+    module: &Module,
+    expression: ExpressionId,
+    environment: &TypeEnvironment,
+    values: &ValueEnvironment,
+) -> Option<BigInt> {
+    if let Expression::Int { value, .. } = &module.arena.expressions[expression.0 as usize] {
+        return Some(value.clone());
+    }
+    if !comptime_stable_expression(module, expression, environment) {
+        return None;
+    }
+    match comptime_expression_value(module, expression, values)? {
+        Value::Int(value) => Some(value),
+        _ => None,
+    }
 }
 
 fn mirror_orderings(
