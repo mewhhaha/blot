@@ -11,6 +11,7 @@ export const accumulatorFold: LintRule = {
   name: "accumulator-fold",
   code: "BLOT_LINT_ACCUMULATOR_FOLD",
   severity: "hint",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression({ node, ancestors }) {

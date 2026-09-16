@@ -48,7 +48,10 @@ test("reversible protocols preserve staged state and undo evidence in both execu
     assert.equal(
       await runArtifact(await compiler.compile(path)),
       (
-        await readFile("examples/expected/reversible_protocols.wasm.txt", "utf8")
+        await readFile(
+          "examples/expected/reversible_protocols.wasm.txt",
+          "utf8",
+        )
       ).trim(),
     );
   } finally {

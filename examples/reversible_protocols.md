@@ -1,8 +1,8 @@
 # Reversible protocol transitions
 
 `reversible_protocols.blot` models a workflow whose state type changes at each
-stage while preserving enough typed evidence to walk the workflow backwards.
-The concrete article pipeline moves through `Draft -> Reviewed -> Published`.
+stage while preserving enough typed evidence to walk the workflow backwards. The
+concrete article pipeline moves through `Draft -> Reviewed -> Published`.
 Reviewing also produces an `Approval`, and publishing consumes exactly that
 carrier; the composed transition therefore checks both the state boundary and
 the value boundary between the two steps.
@@ -24,9 +24,9 @@ make five related carriers readable without turning the API into a large
 positional type tuple. A transition's `forward` operation returns the new state,
 its output value, and operation-specific undo evidence. `backward` accepts
 exactly the resulting state and that same evidence. `compose` quantifies over
-the whole relationship and shares the intermediate `Middle` state plus
-`Through` value between adjacent steps. The resulting transition pairs the two
-undo carriers and runs them in reverse order when rolling back.
+the whole relationship and shares the intermediate `Middle` state plus `Through`
+value between adjacent steps. The resulting transition pairs the two undo
+carriers and runs them in reverse order when rolling back.
 
 This is stronger than a same-state reversible update: the compiler rejects
 publishing from a `Draft`, feeding a `Reviewed` value to the full workflow, or
@@ -60,8 +60,8 @@ The executable demonstrates the review step independently and then reuses it in
 the composed workflow. It checks full round-trip restoration, a lossy publish
 step whose reverse direction needs stored body/reviewer evidence, an empty body,
 and Unicode text. The focused test also checks evaluator/Wasm agreement and
-three intentional rejection cases: reversed composition, a wrong starting
-state, and reversed undo evidence.
+three intentional rejection cases: reversed composition, a wrong starting state,
+and reversed undo evidence.
 
 ## Tradeoffs
 

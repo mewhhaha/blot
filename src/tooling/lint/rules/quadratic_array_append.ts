@@ -6,6 +6,7 @@ export const quadraticArrayAppend: LintRule = {
   name: "quadratic-array-append",
   code: "BLOT_LINT_QUADRATIC_ARRAY_APPEND",
   severity: "warning",
+  evidence: "syntax-only",
   create(context) {
     return {
       expression(path) {
