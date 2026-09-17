@@ -100,6 +100,31 @@ of main, the first published increment, and the graph-sharing increment. Its
 observations are a separate batch from [RESULTS.md](RESULTS.md); the report does
 not multiply percentages from different batches.
 
+## Third increment: capture graph preservation
+
+Runtime capture discovery and runtime-slot rewriting retain immutable record
+storage and persistent function/range edges for one operation. Completed-node
+memos avoid expanding each path through a shared graph. The input owners remain
+alive while their addresses are lookup keys; allocation identity is not semantic
+equality. Each rewrite uses one fixed replacement map, and no cache survives the
+operation.
+
+The original closure-cycle map and first-encounter ordering remain in place.
+Rewrites that create fresh mutable-region copies are deliberately not memoized,
+including their enclosing records or type edges. Sharing cannot merge those
+independent stores. Later operations reread current environments and mutable
+cells.
+
+Eight focused native tests cover depth-24 shared records and function types,
+rewritten sharing and runtime meanings, different replacement maps,
+copy-on-write changes, mutable-region updates, independent region copies under
+both records and type edges, and a recursive record whose first slot meaning and
+later staging requirement must both survive.
+
+See [CAPTURE_RESULTS.md](CAPTURE_RESULTS.md) for a new paired full-compilation
+comparison against the second increment. Earlier experiment percentages are not
+multiplied into this comparison.
+
 ## Remaining work
 
 The target remains millisecond compilation of an actual changed program. A

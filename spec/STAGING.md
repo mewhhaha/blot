@@ -756,3 +756,29 @@ meanings remain exact.
 Only demanded substitution maps and their unchanged empty-frame suffixes are
 retained. A single request through a chain of nonempty frames must not
 materialize and retain a complete map for every prefix of that chain.
+
+### Request-local capture graph traversal
+
+Runtime capture discovery and rebinding preserve sharing of immutable record
+storage and persistent function/range type edges. Within one traversal, an
+eligible completed source node is processed once. The traversal retains each
+indexed owner, so an allocation address cannot be reused while its entry is
+live. Addresses detect repeated storage; they do not establish equality between
+independently allocated source values.
+
+Discovery retains the existing traversal order, runtime slot identities,
+`RuntimeMeaning`, and staging requirements. A node is marked complete only after
+its children have been visited. Recursive closure captures therefore still use
+the existing closure-cycle guard and first-encounter ordering.
+
+Rebinding uses one fixed runtime-slot substitution map per request. Repeated
+immutable input nodes share their rewritten output; field order, closure
+signature evidence, effect identities, and the existing recursive environment
+knot-tying behavior are unchanged. This is graph-preserving renaming, not
+memoization of source execution. No capture or replacement cache survives the
+request, and subsequent requests observe current bindings and mutable cells.
+
+The existing rebinding operation creates fresh copies of mutable region stores.
+A record or type-edge rewrite that creates such a copy is not memoized. Repeated
+region-bearing paths therefore retain their original independent-copy behavior;
+this optimization does not coalesce mutable authority.

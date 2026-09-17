@@ -9668,23 +9668,57 @@ fn checked_representation_shape(value: &Value) -> Option<RepresentationShape> {
     represented.then(|| shape(value)).flatten()
 }
 
-fn collect_fields(
+// These owners are retained only for one capture-plan traversal. The plan is
+// a union of runtime slots and a staging flag. Memoize completed traversals,
+// not in-progress ones: recursive closure captures must retain first-encounter
+// order for a slot's RuntimeMeaning. Current bindings are read on every plan.
+#[derive(Default)]
+struct RuntimeCaptureScan {
+    closures: HashSet<(String, u32, usize)>,
+    fields: HashMap<*const (), OrderedFields>,
+    types: HashMap<*const Value, TypeValue>,
+    #[cfg(test)]
+    value_visits: usize,
+}
+
+fn collect_type_edge(
     context: &Rc<Context>,
-    fields: &OrderedFields,
-    visited: &mut HashSet<(String, u32, usize)>,
+    edge: &TypeValue,
+    visited: &mut RuntimeCaptureScan,
     captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
     requires_staging: &mut bool,
 ) -> Result<(), Diagnostic> {
+    let identity = edge.as_ref() as *const Value;
+    if visited.types.contains_key(&identity) {
+        return Ok(());
+    }
+    collect_value(context, edge, visited, captured, requires_staging)?;
+    visited.types.insert(identity, edge.clone());
+    Ok(())
+}
+
+fn collect_fields(
+    context: &Rc<Context>,
+    fields: &OrderedFields,
+    visited: &mut RuntimeCaptureScan,
+    captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
+    requires_staging: &mut bool,
+) -> Result<(), Diagnostic> {
+    let identity = fields.storage_identity();
+    if visited.fields.contains_key(&identity) {
+        return Ok(());
+    }
     for (_, value) in fields {
         collect_value(context, value, visited, captured, requires_staging)?;
     }
+    visited.fields.insert(identity, fields.clone());
     Ok(())
 }
 
 fn collect_closure(
     context: &Rc<Context>,
     closure: LexicalClosure<'_>,
-    visited: &mut HashSet<(String, u32, usize)>,
+    visited: &mut RuntimeCaptureScan,
     captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
     requires_staging: &mut bool,
 ) -> Result<(), Diagnostic> {
@@ -9693,7 +9727,7 @@ fn collect_closure(
         closure.body.0,
         Rc::as_ptr(closure.environment) as usize,
     );
-    if !visited.insert(identity) {
+    if !visited.closures.insert(identity) {
         return Ok(());
     }
     for name in closure_free_names(
@@ -9715,10 +9749,14 @@ fn collect_closure(
 fn collect_value(
     context: &Rc<Context>,
     value: &Value,
-    visited: &mut HashSet<(String, u32, usize)>,
+    visited: &mut RuntimeCaptureScan,
     captured: &mut BTreeMap<(usize, usize), RuntimeValue>,
     requires_staging: &mut bool,
 ) -> Result<(), Diagnostic> {
+    #[cfg(test)]
+    {
+        visited.value_visits += 1;
+    }
     match value {
         // A suspension lives only between a deferred call and the read that
         // demands it, so it is never a captured runtime value.
@@ -9806,8 +9844,8 @@ fn collect_value(
             }
         }
         Value::Range { low, high, .. } => {
-            collect_value(context, low, visited, captured, requires_staging)?;
-            collect_value(context, high, visited, captured, requires_staging)?;
+            collect_type_edge(context, low, visited, captured, requires_staging)?;
+            collect_type_edge(context, high, visited, captured, requires_staging)?;
         }
         Value::Arrow {
             domain,
@@ -9815,8 +9853,8 @@ fn collect_value(
             effects,
             ..
         } => {
-            collect_value(context, domain, visited, captured, requires_staging)?;
-            collect_value(context, codomain, visited, captured, requires_staging)?;
+            collect_type_edge(context, domain, visited, captured, requires_staging)?;
+            collect_type_edge(context, codomain, visited, captured, requires_staging)?;
             for effect in effects {
                 collect_value(context, effect, visited, captured, requires_staging)?;
             }
@@ -9876,7 +9914,7 @@ fn runtime_capture_plan(
     collect_closure(
         context,
         closure,
-        &mut HashSet::new(),
+        &mut RuntimeCaptureScan::default(),
         &mut captured,
         &mut requires_staging,
     )?;
@@ -9898,25 +9936,60 @@ fn value_runtime_captures(
     collect_value(
         context,
         value,
-        &mut HashSet::new(),
+        &mut RuntimeCaptureScan::default(),
         &mut captured,
         &mut requires_staging,
     )?;
     Ok(captured.into_values().collect())
 }
 
+// Request-local graph homomorphism, not a cache of source evaluation. A source
+// storage node is rewritten once under this call's fixed replacement mapping.
+// Retaining source owners also prevents stale pointer hits after allocation.
+#[derive(Default)]
+struct RuntimeCaptureRewrite {
+    environments: HashMap<(String, u32, usize), Environment>,
+    fields: HashMap<*const (), (OrderedFields, OrderedFields)>,
+    types: HashMap<*const Value, (TypeValue, TypeValue)>,
+    // Regions are freshly copied by the existing rewrite contract. An ancestor
+    // containing such a copy must not be shared by this optimization.
+    region_copies: usize,
+    #[cfg(test)]
+    value_visits: usize,
+}
+
+fn replace_type_edge(
+    context: &Rc<Context>,
+    edge: &TypeValue,
+    replacements: &HashMap<(usize, usize), RuntimeValue>,
+    replaced: &mut RuntimeCaptureRewrite,
+) -> Result<TypeValue, Diagnostic> {
+    let identity = edge.as_ref() as *const Value;
+    if let Some((_, result)) = replaced.types.get(&identity) {
+        return Ok(result.clone());
+    }
+    let copies = replaced.region_copies;
+    let result = TypeValue::new(replace_value(context, edge, replacements, replaced)?);
+    if copies == replaced.region_copies {
+        replaced
+            .types
+            .insert(identity, (edge.clone(), result.clone()));
+    }
+    Ok(result)
+}
+
 fn replace_closure_environment(
     context: &Rc<Context>,
     closure: LexicalClosure<'_>,
     replacements: &HashMap<(usize, usize), RuntimeValue>,
-    replaced: &mut HashMap<(String, u32, usize), Environment>,
+    replaced: &mut RuntimeCaptureRewrite,
 ) -> Result<Environment, Diagnostic> {
     let identity = (
         closure.module.to_owned(),
         closure.body.0,
         Rc::as_ptr(closure.environment) as usize,
     );
-    if let Some(environment) = replaced.get(&identity) {
+    if let Some(environment) = replaced.environments.get(&identity) {
         return Ok(environment.clone());
     }
     let (result, result_recursive_bindings) = if closure.environment.recursive_bindings.is_some() {
@@ -9925,7 +9998,7 @@ fn replace_closure_environment(
     } else {
         (child_env(Some(closure.environment.clone())), None)
     };
-    replaced.insert(identity, result.clone());
+    replaced.environments.insert(identity, result.clone());
     if let (Some(source_bindings), Some(result_bindings)) = (
         closure.environment.recursive_bindings.as_ref(),
         result_recursive_bindings,
@@ -9941,7 +10014,7 @@ fn replace_closure_environment(
             else {
                 unreachable!("recursive groups contain only closure templates")
             };
-            replaced.insert(
+            replaced.environments.insert(
                 (
                     module.as_ref().clone(),
                     body.0,
@@ -10009,9 +10082,14 @@ fn replace_fields(
     context: &Rc<Context>,
     fields: &OrderedFields,
     replacements: &HashMap<(usize, usize), RuntimeValue>,
-    replaced: &mut HashMap<(String, u32, usize), Environment>,
+    replaced: &mut RuntimeCaptureRewrite,
 ) -> Result<OrderedFields, Diagnostic> {
-    fields
+    let identity = fields.storage_identity();
+    if let Some((_, result)) = replaced.fields.get(&identity) {
+        return Ok(result.clone());
+    }
+    let copies = replaced.region_copies;
+    let result: OrderedFields = fields
         .iter()
         .map(|(name, value)| {
             Ok((
@@ -10019,15 +10097,25 @@ fn replace_fields(
                 replace_value(context, value, replacements, replaced)?,
             ))
         })
-        .collect()
+        .collect::<Result<_, Diagnostic>>()?;
+    if copies == replaced.region_copies {
+        replaced
+            .fields
+            .insert(identity, (fields.clone(), result.clone()));
+    }
+    Ok(result)
 }
 
 fn replace_value(
     context: &Rc<Context>,
     value: &Value,
     replacements: &HashMap<(usize, usize), RuntimeValue>,
-    replaced: &mut HashMap<(String, u32, usize), Environment>,
+    replaced: &mut RuntimeCaptureRewrite,
 ) -> Result<Value, Diagnostic> {
+    #[cfg(test)]
+    {
+        replaced.value_visits += 1;
+    }
     let mut result = value.clone();
     match &mut result {
         Value::Deferred { .. } => {}
@@ -10070,6 +10158,7 @@ fn replace_value(
             }
         }
         Value::Region { store, start, end } => {
+            replaced.region_copies += 1;
             let cells = store.borrow();
             let mut replaced_cells = cells.clone();
             drop(cells);
@@ -10111,8 +10200,8 @@ fn replace_value(
             }
         }
         Value::Range { low, high, .. } => {
-            **low = replace_value(context, low, replacements, replaced)?;
-            **high = replace_value(context, high, replacements, replaced)?;
+            *low = replace_type_edge(context, low, replacements, replaced)?;
+            *high = replace_type_edge(context, high, replacements, replaced)?;
         }
         Value::Arrow {
             domain,
@@ -10120,8 +10209,8 @@ fn replace_value(
             effects,
             ..
         } => {
-            **domain = replace_value(context, domain, replacements, replaced)?;
-            **codomain = replace_value(context, codomain, replacements, replaced)?;
+            *domain = replace_type_edge(context, domain, replacements, replaced)?;
+            *codomain = replace_type_edge(context, codomain, replacements, replaced)?;
             for effect in effects {
                 *effect = replace_value(context, effect, replacements, replaced)?;
             }
@@ -10211,7 +10300,12 @@ fn replace_environment_runtime(
     closure: LexicalClosure<'_>,
     replacements: &HashMap<(usize, usize), RuntimeValue>,
 ) -> Result<Environment, Diagnostic> {
-    replace_closure_environment(context, closure, replacements, &mut HashMap::new())
+    replace_closure_environment(
+        context,
+        closure,
+        replacements,
+        &mut RuntimeCaptureRewrite::default(),
+    )
 }
 
 /// The same substitution over a value that is not a lexical closure.
@@ -10220,7 +10314,12 @@ fn replace_runtime_in_value(
     value: &Value,
     replacements: &HashMap<(usize, usize), RuntimeValue>,
 ) -> Result<Value, Diagnostic> {
-    replace_value(context, value, replacements, &mut HashMap::new())
+    replace_value(
+        context,
+        value,
+        replacements,
+        &mut RuntimeCaptureRewrite::default(),
+    )
 }
 
 fn runtime_effect_name(value: &Value) -> Option<String> {
@@ -14316,6 +14415,363 @@ fn hir_error(message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn capture_test_value(id: usize, meaning: RuntimeMeaning) -> Value {
+        Value::Runtime(RuntimeValue {
+            id,
+            type_id: 3,
+            meaning,
+        })
+    }
+
+    fn capture_test_diamond(mut value: Value, depth: usize) -> Value {
+        for _ in 0..depth {
+            value = Value::Shape(OrderedFields::from([
+                ("left".into(), value.clone()),
+                ("right".into(), value),
+            ]));
+        }
+        value
+    }
+
+    #[test]
+    fn capture_scan_visits_shared_record_nodes_not_expanded_paths() {
+        let context = Rc::new(Context::default());
+        let value = capture_test_diamond(capture_test_value(7, RuntimeMeaning::Plain), 24);
+        let mut visited = RuntimeCaptureScan::default();
+        let mut captures = BTreeMap::new();
+        let mut staging = false;
+        collect_value(&context, &value, &mut visited, &mut captures, &mut staging).unwrap();
+        assert_eq!(visited.fields.len(), 24);
+        assert!(
+            visited.value_visits <= 49,
+            "{} visits",
+            visited.value_visits
+        );
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[&(7, 3)].id, 7);
+        assert!(!staging);
+    }
+
+    #[test]
+    fn capture_rewrite_preserves_shared_records_and_runtime_meaning() {
+        let context = Rc::new(Context::default());
+        let value = capture_test_diamond(capture_test_value(7, RuntimeMeaning::Plain), 24);
+        let replacement = RuntimeValue {
+            id: 91,
+            type_id: 3,
+            meaning: RuntimeMeaning::ReusableStore,
+        };
+        let replacements = HashMap::from([((7, 3), replacement)]);
+        let mut rewritten = RuntimeCaptureRewrite::default();
+        let result = replace_value(&context, &value, &replacements, &mut rewritten).unwrap();
+        assert_eq!(rewritten.fields.len(), 24);
+        assert!(
+            rewritten.value_visits <= 49,
+            "{} visits",
+            rewritten.value_visits
+        );
+        let mut current = &result;
+        for depth in (0..24).rev() {
+            let Value::Shape(fields) = current else {
+                panic!("lost record at depth {depth}");
+            };
+            assert_eq!(
+                fields.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["left", "right"]
+            );
+            let left = fields.get("left").unwrap();
+            let right = fields.get("right").unwrap();
+            if let (Value::Shape(left), Value::Shape(right)) = (left, right) {
+                assert_eq!(left.storage_identity(), right.storage_identity());
+            }
+            current = left;
+        }
+        let Value::Runtime(runtime) = current else {
+            panic!("lost runtime leaf");
+        };
+        assert_eq!(runtime.id, 91);
+        assert_eq!(runtime.type_id, 3);
+        assert_eq!(runtime.meaning, RuntimeMeaning::ReusableStore);
+    }
+
+    #[test]
+    fn capture_scan_and_rewrite_preserve_shared_type_edges() {
+        let context = Rc::new(Context::default());
+        let mut edge = TypeValue::new(capture_test_value(7, RuntimeMeaning::Plain));
+        for _ in 0..24 {
+            edge = TypeValue::new(Value::Arrow {
+                deferred: false,
+                domain: edge.clone(),
+                codomain: edge,
+                effects: Vec::new(),
+                effect_tail: None,
+            });
+        }
+        let mut visited = RuntimeCaptureScan::default();
+        let mut captures = BTreeMap::new();
+        collect_value(&context, &edge, &mut visited, &mut captures, &mut false).unwrap();
+        assert_eq!(visited.types.len(), 24);
+        assert!(visited.value_visits <= 25);
+        assert_eq!(captures.len(), 1);
+        let mut rewritten = RuntimeCaptureRewrite::default();
+        let replacements = HashMap::from([(
+            (7, 3),
+            RuntimeValue {
+                id: 99,
+                type_id: 3,
+                meaning: RuntimeMeaning::Plain,
+            },
+        )]);
+        let result = replace_value(&context, &edge, &replacements, &mut rewritten).unwrap();
+        assert_eq!(rewritten.types.len(), 24);
+        assert!(rewritten.value_visits <= 25);
+        let mut current = &result;
+        for _ in 0..24 {
+            let Value::Arrow {
+                domain, codomain, ..
+            } = current
+            else {
+                panic!("lost type edge");
+            };
+            assert!(std::ptr::eq(domain.as_ref(), codomain.as_ref()));
+            current = domain;
+        }
+        assert!(matches!(
+            current,
+            Value::Runtime(RuntimeValue { id: 99, .. })
+        ));
+    }
+
+    #[test]
+    fn capture_rewrite_is_mapping_local_and_observes_copy_on_write() {
+        let context = Rc::new(Context::default());
+        let mut fields =
+            OrderedFields::from([("value".into(), capture_test_value(7, RuntimeMeaning::Plain))]);
+        let value = Value::Shape(fields.clone());
+        let replacements = |id| {
+            HashMap::from([(
+                (7, 3),
+                RuntimeValue {
+                    id,
+                    type_id: 3,
+                    meaning: RuntimeMeaning::Plain,
+                },
+            )])
+        };
+        let first = replace_runtime_in_value(&context, &value, &replacements(91)).unwrap();
+        let second = replace_runtime_in_value(&context, &value, &replacements(92)).unwrap();
+        assert_eq!(value_runtime_captures(&context, &value).unwrap()[0].id, 7);
+        assert_eq!(value_runtime_captures(&context, &first).unwrap()[0].id, 91);
+        assert_eq!(value_runtime_captures(&context, &second).unwrap()[0].id, 92);
+        let mut memo = RuntimeCaptureRewrite::default();
+        let original = replace_fields(&context, &fields, &replacements(91), &mut memo).unwrap();
+        fields.insert("extra".into(), Value::Unit);
+        let changed = replace_fields(&context, &fields, &replacements(91), &mut memo).unwrap();
+        assert!(!original.contains_key("extra"));
+        assert!(changed.contains_key("extra"));
+        assert_ne!(original.storage_identity(), changed.storage_identity());
+        let mut edge = TypeValue::new(Value::Unit);
+        let original = replace_type_edge(&context, &edge, &HashMap::new(), &mut memo).unwrap();
+        *edge = Value::Int(4.into());
+        let changed = replace_type_edge(&context, &edge, &HashMap::new(), &mut memo).unwrap();
+        assert!(matches!(&*original, Value::Unit));
+        assert!(matches!(&*changed, Value::Int(value) if value == &4.into()));
+    }
+
+    #[test]
+    fn capture_scans_observe_mutable_regions_on_each_request() {
+        let context = Rc::new(Context::default());
+        let store = Rc::new(std::cell::RefCell::new(vec![capture_test_value(
+            7,
+            RuntimeMeaning::Plain,
+        )]));
+        let value = Value::Shape(OrderedFields::from([(
+            "region".into(),
+            Value::Region {
+                store: store.clone(),
+                start: 0,
+                end: 1,
+            },
+        )]));
+        assert_eq!(value_runtime_captures(&context, &value).unwrap()[0].id, 7);
+        store.borrow_mut()[0] = capture_test_value(91, RuntimeMeaning::ReusableStore);
+        let captured = value_runtime_captures(&context, &value).unwrap();
+        assert_eq!(captured[0].id, 91);
+        assert_eq!(captured[0].meaning, RuntimeMeaning::ReusableStore);
+    }
+
+    #[test]
+    fn capture_rewrite_does_not_coalesce_fresh_region_copies() {
+        let context = Rc::new(Context::default());
+        let store = Rc::new(std::cell::RefCell::new(vec![Value::Int(7.into())]));
+        let inner = Value::Shape(OrderedFields::from([(
+            "region".into(),
+            Value::Region {
+                store: store.clone(),
+                start: 0,
+                end: 1,
+            },
+        )]));
+        let value = Value::Shape(OrderedFields::from([
+            ("left".into(), inner.clone()),
+            ("right".into(), inner),
+        ]));
+        let mut memo = RuntimeCaptureRewrite::default();
+        let result = replace_value(&context, &value, &HashMap::new(), &mut memo).unwrap();
+        assert_eq!(memo.region_copies, 2);
+        assert!(memo.fields.is_empty());
+        let Value::Shape(fields) = result else {
+            panic!("lost outer record");
+        };
+        let region = |name| {
+            let Value::Shape(fields) = fields.get(name).unwrap() else {
+                panic!("lost inner record");
+            };
+            let Value::Region { store, .. } = fields.get("region").unwrap() else {
+                panic!("lost region");
+            };
+            store.clone()
+        };
+        let left = region("left");
+        let right = region("right");
+        assert!(!Rc::ptr_eq(&left, &right));
+        assert!(!Rc::ptr_eq(&left, &store));
+        left.borrow_mut()[0] = Value::Int(8.into());
+        assert!(matches!(&right.borrow()[0], Value::Int(value) if value == &7.into()));
+        assert!(matches!(&store.borrow()[0], Value::Int(value) if value == &7.into()));
+    }
+
+    #[test]
+    fn capture_scan_recursive_records_preserve_first_meaning_and_staging() {
+        let path = "recursive-capture-scan.blot";
+        let span = crate::ast::Span { start: 0, end: 1 };
+        let mut arena = crate::ast::AstArena::default();
+        let parameter = arena.pattern(crate::ast::Pattern::Unit { span });
+        let record = arena.expression(crate::ast::Expression::Var {
+            name: "record".to_owned(),
+            span,
+        });
+        let later = arena.expression(crate::ast::Expression::Var {
+            name: "z_later".to_owned(),
+            span,
+        });
+        let body = arena.expression(crate::ast::Expression::Tuple {
+            elements: vec![record, later],
+            span,
+        });
+        let context = Rc::new(Context::default());
+        context.modules.borrow_mut().insert(
+            path.to_owned(),
+            crate::eval::LoadedModule::new(
+                path,
+                Rc::new(crate::ast::Module {
+                    parameter: None,
+                    declarations: Vec::new(),
+                    result: body,
+                    result_effects: crate::ast::ResultEffects::Pure,
+                    span,
+                    arena,
+                }),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+        );
+        let environment = child_env(None);
+        let closure = Value::Closure {
+            module: Rc::new(path.to_owned()),
+            module_instances: Rc::new(Vec::new()),
+            effect_scope: Rc::new(Vec::new()),
+            parameter,
+            body,
+            environment: environment.clone(),
+            self_name: None,
+            imports: None,
+            signature: None,
+            reuse_assertion: None,
+            deferred: false,
+        };
+        let value = Value::Shape(OrderedFields::from([
+            ("recurse".into(), closure),
+            ("slot".into(), capture_test_value(7, RuntimeMeaning::Plain)),
+        ]));
+        environment
+            .names
+            .borrow_mut()
+            .insert("record".into(), value.clone());
+        environment.names.borrow_mut().insert(
+            "z_later".into(),
+            capture_test_value(7, RuntimeMeaning::Ordering),
+        );
+        let mut visited = RuntimeCaptureScan::default();
+        let mut captures = BTreeMap::new();
+        let mut staging = false;
+        collect_value(&context, &value, &mut visited, &mut captures, &mut staging).unwrap();
+        // Break the synthetic cycle before assertions and teardown. Encountering
+        // the record through its closure must not skip its not-yet-seen slot.
+        environment.names.borrow_mut().clear();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[&(7, 3)].meaning, RuntimeMeaning::Plain);
+        assert!(staging, "a later ordering use still forces staging");
+        assert_eq!(visited.fields.len(), 1);
+        assert_eq!(visited.closures.len(), 1);
+    }
+
+    #[test]
+    fn capture_rewrite_type_edges_do_not_share_fresh_regions() {
+        let context = Rc::new(Context::default());
+        let store = Rc::new(std::cell::RefCell::new(vec![capture_test_value(
+            7,
+            RuntimeMeaning::Plain,
+        )]));
+        let edge = TypeValue::new(Value::Region {
+            store: store.clone(),
+            start: 0,
+            end: 1,
+        });
+        let value = Value::Arrow {
+            deferred: false,
+            domain: edge.clone(),
+            codomain: edge,
+            effects: Vec::new(),
+            effect_tail: None,
+        };
+        let replacements = HashMap::from([(
+            (7, 3),
+            RuntimeValue {
+                id: 99,
+                type_id: 3,
+                meaning: RuntimeMeaning::Plain,
+            },
+        )]);
+        let mut memo = RuntimeCaptureRewrite::default();
+        let result = replace_value(&context, &value, &replacements, &mut memo).unwrap();
+        assert_eq!(memo.region_copies, 2);
+        assert!(memo.types.is_empty());
+        let Value::Arrow {
+            domain, codomain, ..
+        } = result
+        else {
+            panic!("lost arrow");
+        };
+        let Value::Region { store: left, .. } = domain.as_ref() else {
+            panic!("lost domain region");
+        };
+        let Value::Region { store: right, .. } = codomain.as_ref() else {
+            panic!("lost codomain region");
+        };
+        assert!(!Rc::ptr_eq(left, right));
+        assert!(!Rc::ptr_eq(left, &store));
+        left.borrow_mut()[0] = Value::Unit;
+        assert!(matches!(
+            &right.borrow()[0],
+            Value::Runtime(RuntimeValue { id: 99, .. })
+        ));
+        assert!(matches!(
+            &store.borrow()[0],
+            Value::Runtime(RuntimeValue { id: 7, .. })
+        ));
+    }
 
     fn test_residual_signature(result: Value, deferred: bool) -> Value {
         Value::Arrow {
