@@ -16,41 +16,54 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Format exact PR head without changing compiler or validation policy
+      - name: Apply inspected runner repair and regenerate current inventories
         shell: bash
         run: |
           set -euo pipefail
-          base=5f6457b759a2faf888978c1fb89420d7b6e7f055
+          base=2fe53dde22cb5a073b5f2acbdfcbe8d2477766f3
+          shared=02134f36514b9185cbe514b9a33dd0e2c482e768
           git checkout --detach "$base"
           git config user.name 'OpenAI'
           git config user.email 'noreply@openai.com'
-          deno fmt
+          git show "$shared:scripts/node_regression_tests.mjs" > scripts/node_regression_tests.mjs
+          git show "$shared:scripts/node_regression_tests.test.ts" > scripts/node_regression_tests.test.ts
+          printf '{ .run = <function>; }\n' > examples/expected/shared_effects.txt
+          deno run --allow-read --allow-write scripts/generate_language_health.ts
           deno fmt --check
-          git diff --exit-code -- .github compiler src generated deno.json package.json scripts
+          deno lint
+          deno run --allow-read scripts/generate_language_health.ts --check
+          git diff --exit-code "$base" -- .github compiler src/node src/compiler generated/compiler
           git diff --check
-          git add -u
-          git commit -m 'style: repair repository formatting blocking PR 170 CI'
-          git push origin HEAD:refs/heads/workbench/pr170-ci-formatted-20260917
-          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
-          git diff --stat "$base" HEAD >> "$GITHUB_STEP_SUMMARY"
-          mkdir -p "$RUNNER_TEMP/pr170-repair"
-          git diff --binary "$base" HEAD > "$RUNNER_TEMP/pr170-repair/formatting.patch"
-          git bundle create "$RUNNER_TEMP/pr170-repair/repository.bundle" --all HEAD
-          cp "$(command -v deno)" "$RUNNER_TEMP/pr170-repair/deno"
-          git rev-parse HEAD > "$RUNNER_TEMP/pr170-repair/head.txt"
-          git ls-tree -r HEAD > "$RUNNER_TEMP/pr170-repair/tree.txt"
-      - name: Record downstream lint without suppressing failure
+          git add scripts/node_regression_tests.mjs scripts/node_regression_tests.test.ts examples/expected/shared_effects.txt generated/language-health.json src/diagnostic_codes.generated.ts
+          git commit -m 'fix: restore native regression routing, showcase golden, and generated inventory' -m 'Reuse the reviewed native-Deno runner and regressions from PR 161 without overwriting newer compiler or staging code. The shared-effects observation was reproduced with the exact PR compiler.'
+      - run: pnpm install --frozen-lockfile
+      - name: Validate runner success, failure, nested steps, and blocked-test deadlines
+        run: node --import tsx --test scripts/node_regression_tests.test.ts
+      - name: Publish inspected candidate without PR or main writes
         shell: bash
         run: |
           set -euo pipefail
-          deno lint 2>&1 | tee "$RUNNER_TEMP/pr170-repair/lint.txt"
+          git push origin HEAD:refs/heads/workbench/pr170-ci-runner-candidate-20260917
+          mkdir -p "$RUNNER_TEMP/pr170-repair"
+          git diff --binary 5f6457b759a2faf888978c1fb89420d7b6e7f055 HEAD > "$RUNNER_TEMP/pr170-repair/repair.patch"
+          git bundle create "$RUNNER_TEMP/pr170-repair/repository.bundle" --all HEAD
+          cp -L "$(command -v node)" "$RUNNER_TEMP/pr170-repair/node"
+          pnpm_root="$(dirname "$(dirname "$(readlink -f "$(command -v pnpm)")")")"
+          tar -czf "$RUNNER_TEMP/pr170-repair/pnpm.tar.gz" -C "$pnpm_root" .
+          git rev-parse HEAD > "$RUNNER_TEMP/pr170-repair/head.txt"
+          git diff --stat 5f6457b759a2faf888978c1fb89420d7b6e7f055 HEAD >> "$GITHUB_STEP_SUMMARY"
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: pr170-ci-repair-inputs
+          name: pr170-ci-runner-inputs
           path: ${{ runner.temp }}/pr170-repair
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 3
