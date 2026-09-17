@@ -1412,7 +1412,7 @@ mod tests {
         let signature = Rc::new(Value::Closure {
             module: Rc::new(path.to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter,
             body,
             environment: child_env(None),
@@ -1508,7 +1508,7 @@ mod tests {
         );
         let environment = child_env(None);
         let instances = Rc::new(Vec::new());
-        let scope = Rc::new(Vec::new());
+        let scope = Rc::new(EffectScope::default());
         let encode = || {
             residual_environment_key(
                 &context,
@@ -1740,11 +1740,11 @@ mod tests {
                 .unwrap()
                 .unwrap()
         };
-        let scope = Rc::new(Vec::new());
+        let scope = Rc::new(EffectScope::default());
         let shared = encode(&[Part::Scope(scope.clone()), Part::Scope(scope.clone())]);
         let separate = encode(&[
-            Part::Scope(Rc::new(Vec::new())),
-            Part::Scope(Rc::new(Vec::new())),
+            Part::Scope(Rc::new(EffectScope::default())),
+            Part::Scope(Rc::new(EffectScope::default())),
         ]);
         assert_eq!(shared.digest, separate.digest);
         assert_ne!(
@@ -1761,7 +1761,7 @@ mod tests {
     #[test]
     fn immutable_provenance_memo_preserves_keys_and_releases_revisions() {
         let context = Rc::new(Context::default());
-        let scope = Rc::new(Vec::new());
+        let scope = Rc::new(EffectScope::default());
         let part = Part::Scope(scope.clone());
         let encode = || {
             portable_evidence(&context, &[], std::iter::once(&part), HashMap::new())

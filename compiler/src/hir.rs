@@ -14681,7 +14681,7 @@ mod tests {
         let closure = Value::Closure {
             module: Rc::new(path.to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter,
             body,
             environment: environment.clone(),
@@ -14817,7 +14817,7 @@ mod tests {
             .insert("captured".to_owned(), Value::Unit);
         let signature = test_residual_signature(Value::Unit, true);
         let instances = Rc::new(Vec::new());
-        let effects = Rc::new(Vec::new());
+        let effects = Rc::new(crate::eval::EffectScope::default());
         // A known negative decision must not demand captures merely to discard
         // the resulting evidence. Any environment lookup would panic here.
         let _unread_captures = environment.names.borrow_mut();

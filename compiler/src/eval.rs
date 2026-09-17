@@ -199,17 +199,9 @@ pub struct ClosureApplication {
     pub(crate) creation_scope: Rc<EffectScope>,
 }
 
-impl ClosureApplication {
-    fn references_module(&self, module: &str) -> bool {
-        self.application.references_module(module)
-            || self
-                .creation_scope
-                .iter()
-                .any(|frame| frame.references_module(module))
-    }
-}
-
-pub type EffectScope = Vec<ClosureApplication>;
+#[path = "effect_scope.rs"]
+mod effect_scope;
+pub use effect_scope::EffectScope;
 
 pub(crate) const MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT: usize = 64;
 const MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT: usize = 32;
@@ -327,10 +319,7 @@ impl ModuleResultTemplateInstance {
         self.module_instances
             .iter()
             .any(|instance| instance.references_module(module))
-            || self
-                .effect_scope
-                .iter()
-                .any(|frame| frame.references_module(module))
+            || self.effect_scope.references_module(module)
     }
 
     fn cacheable(&self) -> bool {
@@ -475,7 +464,7 @@ impl ModuleInstanceSite {
 struct EffectIdentity {
     module: String,
     source: ApplicationSite,
-    scope: EffectScope,
+    scope: Rc<EffectScope>,
     instances: ModuleInstanceScope,
     host: bool,
 }
@@ -484,10 +473,7 @@ impl EffectIdentity {
     fn references_module(&self, module: &str) -> bool {
         self.module == module
             || self.source.references_module(module)
-            || self
-                .scope
-                .iter()
-                .any(|frame| frame.references_module(module))
+            || self.scope.references_module(module)
             || self
                 .instances
                 .iter()
@@ -1204,7 +1190,7 @@ impl Context {
         let key = EffectIdentity {
             module: runtime.module.as_ref().clone(),
             source,
-            scope: runtime.effect_scope.as_ref().clone(),
+            scope: runtime.effect_scope.clone(),
             instances: runtime.module_instances.as_ref().clone(),
             host,
         };
@@ -1239,7 +1225,7 @@ impl Context {
         let occurrence = EffectIdentity {
             module: runtime.module.as_ref().clone(),
             source,
-            scope: runtime.effect_scope.as_ref().clone(),
+            scope: runtime.effect_scope.clone(),
             instances: runtime.module_instances.as_ref().clone(),
             host: false,
         };
@@ -2157,7 +2143,7 @@ impl Runtime {
             residual: None,
             execution: Rc::new(()),
             signature_holes: None,
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             module_instances: Rc::new(Vec::new()),
             instance_facts: Vec::new(),
             result_context: None,
@@ -7315,7 +7301,7 @@ mod tests {
         let source = ApplicationSite::expression(revision, ExpressionId(2));
         let frame = ClosureApplication {
             application: call,
-            creation_scope: Rc::new(Vec::new()),
+            creation_scope: Rc::new(crate::eval::EffectScope::default()),
         };
         let mut shallow = Runtime::new(Phase::Comptime, "recursive-effect.blot".to_owned());
         Rc::make_mut(&mut shallow.effect_scope).push(frame.clone());
@@ -7354,15 +7340,18 @@ mod tests {
     #[test]
     fn recursive_provenance_beyond_the_depth_limit_is_not_cacheable() {
         let revision = ModuleRevision::new("recursive-template.blot");
-        let mut effect_scope = Rc::new(Vec::new());
+        let mut effect_scope = Rc::new(crate::eval::EffectScope::default());
         for expression in 0..=MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT {
-            effect_scope = Rc::new(vec![ClosureApplication {
-                application: ApplicationSite::expression(
-                    revision.clone(),
-                    ExpressionId(expression as u32),
-                ),
-                creation_scope: effect_scope,
-            }]);
+            effect_scope = Rc::new(
+                vec![ClosureApplication {
+                    application: ApplicationSite::expression(
+                        revision.clone(),
+                        ExpressionId(expression as u32),
+                    ),
+                    creation_scope: effect_scope,
+                }]
+                .into(),
+            );
         }
         let instance = ModuleResultTemplateInstance {
             module_instances: Rc::new(Vec::new()),
@@ -7381,7 +7370,7 @@ mod tests {
     fn decoded_environment_ids_are_stable_and_distinct() {
         let context = Context::default();
         let revision = ModuleRevision::new("decoded-identities.blot");
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
 
         let first =
             context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 2);
@@ -7402,7 +7391,7 @@ mod tests {
     #[test]
     fn decoded_environment_identity_interner_prunes_dead_keys() {
         let context = Context::default();
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         for revision in 0..(DECODED_ENVIRONMENT_IDENTITY_MINIMUM_SWEEP * 2) {
             let identities = context.decoded_environment_identities(
                 &ModuleRevision::new(&format!("decoded-identities-{revision}.blot")),
@@ -7424,7 +7413,7 @@ mod tests {
         let context = Context::default();
         let path = "invalidated-decoded-identity.blot";
         let revision = ModuleRevision::new(path);
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         let first =
             context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 1)[0]
                 .as_ref()
@@ -7448,10 +7437,13 @@ mod tests {
         let context = Context::default();
         let revision = ModuleRevision::new("returned-effect.blot");
         let creation_scope = |expression| {
-            Rc::new(vec![ClosureApplication {
-                application: ApplicationSite::expression(revision.clone(), expression),
-                creation_scope: Rc::new(Vec::new()),
-            }])
+            Rc::new(
+                vec![ClosureApplication {
+                    application: ApplicationSite::expression(revision.clone(), expression),
+                    creation_scope: Rc::new(crate::eval::EffectScope::default()),
+                }]
+                .into(),
+            )
         };
         let invocation = ApplicationSite::expression(revision.clone(), ExpressionId(3));
         let runtime_for = |creation_scope| {
@@ -7576,7 +7568,7 @@ mod operator_projection_regression_tests {
         let weak_environment = Rc::downgrade(&environment);
         let module_instances = Rc::new(Vec::new());
         let weak_instances = Rc::downgrade(&module_instances);
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         let weak_scope = Rc::downgrade(&effect_scope);
         let value = Value::Closure {
             module: Rc::new("members.blot".to_owned()),

@@ -544,7 +544,7 @@ impl CompilerSession {
         } else {
             let evaluated = if let Some(capsule) = &result_template {
                 let base_module_instances = Vec::new();
-                let base_effect_scope = Rc::new(Vec::new());
+                let base_effect_scope = Rc::new(crate::eval::EffectScope::default());
                 let environment = capsule.decode(
                     path,
                     module.as_ref(),

@@ -805,7 +805,7 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 7950
+      "lines": 7942
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -825,7 +825,7 @@
     },
     {
       "path": "compiler/src/value_capsule.rs",
-      "lines": 3599
+      "lines": 3602
     },
     {
       "path": "src/prelude/prelude.blot",

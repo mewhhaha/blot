@@ -1164,6 +1164,34 @@ path that retains one compiler working set per revision. This benchmark is a
 named development-mode boundary; it does not claim the same latency when an edit
 changes the demanded graph or a public unit interface.
 
+### 15.1 Whole-program latency observations
+
+A whole-program latency sample distinguishes the first complete
+`Compiler.compile` in a fresh process/session, compilation after an actual
+source edit in that session, and an unchanged revision-cache hit. These are
+separate operations, not interchangeable evidence for a 100 ms goal. The cold
+and edited results must report `compiled`; only the unchanged control may report
+`revision-cache`. An edited result with unchanged executable bytes must be
+identified as such rather than presented as a changed executable.
+
+An editor-supplied entry-buffer benchmark starts the edited timer before
+`setOverlay`, including synchronization/invalidation, and stops only after the
+complete compilation returns the emitted artifact. Loading the supplied buffer,
+input fingerprinting, and post-compilation validation are outside this interval
+and must be disclosed. Compiler initialization is reported separately and may
+not conceal application checking or staging. Full process wall time and the
+first cold compilation remain visible alongside edited and unchanged timings. A
+source edit which changes imports or dependencies is a different workload from
+the entry-only edit and must not inherit its latency claim.
+
+A changed-artifact regression compares the edited result to a fresh compilation
+of the same changed source at the same path. Both Wasm and ABI bytes must agree.
+Timing comparisons keep compiler build settings, runtime, source snapshot, and
+artifact provenance explicit. Profiles and instrumented builds are diagnostic
+observations, not production latency samples. No latency goal changes the
+required checking, exact identity, invalidation, or output-equivalence
+contracts.
+
 ## 16. Artifact production
 
 Generated parser plans, prelude snapshots, certificate schemas, compiler Wasm,

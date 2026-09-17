@@ -2079,7 +2079,7 @@ impl EffectScopeDecoder<'_> {
             });
         }
         self.visiting.remove(&id);
-        let effect_scope = Rc::new(effect_scope);
+        let effect_scope: Rc<EffectScope> = Rc::new(effect_scope.into());
         self.decoded[id as usize] = Some(effect_scope.clone());
         Ok(effect_scope)
     }
@@ -2755,7 +2755,7 @@ mod tests {
                 &loaded.revision(),
                 &context,
                 &Vec::new(),
-                &Rc::new(Vec::new()),
+                &Rc::new(EffectScope::default()),
             )
             .expect("matching source closure decodes");
         let index = loaded
@@ -2770,7 +2770,7 @@ mod tests {
                 &loaded.revision(),
                 &context,
                 &Vec::new(),
-                &Rc::new(Vec::new()),
+                &Rc::new(EffectScope::default()),
             )
             .expect("repeated closure decodes");
         assert!(Rc::ptr_eq(
@@ -2813,7 +2813,7 @@ mod tests {
                 &loaded.revision(),
                 &context,
                 &occurrence,
-                &Rc::new(Vec::new()),
+                &Rc::new(EffectScope::default()),
             )
             .expect("a distinct import occurrence decodes");
         let Value::Closure {
@@ -2846,7 +2846,7 @@ mod tests {
                 &loaded.revision(),
                 &context,
                 &Vec::new(),
-                &Rc::new(Vec::new()),
+                &Rc::new(EffectScope::default()),
             )
             .expect_err("replaced source cannot inherit the old closure index");
         assert!(error.contains("no matching source lambda"), "{error}");
@@ -2895,7 +2895,7 @@ mod tests {
                         Value::Closure {
                             module: Rc::new(PATH.to_owned()),
                             module_instances: Rc::new(Vec::new()),
-                            effect_scope: Rc::new(Vec::new()),
+                            effect_scope: Rc::new(crate::eval::EffectScope::default()),
                             parameter: PatternId(0),
                             body: module.result,
                             environment,
@@ -2958,12 +2958,15 @@ mod tests {
     fn effect_scope_depth_is_bounded_before_recursive_encoding() {
         const PATH: &str = "effect-scope-depth.blot";
         let (module, revision) = test_module(PATH);
-        let mut effect_scope = Rc::new(Vec::new());
+        let mut effect_scope = Rc::new(crate::eval::EffectScope::default());
         for _ in 0..VALUE_CAPSULE_MAX_DEPTH {
-            effect_scope = Rc::new(vec![ClosureApplication {
-                application: application(&revision, module.result),
-                creation_scope: effect_scope,
-            }]);
+            effect_scope = Rc::new(
+                vec![ClosureApplication {
+                    application: application(&revision, module.result),
+                    creation_scope: effect_scope,
+                }]
+                .into(),
+            );
         }
         let environment = child_env(None);
         environment.names.borrow_mut().insert(
@@ -3016,7 +3019,7 @@ mod tests {
                     application: provenance,
                     imported: revision.clone(),
                 }]),
-                effect_scope: Rc::new(Vec::new()),
+                effect_scope: Rc::new(crate::eval::EffectScope::default()),
                 parameter: PatternId(0),
                 body: module.result,
                 environment: child_env(None),
@@ -3229,7 +3232,7 @@ mod tests {
         };
         let context = Context::default();
         let module_instances = Vec::new();
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         take_structural_budget_scan_count();
         let reconstruction = match capsule.admit_reconstruction(0, 0) {
             Ok(Some(reconstruction)) => reconstruction,
@@ -3477,7 +3480,7 @@ mod tests {
             Value::Closure {
                 module: Rc::new("cycle.blot".to_owned()),
                 module_instances: Rc::new(Vec::new()),
-                effect_scope: Rc::new(Vec::new()),
+                effect_scope: Rc::new(crate::eval::EffectScope::default()),
                 parameter: PatternId(0),
                 body: result,
                 environment: environment.clone(),

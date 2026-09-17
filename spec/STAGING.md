@@ -267,6 +267,23 @@ additional recursive frame is distinct. Signature equality is exact semantic
 type-value equality, including alpha-equivalence and referenced effect atoms;
 neither displayed values nor partial hashes are identity evidence.
 
+The implementation may retain this ordered scope as a persistent immutable
+prefix graph. Appending a frame retains its prefix and the callee's creation
+scope rather than copying either history. An immutable node may cache a
+process-local structural hash of its application, prefix, and creation scope;
+that hash selects lookup buckets only. Exact graph equality remains the identity
+authority even when hashes collide, and independently allocated equal histories
+compare equally. Source revisions remain part of every application identity.
+Revision invalidation must search both prefix and creation-scope edges, not just
+the most recent application.
+
+Hashing, equality, revision searches, and teardown must not expand every path
+through a shared provenance graph or recurse once per history node on the host
+stack. Capsule and portable evidence encoding retain the original ordered frame
+sequence and revision-qualified contents; cached process-local hashes are not
+serialized identity evidence. Sharing this immutable provenance does not share
+mutable lexical environments, source effect results, or mutable-region stores.
+
 A resident nullary module result may replace administrative re-evaluation only
 when its checked effect row is empty, its closed result type exposes no ordinary
 or host effect identity, and the actual value is recursively independent of its

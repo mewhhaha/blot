@@ -2116,7 +2116,7 @@ mod type_value_tests {
         let mut closure = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter: PatternId(0),
             body: ExpressionId(0),
             environment: child_env(None),
@@ -2149,7 +2149,7 @@ mod type_value_tests {
         let captured = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter: PatternId(0),
             body: ExpressionId(0),
             environment: environment.clone(),
@@ -2162,7 +2162,7 @@ mod type_value_tests {
         let member = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter: PatternId(1),
             body: ExpressionId(1),
             environment,
