@@ -1,18 +1,17 @@
-name: Inspect and prepare PR 170 CI repair
+name: Prepare PR 170 CI repair
 
 on:
   push:
     branches: ['workbench/pr170-ci-repair-20260917']
+    paths: ['.github/workflows/pr170-ci-repair.yml']
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -20,76 +19,38 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Prepare shared and type-system candidates without writing either PR
+      - name: Format exact PR head without changing compiler or validation policy
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess
-          main = '8d30e17cfabcb341d5617be59ce46a12672dc603'
-          shared = '02134f36514b9185cbe514b9a33dd0e2c482e768'
-          types = '5f6457b759a2faf888978c1fb89420d7b6e7f055'
-          out = pathlib.Path(os.environ['RUNNER_TEMP'])
-          def run(*args, check=True):
-              return subprocess.run(args, check=check, text=True)
-          def text(*args):
-              return subprocess.check_output(args, text=True).strip()
-          run('git', 'fetch', '--no-tags', 'origin', main, shared, types)
-          run('git', 'config', 'user.name', 'OpenAI')
-          run('git', 'config', 'user.email', 'noreply@openai.com')
-          run('deno', '--version')
-          def prepare(start, incoming, semantic_source, branch, name):
-              run('git', 'checkout', '--detach', start)
-              merged = run('git', 'merge', '--no-ff', '--no-commit', incoming, check=False)
-              conflicts = text('git', 'diff', '--name-only', '--diff-filter=U').splitlines()
-              if merged.returncode:
-                  (out / (name + '-conflicts.patch')).write_text(subprocess.check_output(['git', 'diff', '--cc'], text=True))
-                  allowed = {'LANGUAGE.md', 'spec/STAGING.md', 'generated/language-health.json'}
-                  assert conflicts and set(conflicts) <= allowed, conflicts
-                  for path in conflicts:
-                      # Keep current language semantics, including effect metadata and staged types.
-                      # The incoming shared-doc changes are formatting; inventory is regenerated below.
-                      content = subprocess.check_output(['git', 'show', semantic_source + ':' + path])
-                      pathlib.Path(path).write_bytes(content)
-                      run('git', 'add', path)
-              assert not text('git', 'diff', '--name-only', '--diff-filter=U')
-              run('deno', 'run', '--allow-read', '--allow-write', 'scripts/generate_language_health.ts')
-              run('git', 'diff', '--exit-code', semantic_source, '--', 'compiler/src', 'src/node', 'src/compiler', 'generated/compiler')
-              run('git', 'add', '-u')
-              run('git', 'commit', '-m', 'Merge current CI foundation while preserving ' + name + ' compiler semantics')
-              run('deno', 'fmt')
-              run('deno', 'run', '--allow-read', '--allow-write', 'scripts/generate_language_health.ts')
-              run('deno', 'fmt', '--check')
-              run('deno', 'lint')
-              run('deno', 'run', '--allow-read', 'scripts/generate_language_health.ts', '--check')
-              run('git', 'diff', '--check')
-              if run('git', 'diff', '--quiet', check=False).returncode:
-                  run('git', 'add', '-u')
-                  run('git', 'commit', '-m', 'fix: canonical formatting and current generated inventory')
-              run('git', 'diff', '--exit-code', semantic_source, 'HEAD', '--', 'compiler/src', 'src/node', 'src/compiler', 'generated/compiler')
-              run('git', 'merge-base', '--is-ancestor', start, 'HEAD')
-              run('git', 'merge-base', '--is-ancestor', incoming, 'HEAD')
-              (out / (name + '-repair.patch')).write_bytes(subprocess.check_output(['git', 'diff', '--binary', start, 'HEAD']))
-              run('git', 'diff', '--stat', start, 'HEAD')
-              sha = text('git', 'rev-parse', 'HEAD')
-              run('git', 'push', 'origin', 'HEAD:refs/heads/' + branch)
-              run('git', 'bundle', 'create', str(out / (name + '.bundle')), 'HEAD')
-              return sha
-          shared_candidate = prepare(shared, main, main, 'workbench/pr161-ci-refreshed-20260917', 'shared')
-          type_candidate = prepare(types, shared_candidate, types, 'workbench/pr170-ci-foundation-candidate-20260917', 'types')
-          result = {'main': main, 'shared_base': shared, 'shared_candidate': shared_candidate, 'type_base': types, 'type_candidate': type_candidate}
-          (out / 'ci-candidates.json').write_text(json.dumps(result, indent=2) + '\n')
-          print(json.dumps(result, indent=2))
-          pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(json.dumps(result, indent=2) + '\nNo PR or main reference was changed.\n')
-          PY
+          base=5f6457b759a2faf888978c1fb89420d7b6e7f055
+          git checkout --detach "$base"
+          git config user.name 'OpenAI'
+          git config user.email 'noreply@openai.com'
+          deno fmt
+          deno fmt --check
+          git diff --exit-code -- .github compiler src generated deno.json package.json scripts
+          git diff --check
+          git add -u
+          git commit -m 'style: repair repository formatting blocking PR 170 CI'
+          git push origin HEAD:refs/heads/workbench/pr170-ci-formatted-20260917
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          git diff --stat "$base" HEAD >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/pr170-repair"
+          git diff --binary "$base" HEAD > "$RUNNER_TEMP/pr170-repair/formatting.patch"
+          git bundle create "$RUNNER_TEMP/pr170-repair/repository.bundle" --all HEAD
+          cp "$(command -v deno)" "$RUNNER_TEMP/pr170-repair/deno"
+          git rev-parse HEAD > "$RUNNER_TEMP/pr170-repair/head.txt"
+          git ls-tree -r HEAD > "$RUNNER_TEMP/pr170-repair/tree.txt"
+      - name: Record downstream lint without suppressing failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno lint 2>&1 | tee "$RUNNER_TEMP/pr170-repair/lint.txt"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: pr170-ci-repair
-          path: |
-            ${{ runner.temp }}/*-conflicts.patch
-            ${{ runner.temp }}/*-repair.patch
-            ${{ runner.temp }}/*.bundle
-            ${{ runner.temp }}/ci-candidates.json
-          if-no-files-found: warn
+          name: pr170-ci-repair-inputs
+          path: ${{ runner.temp }}/pr170-repair
+          if-no-files-found: error
           retention-days: 3
