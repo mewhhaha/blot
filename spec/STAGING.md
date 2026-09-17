@@ -531,8 +531,8 @@ while encoding a chunk prevents memoizing that first-visit definition as a later
 reference.
 
 Key comparison ignores allocation sharing and memoizes compared chunk pairs;
-portable encoding retains the original structural sequence. Completed keys
-share immutable storage when cloned. Constructing identity for a shared immutable
+portable encoding retains the original structural sequence. Completed keys share
+immutable storage when cloned. Constructing identity for a shared immutable
 function/range type graph visits its stored edges, rather than expanding every
 root-to-leaf path. This does not change source value equality, quantifier or
 effect identity, runtime capture slots, or eligibility for residual sharing.
