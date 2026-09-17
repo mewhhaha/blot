@@ -1,0 +1,51 @@
+name: Publish verified capture graph increment
+
+on:
+  push:
+    branches: ['workbench/pr171-capture-delivery-7b4292e']
+    paths: ['.delivery/pr171-capture/**', '.github/workflows/pr171-capture-delivery.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Decode and verify the tested public-source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          encoded = pathlib.Path('.delivery/pr171-capture/patch.b64').read_bytes()
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'eabc42a0fe8cadde52fce32ec17e7d90b4a29b80cf149f4e3783df5841b3d40a'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'capture.patch').write_bytes(patch)
+          PY
+      - name: Apply only to the recorded PR head and verify the complete tested tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=7b4292e01228839e0a94e1817a9461d8852fec77
+          git fetch --no-tags origin "$base"
+          git checkout --detach "$base"
+          git config user.name 'OpenAI'
+          git config user.email 'noreply@openai.com'
+          git am "$RUNNER_TEMP/capture.patch"
+          git diff --check "$base" HEAD
+          test "$(git rev-parse HEAD^{tree})" = 8019d76731b65fc698e6e9e4f2eab2a90237895d
+          test "$(git hash-object compiler/src/hir.rs)" = 78b58cae3c7b1bfb4f986ce73155287649151613
+          git diff --exit-code "$base" HEAD -- .github generated/compiler src compiler/Cargo.toml compiler/Cargo.lock
+      - name: Publish isolated candidate without force or PR/main reference writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/workbench/pr171-capture-validated-7b4292e
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+          echo 'No PR or main reference was changed. No delivery files are in the candidate.' >> "$GITHUB_STEP_SUMMARY"
