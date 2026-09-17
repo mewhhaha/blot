@@ -1,0 +1,45 @@
+name: Publish verified provenance experiment
+
+on:
+  push:
+    branches: ['workbench/pr172-provenance-publish-20260917']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Decode and verify the inspected source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          encoded = b''.join(pathlib.Path(f'.delivery/pr172-provenance/part{i}').read_bytes() for i in range(2))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'afa4b9261fa6c64893f1a1c394efe4d06320fdc6def715500282c198621ef9f7'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'provenance.patch').write_bytes(patch)
+          PY
+      - name: Apply only to the recorded draft head and verify the whole tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=81e8d3b377180352b67a45049b30bfe426938a81
+          git checkout --detach "$base"
+          git apply --index "$RUNNER_TEMP/provenance.patch"
+          git diff --cached --check
+          test "$(git write-tree)" = 2c1d176754344559ed64713c6091a6dfb8f98fc6
+          git config user.name OpenAI
+          git config user.email noreply@openai.com
+          git commit -m 'perf: bound effect-provenance graph work and measure actual edited compilation' -m 'Preserve exact collision-independent identities and revision searches. Add five native regressions and a genuine edited-source harness. The twelve-sample batch demonstrates no reliable application speedup; no 100 ms result is claimed.'
+          git diff --exit-code "$base" HEAD -- .github generated/compiler
+          git push origin HEAD:refs/heads/workbench/pr172-provenance-candidate-20260917
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Verified tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+          echo 'No PR or main ref was changed. Standard CI must run after publication to the draft.' >> "$GITHUB_STEP_SUMMARY"
