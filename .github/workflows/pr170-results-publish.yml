@@ -1,0 +1,78 @@
+name: Publish verified signature measurements
+
+on:
+  push:
+    branches: ['workbench/pr170-results-publish-20260917']
+    paths: ['.delivery/pr170-results/**', '.github/workflows/pr170-results-publish.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Decode the measured report and raw observations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          encoded = b''.join(pathlib.Path(f'.delivery/pr170-results/part{i}').read_bytes() for i in range(3))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '4f33bc09ffb1d54a34a4869d7252c1156dfe2c2795330fa21e18b4358ae91806'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'results.patch').write_bytes(patch)
+          PY
+      - name: Apply and verify exact report and observation hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=b56a70e2a8c21da0e2ba6636cf340833d7065c81
+          git fetch --no-tags origin "$base"
+          git checkout --detach "$base"
+          git config user.name 'OpenAI'
+          git config user.email 'noreply@openai.com'
+          git am "$RUNNER_TEMP/results.patch"
+          python3 - <<'PY'
+          import subprocess
+          prefix = 'experiments/compiler-bench/staged-types/'
+          expected = {
+            'DEMAND_RESULTS.md': '4e42360f3bc0ef3d14ff498d6589f190f7c7be02',
+            'README.md': '842d12d05e2822386a1fe06517b6adb4e702e3b3',
+            'SIGNATURE_RESULTS.md': 'f845309242ae6a310d7bc75adacf70a4197ff7d5',
+            'signature-off.jsonl': '5d0ad7e745ba3a91502886d39d2bc1c34055048b',
+            'signature-on.jsonl': 'c933c26c00d575a95371c11e62c6c1683f2c5480',
+          }
+          changed = subprocess.check_output(['git', 'diff', '--name-only', 'b56a70e2a8c21da0e2ba6636cf340833d7065c81', 'HEAD'], text=True).splitlines()
+          assert set(changed) == {prefix + p for p in expected}, changed
+          for path, sha in expected.items():
+            actual = subprocess.check_output(['git', 'hash-object', prefix + path], text=True).strip()
+            assert actual == sha, (path, actual, sha)
+          PY
+      - name: Canonical formatting of PR-owned Markdown only
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt experiments/compiler-bench/staged-types/README.md experiments/compiler-bench/staged-types/RESULTS.md experiments/compiler-bench/staged-types/DEMAND_RESULTS.md experiments/compiler-bench/staged-types/SIGNATURE_RESULTS.md
+          if ! git diff --quiet; then
+            git add experiments/compiler-bench/staged-types/*.md
+            git commit -m 'docs: apply canonical formatting to performance reports'
+          fi
+          deno fmt --check experiments/compiler-bench/staged-types/README.md experiments/compiler-bench/staged-types/RESULTS.md experiments/compiler-bench/staged-types/DEMAND_RESULTS.md experiments/compiler-bench/staged-types/SIGNATURE_RESULTS.md
+          git diff --exit-code b56a70e2a8c21da0e2ba6636cf340833d7065c81 HEAD -- compiler src generated
+          git diff --check b56a70e2a8c21da0e2ba6636cf340833d7065c81 HEAD
+      - name: Publish isolated documentation candidate without force or PR/main writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/workbench/pr170-results-candidate-20260917
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+          git diff --stat b56a70e2a8c21da0e2ba6636cf340833d7065c81 HEAD >> "$GITHUB_STEP_SUMMARY"
