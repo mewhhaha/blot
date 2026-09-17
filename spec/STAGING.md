@@ -697,3 +697,36 @@ members have a shared runtime representation under the existing representation
 join. In particular, integer singleton bounds and `Int` share the signed-i64
 carrier. This does not authorize an untagged integer/float union, invent a tag,
 or change any canonical ABI layout.
+
+### Demand-driven evaluator type evidence
+
+Checking remains the authority for expression types. Evaluating an expression
+without a residual trace materializes its checked type only when that operation
+consumes it: numeric literals need their checked numeric representation, and an
+application needs its checked argument and result contracts. Reflection retains
+its explicit evidence lookup. Other untraced values do not require a second
+materialized copy of their checked type merely because they execute. With a
+residual trace, every expression still requests checked representation evidence
+and records available aggregate/value facts for Runtime HIR.
+
+An application reuses its own already-substituted result evidence rather than
+resolving and substituting it twice. A supplied enclosing result context still
+takes precedence. Closure calls select an attached signature first, a recursive
+binding signature second, and inferred closure evidence last; unused fallbacks
+are not materialized. Selected signatures are still substituted in the current
+captured environment and call scope. This is demand reduction, not a cache of
+environment-dependent instantiations, and does not change quantified ownership,
+effect/region identity, or the source-evaluation memoization contract.
+
+An expression only schedules a representation-recording continuation when both
+checked evidence and a residual trace exist. Source evaluation, deterministic
+fuel charges, errors and source origins remain unchanged. Telemetry's evaluator
+step counter counts trampoline transitions, not source expressions: removing an
+identity continuation can lower that counter without eliminating a closure body
+execution. Closure-application counts and wall time must be reported separately.
+
+The staged-type comparison driver can request phase telemetry or disable it
+entirely. A telemetry-off sample uses the same semantic analysis and target
+preflight boundary, but requests no phase instrumentation. Sample schema 2
+records that mode explicitly; both artifacts in a comparison use the same mode.
+No sample includes final executable emission or full CLI startup.

@@ -2703,9 +2703,21 @@ pub fn evaluate_expression(
     if let Some(variable) = signature_hole {
         return Computation::value(Value::TypeVariable(variable));
     }
-    let checked_representation = runtime
-        .expression_type(&context, module_path.as_str(), expression_id)
-        .map(|type_| substitute_signature(&type_, &environment));
+    // Checking has already established the expression's type. Materialize its
+    // runtime representation only where evaluation consumes it: numeric
+    // literals, application result contracts, and residual HIR evidence.
+    // Other untraced expressions compute values, not copies of checked types.
+    let checked_representation = if runtime.residual.is_some()
+        || matches!(
+            expression,
+            Expression::Int { .. } | Expression::Float { .. } | Expression::Apply { .. }
+        ) {
+        runtime
+            .expression_type(&context, module_path.as_str(), expression_id)
+            .map(|type_| substitute_signature(&type_, &environment))
+    } else {
+        None
+    };
     let is_definition = !matches!(expression, Expression::Var { .. });
     let representation_trace = runtime.residual.clone();
     let origin = module_path.clone();
@@ -2835,11 +2847,7 @@ pub fn evaluate_expression(
                 Ok(application) => application,
                 Err(error) => return Computation::error(error),
             };
-            let expected_result = result_context.or_else(|| {
-                runtime
-                    .expression_type(&context, module_path.as_str(), expression_id)
-                    .map(|type_| substitute_signature(&type_, &environment))
-            });
+            let expected_result = result_context.or_else(|| checked_representation.clone());
             let function = *function;
             let argument = *argument;
             let inferred_argument = runtime
@@ -3146,22 +3154,21 @@ pub fn evaluate_expression(
             span,
         )),
     };
-    computation
-        .and_then(move |value| {
-            if let (Some(trace), Some(type_)) = (
-                representation_trace.as_ref(),
-                checked_representation.as_ref(),
-            ) {
-                trace
-                    .borrow_mut()
-                    .record_checked_aggregate_representation(&value, type_);
-                if is_definition {
-                    trace.borrow_mut().record_checked_value(&value, type_);
-                }
+    let computation = match (representation_trace, checked_representation) {
+        (Some(trace), Some(type_)) => computation.and_then(move |value| {
+            trace
+                .borrow_mut()
+                .record_checked_aggregate_representation(&value, &type_);
+            if is_definition {
+                trace.borrow_mut().record_checked_value(&value, &type_);
             }
             Computation::value(value)
-        })
-        .at(origin)
+        }),
+        // No evidence consumer means no continuation to allocate or execute.
+        // Fuel was still charged above, and source origins are retained below.
+        _ => computation,
+    };
+    computation.at(origin)
 }
 
 fn evaluate_many(
@@ -5002,14 +5009,18 @@ fn apply_with_expected(
             let mut environment = environment;
             let mut residual_compilation = None;
             let mut instance_facts = None;
-            let recursive_signature = self_name
-                .as_deref()
-                .and_then(|name| lookup_signature(&environment, name));
-            let inferred_signature =
-                runtime.closure_signature(&context, closure_module.as_str(), body);
             let signature = signature
-                .or_else(|| recursive_signature.map(Rc::new))
-                .or_else(|| inferred_signature.map(Rc::new));
+                .or_else(|| {
+                    self_name
+                        .as_deref()
+                        .and_then(|name| lookup_signature(&environment, name))
+                        .map(Rc::new)
+                })
+                .or_else(|| {
+                    runtime
+                        .closure_signature(&context, closure_module.as_str(), body)
+                        .map(Rc::new)
+                });
             let mut signature =
                 signature.map(|signature| Rc::new(substitute_signature(&signature, &environment)));
 
@@ -6792,6 +6803,10 @@ impl BigIntExt {
         Self::two_to_63() - 1
     }
 }
+
+#[cfg(test)]
+#[path = "eval_type_demand_tests.rs"]
+mod eval_type_demand_tests;
 
 #[cfg(test)]
 #[path = "select_type_tests.rs"]

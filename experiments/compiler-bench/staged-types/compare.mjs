@@ -25,6 +25,7 @@ for (const argument of process.argv.slice(2)) {
       "sample",
       "fixture",
       "prelude",
+      "telemetry",
     ]).has(match[1])
   ) {
     throw new Error(`Unknown option ${match[1]}`);
@@ -40,6 +41,13 @@ assert(
   ["snapshot", "source"].includes(preludeMode),
   "--prelude is snapshot or source",
 );
+const telemetryMode = option("telemetry", "phase");
+assert(
+  ["phase", "off"].includes(telemetryMode),
+  "--telemetry is phase or off",
+);
+let requestedFacts = 0;
+if (telemetryMode === "phase") requestedFacts = 0x80000000;
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 async function sample(wasmPath, fixture) {
@@ -182,7 +190,7 @@ async function sample(wasmPath, fixture) {
           exports.analyze_compiler_session_module_v2(
             session,
             moduleId,
-            0x80000000,
+            requestedFacts,
           ),
         ),
       ),
@@ -193,8 +201,9 @@ async function sample(wasmPath, fixture) {
     assert.equal(analysis.effects, "");
     assert.equal(analysis.targetPreflight.supported, true);
     return {
-      schema: 1,
+      schema: 2,
       fixture,
+      telemetryMode,
       prelude: preludeMode,
       wasmSha256: digest(bytes),
       inputs: {
@@ -248,6 +257,7 @@ if (options.has("sample")) {
           `--sample=${options.get(artifact)}`,
           `--fixture=${fixture}`,
           `--prelude=${preludeMode}`,
+          `--telemetry=${telemetryMode}`,
         ], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
         assert.equal(
           child.status,
