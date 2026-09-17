@@ -12,7 +12,7 @@ use crate::eval::{
 };
 use crate::value::{
     ChoiceSource, Domain, EffectOperationContract, OrderedFields, RuntimeMeaning, RuntimeValue,
-    Value, lookup, lookup_signature,
+    TypeValue, Value, lookup, lookup_signature,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -40,7 +40,7 @@ impl PartialEq for ResidualEnvironmentKey {
             }
             for (left, right) in left.iter().zip(right.iter()) {
                 match (left, right) {
-                    (Part::Fields(left), Part::Fields(right)) => pending.push((left, right)),
+                    (Part::Chunk(left), Part::Chunk(right)) => pending.push((left, right)),
                     _ if left != right => return false,
                     _ => {}
                 }
@@ -66,7 +66,7 @@ enum Part {
     Runtime(usize, usize, RuntimeMeaning),
     Closure(usize),
     Reference(usize),
-    Fields(Rc<[Part]>),
+    Chunk(Rc<[Part]>),
     Instances(Rc<ModuleInstanceScope>),
     Scope(Rc<EffectScope>),
     Ownership(EffectOperationContract),
@@ -354,7 +354,7 @@ fn portable_evidence<'a>(
             } else {
                 roots.next()?
             };
-            if let Part::Fields(fields) = part {
+            if let Part::Chunk(fields) = part {
                 nested.push(fields.iter());
                 continue;
             }
@@ -417,7 +417,7 @@ fn portable_evidence<'a>(
             }),
             Part::Closure(index) => PortablePart::Closure(*index),
             Part::Reference(index) => PortablePart::Reference(*index),
-            Part::Fields(_) => unreachable!("record evidence is flattened before encoding"),
+            Part::Chunk(_) => unreachable!("shared evidence is flattened before encoding"),
             Part::Instances(scope) => {
                 let pointer = Rc::as_ptr(scope);
                 let index = if let Some(index) = instances.get(&pointer) {
@@ -675,6 +675,10 @@ struct Builder<'a> {
     closures: HashMap<(String, u32, usize), usize>,
     fields: HashMap<*const (), (Rc<[Part]>, OrderedFields)>,
     parts: Vec<Part>,
+    type_edges: HashMap<*const Value, (Rc<[Part]>, TypeValue)>,
+    signatures: HashMap<*const Value, (Rc<[Part]>, Rc<Value>)>,
+    #[cfg(test)]
+    value_visits: usize,
 }
 
 impl<'a> Builder<'a> {
@@ -689,6 +693,10 @@ impl<'a> Builder<'a> {
             closures: HashMap::new(),
             fields: HashMap::new(),
             parts: Vec::new(),
+            type_edges: HashMap::new(),
+            signatures: HashMap::new(),
+            #[cfg(test)]
+            value_visits: 0,
         }
     }
 
@@ -724,7 +732,7 @@ impl<'a> Builder<'a> {
     fn fields(&mut self, fields: &OrderedFields) -> Result<bool, Diagnostic> {
         let identity = fields.storage_identity();
         if let Some((parts, _)) = self.fields.get(&identity) {
-            self.parts.push(Part::Fields(parts.clone()));
+            self.parts.push(Part::Chunk(parts.clone()));
             return Ok(true);
         }
         let outer = std::mem::take(&mut self.parts);
@@ -745,7 +753,50 @@ impl<'a> Builder<'a> {
             self.fields
                 .insert(identity, (parts.clone(), fields.clone()));
         }
-        self.parts.push(Part::Fields(parts));
+        self.parts.push(Part::Chunk(parts));
+        Ok(supported)
+    }
+
+    // These nodes are immutable during one Builder traversal. Keeping their
+    // owners alive prevents address reuse and makes subsequent writes detach.
+    // Do not carry this memo between requests: closure environments can change.
+    fn type_edge(&mut self, edge: &TypeValue) -> Result<bool, Diagnostic> {
+        let identity = edge.as_ref() as *const Value;
+        if let Some((parts, _)) = self.type_edges.get(&identity) {
+            self.parts.push(Part::Chunk(parts.clone()));
+            return Ok(true);
+        }
+        let outer = std::mem::take(&mut self.parts);
+        let closures = self.closures.len();
+        let supported = self.value(edge)?;
+        let parts: Rc<[Part]> = std::mem::replace(&mut self.parts, outer).into();
+        if supported && closures == self.closures.len() {
+            self.type_edges
+                .insert(identity, (parts.clone(), edge.clone()));
+        }
+        self.parts.push(Part::Chunk(parts));
+        Ok(supported)
+    }
+
+    fn signature(&mut self, signature: Option<&Rc<Value>>) -> Result<bool, Diagnostic> {
+        self.number(u64::from(signature.is_some()));
+        let Some(signature) = signature else {
+            return Ok(true);
+        };
+        let identity = Rc::as_ptr(signature);
+        if let Some((parts, _)) = self.signatures.get(&identity) {
+            self.parts.push(Part::Chunk(parts.clone()));
+            return Ok(true);
+        }
+        let outer = std::mem::take(&mut self.parts);
+        let closures = self.closures.len();
+        let supported = self.value(signature)?;
+        let parts: Rc<[Part]> = std::mem::replace(&mut self.parts, outer).into();
+        if supported && closures == self.closures.len() {
+            self.signatures
+                .insert(identity, (parts.clone(), signature.clone()));
+        }
+        self.parts.push(Part::Chunk(parts));
         Ok(supported)
     }
 
@@ -841,6 +892,10 @@ impl<'a> Builder<'a> {
     }
 
     fn value(&mut self, value: &Value) -> Result<bool, Diagnostic> {
+        #[cfg(test)]
+        {
+            self.value_visits += 1;
+        }
         self.parts.push(Part::Value(discriminant(value)));
         match value {
             Value::Int(value) => self.parts.push(Part::Integer(value.clone())),
@@ -912,7 +967,7 @@ impl<'a> Builder<'a> {
             }
             Value::Range { low, high, domain } => {
                 self.parts.push(Part::Domain(*domain));
-                return Ok(self.value(low)? && self.value(high)?);
+                return Ok(self.type_edge(low)? && self.type_edge(high)?);
             }
             Value::Arrow {
                 deferred,
@@ -926,8 +981,8 @@ impl<'a> Builder<'a> {
                 if let Some(tail) = effect_tail {
                     self.parts.push(Part::Variable(*tail));
                 }
-                return Ok(self.value(domain)?
-                    && self.value(codomain)?
+                return Ok(self.type_edge(domain)?
+                    && self.type_edge(codomain)?
                     && self.values(effects.iter())?);
             }
             Value::Forall { variable, body } => {
@@ -993,7 +1048,7 @@ impl<'a> Builder<'a> {
                         self.text(path);
                     }
                 }
-                if !self.optional_value(signature.as_deref())? {
+                if !self.signature(signature.as_ref())? {
                     return Ok(false);
                 }
                 return self.closure(LexicalClosure {
@@ -1135,7 +1190,7 @@ mod tests {
             }
             parts += chunk.len();
             for part in chunk.iter() {
-                if let Part::Fields(fields) = part {
+                if let Part::Chunk(fields) = part {
                     pending.push(fields);
                 }
             }
@@ -1165,6 +1220,69 @@ mod tests {
             ]))
         };
         assert!(key(&pair(first.clone(), first.clone()), &[]) != key(&pair(first, second), &[]));
+    }
+
+    fn arrow(domain: TypeValue, codomain: TypeValue) -> Value {
+        Value::Arrow {
+            deferred: false,
+            domain,
+            codomain,
+            effects: Vec::new(),
+            effect_tail: None,
+        }
+    }
+
+    #[test]
+    fn shared_type_evidence_visits_graph_nodes_not_expanded_paths() {
+        let context = Rc::new(Context::default());
+        let mut edge = TypeValue::new(Value::OpaqueType("Int".into()));
+        for _ in 0..24 {
+            edge = TypeValue::new(arrow(edge.clone(), edge));
+        }
+        let mut builder = Builder::new(&context, &[]);
+        assert!(builder.value(&edge).unwrap());
+        assert!(
+            builder.value_visits <= 26,
+            "{} visits",
+            builder.value_visits
+        );
+        assert_eq!(builder.type_edges.len(), 24);
+        let first = ResidualEnvironmentKey(builder.parts.into());
+        assert!(first == key(&edge, &[]).unwrap());
+    }
+
+    #[test]
+    fn type_evidence_ignores_sharing_but_preserves_mutations_and_variables() {
+        let leaf = || TypeValue::new(Value::TypeVariable(7));
+        let shared = leaf();
+        assert!(key(&arrow(shared.clone(), shared), &[]) == key(&arrow(leaf(), leaf()), &[]));
+        let first = TypeValue::new(Value::TypeVariable(7));
+        let mut changed = first.clone();
+        *changed = Value::TypeVariable(8);
+        assert!(key(&arrow(first.clone(), first.clone()), &[]) != key(&arrow(first, changed), &[]));
+    }
+
+    #[test]
+    fn signature_evidence_reuses_immutable_roots_and_retains_owners() {
+        let context = Rc::new(Context::default());
+        let signature = Rc::new(arrow(
+            TypeValue::new(Value::OpaqueType("Int".into())),
+            TypeValue::new(Value::OpaqueType("Text".into())),
+        ));
+        let mut builder = Builder::new(&context, &[]);
+        assert!(builder.signature(Some(&signature)).unwrap());
+        let visits = builder.value_visits;
+        for _ in 0..32 {
+            assert!(builder.signature(Some(&signature)).unwrap());
+        }
+        assert_eq!(builder.value_visits, visits);
+        assert_eq!(Rc::strong_count(&signature), 2);
+        let mut changed = signature.clone();
+        *Rc::make_mut(&mut changed) = Value::Unit;
+        assert!(builder.signature(Some(&changed)).unwrap());
+        assert!(builder.value_visits > visits);
+        drop(builder);
+        assert_eq!(Rc::strong_count(&signature), 1);
     }
 
     #[test]

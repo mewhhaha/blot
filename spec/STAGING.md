@@ -520,12 +520,22 @@ policy. This decision is made before lowering a call argument, so declining
 sharing does not emit duplicate argument work. It is not a new source rejection
 or an excuse to fall back to a type-only key.
 
-Immutable record evidence uses shared chunks once all contained closure
-references are stable. The encoder retains record storage while indexing its
-identity, and copy-on-write changes produce distinct evidence. Key comparison
-ignores allocation sharing and memoizes compared chunk pairs; portable encoding
-retains the original structural sequence. Completed keys share immutable storage
-when cloned, so repeated captures and key cloning do not duplicate record trees.
+Immutable records, persistent function/range type edges, and attached closure
+signatures use shared evidence chunks once all contained closure references are
+stable. The encoder retains each indexed storage owner for its own lifetime:
+addresses detect repeated storage, never establish semantic equality, and
+copy-on-write changes produce distinct evidence. These memos are local to one
+identity construction; they do not cache mutable closure environments across
+applications or revisions. In particular, creating a new closure definition
+while encoding a chunk prevents memoizing that first-visit definition as a later
+reference.
+
+Key comparison ignores allocation sharing and memoizes compared chunk pairs;
+portable encoding retains the original structural sequence. Completed keys
+share immutable storage when cloned. Constructing identity for a shared immutable
+function/range type graph visits its stored edges, rather than expanding every
+root-to-leaf path. This does not change source value equality, quantifier or
+effect identity, runtime capture slots, or eligibility for residual sharing.
 
 Recursive result placeholders use the same environment evidence as function
 identities. A placeholder for one static environment cannot be settled by a
