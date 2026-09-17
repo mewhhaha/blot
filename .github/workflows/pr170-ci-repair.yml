@@ -8,58 +8,68 @@ permissions:
   contents: read
 
 jobs:
-  formatting:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Generate an isolated formatting candidate for inspection
+      - name: Merge the exact green shared-repair foundation into an isolated candidate
         shell: bash
         run: |
           set -euo pipefail
           base=5f6457b759a2faf888978c1fb89420d7b6e7f055
-          git fetch --no-tags origin "$base"
+          foundation=02134f36514b9185cbe514b9a33dd0e2c482e768
+          git fetch --no-tags origin "$base" "$foundation"
           git checkout --detach "$base"
-          deno --version
-          deno fmt LANGUAGE.md spec/STAGING.md
-          git diff --binary > "$RUNNER_TEMP/pr170-formatting.patch"
-          python3 - <<'PY'
-          import subprocess
-          allowed = {'LANGUAGE.md', 'spec/STAGING.md'}
-          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
-          assert changed and changed <= allowed, changed
-          PY
-          deno fmt --check
-          deno lint
-          git diff --check
-          git diff --stat
           git config user.name 'OpenAI'
           git config user.email 'noreply@openai.com'
-          git add LANGUAGE.md spec/STAGING.md
-          git commit -m 'fix: canonical Markdown formatting for PR 170 CI'
-          git push origin HEAD:refs/heads/workbench/pr170-ci-candidate-20260917
-          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
-          echo 'No PR or main reference was changed; inspect the exported diff before publication.' >> "$GITHUB_STEP_SUMMARY"
-      - name: Export formatter and source for offline validation
-        if: always()
+          if ! git merge --no-ff --no-commit "$foundation"; then
+            git diff --cc > "$RUNNER_TEMP/pr170-merge-conflicts.patch"
+            git status --short
+            exit 1
+          fi
+          git diff --exit-code "$base" -- compiler/src src/node src/compiler generated/compiler
+          git commit -m 'Merge shared CI repair foundation from PR 161 into type-system branch'
+      - name: Regenerate inventory and use the same formatter and linter as CI
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/ci-tools"
-          cp "$(which deno)" "$RUNNER_TEMP/ci-tools/deno"
-          deno --version > "$RUNNER_TEMP/ci-tools/deno-version.txt"
-          tar -czf "$RUNNER_TEMP/ci-tools.tgz" -C "$RUNNER_TEMP" ci-tools
+          deno --version
+          deno fmt
+          deno run --allow-read --allow-write scripts/generate_language_health.ts
+          deno fmt --check
+          deno lint
+          deno run --allow-read scripts/generate_language_health.ts --check
+          git diff --check
+          if ! git diff --quiet; then
+            git add -u
+            git commit -m 'fix: refresh generated inventory and canonical formatting for CI'
+          fi
+          base=5f6457b759a2faf888978c1fb89420d7b6e7f055
+          git diff --exit-code "$base" HEAD -- compiler/src src/node src/compiler generated/compiler
+          git merge-base --is-ancestor "$base" HEAD
+          git merge-base --is-ancestor 02134f36514b9185cbe514b9a33dd0e2c482e768 HEAD
+          git diff --binary "$base" HEAD > "$RUNNER_TEMP/pr170-ci-repair.patch"
+          git diff --stat "$base" HEAD
+          git push origin HEAD:refs/heads/workbench/pr170-ci-foundation-candidate-20260917
+          git bundle create "$RUNNER_TEMP/pr170-ci-candidate.bundle" HEAD
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+          echo 'No PR or main reference was changed; inspect the candidate before publication.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: pr170-formatting-repair
+          name: pr170-ci-repair
           path: |
-            ${{ runner.temp }}/pr170-formatting.patch
-            ${{ runner.temp }}/ci-tools.tgz
-          if-no-files-found: error
+            ${{ runner.temp }}/pr170-merge-conflicts.patch
+            ${{ runner.temp }}/pr170-ci-repair.patch
+            ${{ runner.temp }}/pr170-ci-candidate.bundle
+          if-no-files-found: warn
           retention-days: 3
