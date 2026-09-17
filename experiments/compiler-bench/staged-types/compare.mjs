@@ -25,6 +25,7 @@ for (const argument of process.argv.slice(2)) {
       "sample",
       "fixture",
       "prelude",
+      "telemetry",
     ]).has(match[1])
   ) {
     throw new Error(`Unknown option ${match[1]}`);
@@ -40,6 +41,10 @@ assert(
   ["snapshot", "source"].includes(preludeMode),
   "--prelude is snapshot or source",
 );
+const telemetryMode = option("telemetry", "on");
+assert(["on", "off"].includes(telemetryMode), "--telemetry is on or off");
+let requestedFactMask = 0;
+if (telemetryMode === "on") requestedFactMask = 0x80000000;
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 async function sample(wasmPath, fixture) {
@@ -182,7 +187,7 @@ async function sample(wasmPath, fixture) {
           exports.analyze_compiler_session_module_v2(
             session,
             moduleId,
-            0x80000000,
+            requestedFactMask,
           ),
         ),
       ),
@@ -193,8 +198,9 @@ async function sample(wasmPath, fixture) {
     assert.equal(analysis.effects, "");
     assert.equal(analysis.targetPreflight.supported, true);
     return {
-      schema: 1,
+      schema: 2,
       fixture,
+      telemetryMode,
       prelude: preludeMode,
       wasmSha256: digest(bytes),
       inputs: {
@@ -238,6 +244,7 @@ if (options.has("sample")) {
     Number.isSafeInteger(count) && count > 0,
     "--samples must be a positive integer",
   );
+  const expectedSemantics = new Map();
   for (let iteration = 0; iteration < count; iteration++) {
     let artifacts = ["baseline", "candidate"];
     if (iteration % 2) artifacts = artifacts.reverse();
@@ -248,15 +255,31 @@ if (options.has("sample")) {
           `--sample=${options.get(artifact)}`,
           `--fixture=${fixture}`,
           `--prelude=${preludeMode}`,
+          `--telemetry=${telemetryMode}`,
         ], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
         assert.equal(
           child.status,
           0,
           child.stderr || child.stdout || String(child.error),
         );
-        console.log(
-          JSON.stringify({ artifact, iteration, ...JSON.parse(child.stdout) }),
-        );
+        const observed = JSON.parse(child.stdout);
+        const semantics = {
+          inputs: observed.inputs,
+          type: observed.type,
+          effects: observed.effects,
+          interfaceKey: observed.interfaceKey,
+          targetPreflight: observed.targetPreflight,
+        };
+        if (expectedSemantics.has(fixture)) {
+          assert.deepEqual(
+            semantics,
+            expectedSemantics.get(fixture),
+            `${fixture}: artifacts must agree on inputs and semantic results`,
+          );
+        } else {
+          expectedSemantics.set(fixture, semantics);
+        }
+        console.log(JSON.stringify({ artifact, iteration, ...observed }));
       }
     }
   }

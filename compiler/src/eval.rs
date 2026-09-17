@@ -2703,9 +2703,24 @@ pub fn evaluate_expression(
     if let Some(variable) = signature_hole {
         return Computation::value(Value::TypeVariable(variable));
     }
-    let checked_representation = runtime
-        .expression_type(&context, module_path.as_str(), expression_id)
-        .map(|type_| substitute_signature(&type_, &environment));
+    // Most concrete evaluation does not consume an expression's checked type.
+    // Demand it only for literal/aggregate materialization or residual evidence.
+    // Application result contexts and closure signatures are demanded separately
+    // below; those are semantic inputs, not optional tracing metadata.
+    let checked_representation = if runtime.residual.is_some()
+        || matches!(
+            expression,
+            Expression::Int { .. }
+                | Expression::Float { .. }
+                | Expression::Array { .. }
+                | Expression::Case { .. }
+        ) {
+        runtime
+            .expression_type(&context, module_path.as_str(), expression_id)
+            .map(|type_| substitute_signature(&type_, &environment))
+    } else {
+        None
+    };
     let is_definition = !matches!(expression, Expression::Var { .. });
     let representation_trace = runtime.residual.clone();
     let origin = module_path.clone();
@@ -3146,22 +3161,23 @@ pub fn evaluate_expression(
             span,
         )),
     };
-    computation
-        .and_then(move |value| {
-            if let (Some(trace), Some(type_)) = (
-                representation_trace.as_ref(),
-                checked_representation.as_ref(),
-            ) {
+    // Do not suspend every concrete expression merely to execute an empty
+    // representation callback. Real continuations still use the trampoline,
+    // and diagnostic origins must remain attached on both paths.
+    match (representation_trace, checked_representation) {
+        (Some(trace), Some(type_)) => computation
+            .and_then(move |value| {
                 trace
                     .borrow_mut()
-                    .record_checked_aggregate_representation(&value, type_);
+                    .record_checked_aggregate_representation(&value, &type_);
                 if is_definition {
-                    trace.borrow_mut().record_checked_value(&value, type_);
+                    trace.borrow_mut().record_checked_value(&value, &type_);
                 }
-            }
-            Computation::value(value)
-        })
-        .at(origin)
+                Computation::value(value)
+            })
+            .at(origin),
+        _ => computation.at(origin),
+    }
 }
 
 fn evaluate_many(
@@ -7563,5 +7579,210 @@ mod operator_projection_regression_tests {
                 if name == "@type.resolve_member"
                     && matches!(applied.as_slice(), [Value::Text(member)] if member.as_ref() == "add")
         ));
+    }
+}
+
+#[cfg(test)]
+mod representation_demand_tests {
+    use super::*;
+
+    const PATH: &str = "representation-demand.blot";
+    const SPAN: Span = Span { start: 4, end: 12 };
+
+    fn context_for(expression: Expression) -> (Rc<Context>, ExpressionId) {
+        let mut arena = crate::ast::AstArena::default();
+        let result = arena.expression(expression);
+        let module = Rc::new(Module {
+            parameter: None,
+            declarations: Vec::new(),
+            result,
+            result_effects: crate::ast::ResultEffects::Pure,
+            span: SPAN,
+            arena,
+        });
+        let context = Rc::new(Context::default());
+        context.modules.borrow_mut().insert(
+            PATH.to_owned(),
+            LoadedModule::new(PATH, module, BTreeMap::new(), BTreeMap::new()),
+        );
+        (context, result)
+    }
+
+    fn count_resolution(context: &Context, type_: Value) -> Rc<Cell<usize>> {
+        let calls = Rc::new(Cell::new(0));
+        let observed = calls.clone();
+        context.expression_type_resolvers.borrow_mut().insert(
+            PATH.to_owned(),
+            Rc::new(move |_| {
+                observed.set(observed.get() + 1);
+                Some(type_.clone())
+            }),
+        );
+        calls
+    }
+
+    #[test]
+    fn concrete_leaf_does_not_resolve_a_type_or_allocate_a_step() {
+        for expression in [
+            Expression::Text {
+                value: "hello".to_owned(),
+                span: SPAN,
+            },
+            Expression::Unit { span: SPAN },
+            Expression::Tag {
+                name: "Ready".to_owned(),
+                span: SPAN,
+            },
+        ] {
+            let (context, expression) = context_for(expression);
+            let calls = count_resolution(&context, Value::Unit);
+            let runtime = Runtime::new(Phase::Comptime, PATH.to_owned());
+            let fuel = runtime.fuel.clone();
+            let before = fuel.get();
+            let computation = evaluate_expression(
+                context,
+                Rc::new(PATH.to_owned()),
+                expression,
+                child_env(None),
+                runtime,
+            );
+            assert_eq!(
+                calls.get(),
+                0,
+                "concrete leaves do not consume type evidence"
+            );
+            assert!(
+                matches!(computation, Computation::Done(Ok(_))),
+                "a leaf must not allocate a no-op trampoline step"
+            );
+            assert_eq!(
+                fuel.get(),
+                before - 1,
+                "fuel still counts source expressions"
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_literals_still_demand_their_checked_representation() {
+        for (expression, type_name, expected) in [
+            (
+                Expression::Int {
+                    value: 7.into(),
+                    span: SPAN,
+                },
+                "@type.float",
+                "F64",
+            ),
+            (
+                Expression::Int {
+                    value: 7.into(),
+                    span: SPAN,
+                },
+                "@type.float32",
+                "F32",
+            ),
+            (
+                Expression::Float {
+                    value: 0.1,
+                    span: SPAN,
+                },
+                "@type.float32",
+                "F32",
+            ),
+        ] {
+            let (context, expression) = context_for(expression);
+            let calls = count_resolution(&context, constant(type_name).unwrap());
+            let value = run(evaluate_expression(
+                context,
+                Rc::new(PATH.to_owned()),
+                expression,
+                child_env(None),
+                Runtime::new(Phase::Comptime, PATH.to_owned()),
+            ))
+            .unwrap();
+            assert_eq!(calls.get(), 1);
+            match expected {
+                "F64" => assert!(matches!(value, Value::Float(7.0))),
+                "F32" => assert!(matches!(value, Value::Float32(_))),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn residual_evaluation_keeps_its_representation_continuation() {
+        let (context, expression) = context_for(Expression::Text {
+            value: "hello".to_owned(),
+            span: SPAN,
+        });
+        let calls = count_resolution(&context, constant("@type.text").unwrap());
+        let trace = Rc::new(RefCell::new(crate::hir::ResidualTrace::new(PATH)));
+        let computation = evaluate_expression(
+            context,
+            Rc::new(PATH.to_owned()),
+            expression,
+            child_env(None),
+            Runtime::residual(Phase::Comptime, PATH.to_owned(), trace),
+        );
+        assert_eq!(calls.get(), 1, "residual evidence is not optional");
+        assert!(matches!(computation, Computation::Step(_)));
+        assert!(matches!(run(computation), Ok(Value::Text(text)) if text.as_ref() == "hello"));
+    }
+
+    #[test]
+    fn absent_residual_evidence_does_not_allocate_a_callback() {
+        let (context, expression) = context_for(Expression::Unit { span: SPAN });
+        let trace = Rc::new(RefCell::new(crate::hir::ResidualTrace::new(PATH)));
+        let computation = evaluate_expression(
+            context,
+            Rc::new(PATH.to_owned()),
+            expression,
+            child_env(None),
+            Runtime::residual(Phase::Comptime, PATH.to_owned(), trace),
+        );
+        assert!(matches!(computation, Computation::Done(Ok(Value::Unit))));
+    }
+
+    #[test]
+    fn immediate_errors_preserve_their_source_origin_and_span() {
+        let (context, expression) = context_for(Expression::Var {
+            name: "missing".to_owned(),
+            span: SPAN,
+        });
+        let error = run(evaluate_expression(
+            context,
+            Rc::new(PATH.to_owned()),
+            expression,
+            child_env(None),
+            Runtime::new(Phase::Comptime, PATH.to_owned()),
+        ))
+        .unwrap_err();
+        assert_eq!(error.code, "BLOT_UNBOUND");
+        assert_eq!(error.origin.as_deref(), Some(PATH));
+        assert_eq!(error.span, SPAN);
+    }
+
+    #[test]
+    fn fuel_limit_precedes_representation_demand() {
+        let (context, expression) = context_for(Expression::Int {
+            value: 1.into(),
+            span: SPAN,
+        });
+        let calls = count_resolution(&context, constant("@type.int").unwrap());
+        let runtime = Runtime::new(Phase::Comptime, PATH.to_owned());
+        runtime.fuel.set(0);
+        let error = run(evaluate_expression(
+            context,
+            Rc::new(PATH.to_owned()),
+            expression,
+            child_env(None),
+            runtime,
+        ))
+        .unwrap_err();
+        assert_eq!(calls.get(), 0);
+        assert_eq!(error.code, "BLOT_EVALUATION_LIMIT");
+        assert_eq!(error.origin.as_deref(), Some(PATH));
+        assert_eq!(error.span, SPAN);
     }
 }

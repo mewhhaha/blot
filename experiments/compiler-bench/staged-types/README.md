@@ -106,3 +106,42 @@ and adding conservative evidence keys reduced the native fixture's evaluator
 steps by about 2%, but increased debug wall time. That experiment is not
 shipped. In particular, this change does not share closure results or fresh
 effects merely because a call appears pure.
+
+## Demand-driven evaluator follow-up
+
+The evaluator no longer resolves and substitutes every expression's type merely
+for an optional representation-recording callback. Concrete expressions demand
+that evidence only for numeric literals, arrays and cases; application result
+contexts and closure signatures keep their independent semantic demands. A
+representation callback is installed only when a residual trace and checked
+type are both present. This is an interpreter/type-evidence boundary change,
+not a new subtype relation or broader closure memoization policy.
+
+The comparison driver accepts `--telemetry=on` (default) and `--telemetry=off`.
+Run both modes to distinguish a production-path improvement from measurement
+overhead. Output schema 2 records `telemetryMode`; telemetry-off samples omit
+the optional `telemetry` field. All samples remain fresh-process analyses, not
+full CLI or executable-emission timings. The driver now checks cross-artifact
+input digests, principal types, effects, interface keys and target-preflight
+results before accepting each subsequent sample for a fixture.
+
+```sh
+node experiments/compiler-bench/staged-types/compare.mjs \
+  --baseline=/path/pr170.wasm --candidate=/path/demand-driven.wasm \
+  --samples=5 --telemetry=off
+node experiments/compiler-bench/staged-types/compare.mjs \
+  --baseline=/path/pr170.wasm --candidate=/path/demand-driven.wasm \
+  --samples=5 --telemetry=on
+```
+
+Regression coverage distinguishes genuinely needed numeric and residual type
+facts from unused concrete-expression facts. Immediate diagnostic origins and
+spans, deterministic expression fuel, and allocation-free concrete leaves are
+asserted directly; the ordinary compiler suites remain the semantic authority.
+
+The telemetry `eval.steps` counter counts trampoline drive-loop transitions,
+not source-expression evaluations. Removing administrative callbacks lowers
+that counter without reducing the number of source-level closure calls. Report
+both counters and wall time; a transition reduction is not evidence that a
+source algorithm has become asymptotically cheaper. Expression fuel is charged
+inside `evaluate_expression` independently of those transitions.

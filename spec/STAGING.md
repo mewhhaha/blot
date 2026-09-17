@@ -79,6 +79,17 @@ the previous value merely to repeat a scope check. Earlier closures retain their
 captured binding, and their free-name dependencies keep any required initializer
 live.
 
+Concrete evaluation demands checked expression representations only where they
+are consumed. Numeric literals still require checked numeric domains; aggregate
+materialization and dynamic case joins retain their checked types. Call-site
+result contexts and instantiated closure signatures remain semantic inputs even
+when no residual trace exists. Residual evaluation records checked aggregate and
+value evidence as before. An unused representation lookup or empty recording
+continuation may be omitted; a required type obligation may not. Administrative
+continuations do not consume source-expression fuel. Omitting one must preserve
+source evaluation order, effect and module identities, diagnostic origin and
+span, and the existing trampoline boundaries for real continuations.
+
 ## 3. Checked bridges
 
 A compile-time value acquires semantic authority only through the bridge owned
