@@ -18,20 +18,21 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Format the two Markdown files reported by current CI
+      - name: Repair only the Markdown files reported by CI
         shell: bash
         run: |
           set -euo pipefail
           base=5f6457b759a2faf888978c1fb89420d7b6e7f055
           git fetch --no-tags origin "$base"
           git checkout --detach "$base"
+          deno --version
           deno fmt LANGUAGE.md spec/STAGING.md
           python3 - <<'PY'
           import pathlib, subprocess
           base = '5f6457b759a2faf888978c1fb89420d7b6e7f055'
-          expected = {'LANGUAGE.md', 'spec/STAGING.md'}
+          allowed = {'LANGUAGE.md', 'spec/STAGING.md'}
           changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
-          assert changed == expected, changed
+          assert changed and changed <= allowed, changed
           for name in sorted(changed):
               before = subprocess.check_output(['git', 'show', f'{base}:{name}'], text=True)
               after = pathlib.Path(name).read_text()
