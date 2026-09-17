@@ -827,12 +827,12 @@ impl<'a> Builder<'a> {
             closure.self_name,
         )?;
         self.number(names.len() as u64);
-        for name in names {
-            self.text(&name);
+        for name in names.iter() {
+            self.text(name);
             // An absent binding is recorded explicitly, not conflated with a
             // value. Demand may make a syntactic free occurrence unreachable.
-            if !self.optional_value(lookup(closure.environment, &name).as_ref())?
-                || !self.optional_value(lookup_signature(closure.environment, &name).as_ref())?
+            if !self.optional_value(lookup(closure.environment, name).as_ref())?
+                || !self.optional_value(lookup_signature(closure.environment, name).as_ref())?
             {
                 return Ok(false);
             }
@@ -1098,6 +1098,102 @@ mod tests {
             type_id: 4,
             meaning,
         }
+    }
+
+    #[test]
+    fn cached_free_names_do_not_cache_environment_values_or_signatures() {
+        use crate::ast::{AstArena, Expression, Module, Pattern, ResultEffects, Span};
+        use crate::eval::LoadedModule;
+        use crate::value::child_env;
+
+        let path = "current-captures.blot";
+        let span = Span { start: 0, end: 1 };
+        let mut arena = AstArena::default();
+        let parameter = arena.pattern(Pattern::Unit { span });
+        let body = arena.expression(Expression::Var {
+            name: "captured".into(),
+            span,
+        });
+        let context = Rc::new(Context::default());
+        context.modules.borrow_mut().insert(
+            path.into(),
+            LoadedModule::new(
+                path,
+                Rc::new(Module {
+                    parameter: None,
+                    declarations: Vec::new(),
+                    result: body,
+                    result_effects: ResultEffects::Pure,
+                    span,
+                    arena,
+                }),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+        );
+        let environment = child_env(None);
+        let instances = Rc::new(Vec::new());
+        let scope = Rc::new(Vec::new());
+        let encode = || {
+            residual_environment_key(
+                &context,
+                LexicalClosure {
+                    module: path,
+                    parameter,
+                    body,
+                    environment: &environment,
+                    self_name: None,
+                },
+                &[],
+                &instances,
+                &scope,
+                false,
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let missing = encode();
+        environment
+            .names
+            .borrow_mut()
+            .insert("captured".into(), Value::Int(1.into()));
+        let first = encode();
+        assert!(missing != first);
+        environment
+            .names
+            .borrow_mut()
+            .insert("captured".into(), Value::Int(2.into()));
+        let changed_value = encode();
+        assert!(first != changed_value);
+        environment
+            .names
+            .borrow_mut()
+            .insert("captured".into(), Value::Int(1.into()));
+        assert!(first == encode());
+        environment
+            .signatures
+            .borrow_mut()
+            .insert("captured".into(), Value::OpaqueType("Int".into()));
+        let with_signature = encode();
+        assert!(first != with_signature);
+        environment
+            .signatures
+            .borrow_mut()
+            .insert("captured".into(), Value::OpaqueType("Text".into()));
+        assert!(with_signature != encode());
+        environment.signatures.borrow_mut().clear();
+        assert!(first == encode());
+        environment
+            .type_substitutions
+            .borrow_mut()
+            .insert(7, Value::Int(3.into()));
+        assert!(first != encode());
+        environment.type_substitutions.borrow_mut().clear();
+        environment
+            .effect_substitutions
+            .borrow_mut()
+            .insert(9, Value::Int(4.into()));
+        assert!(first != encode());
     }
 
     #[test]

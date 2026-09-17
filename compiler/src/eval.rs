@@ -54,9 +54,22 @@ pub struct IncludedFile {
     pub text: String,
 }
 
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+struct ClosureFreeNameKey {
+    parameter: u32,
+    body: u32,
+    self_name: Option<String>,
+}
+
+#[derive(Default)]
+struct ClosureFreeNames {
+    entries: BTreeMap<ClosureFreeNameKey, Rc<[String]>>,
+}
+
 #[derive(Clone)]
 pub struct LoadedModule {
     pub module: Rc<Module>,
+    closure_free_names: Rc<RefCell<ClosureFreeNames>>,
     pub imports: BTreeMap<String, String>,
     pub includes: BTreeMap<String, IncludedFile>,
     revision: ModuleRevision,
@@ -76,6 +89,7 @@ impl LoadedModule {
     ) -> Self {
         Self {
             module,
+            closure_free_names: Rc::new(RefCell::new(ClosureFreeNames::default())),
             imports,
             includes,
             revision: ModuleRevision::new(path),
@@ -6640,18 +6654,42 @@ pub(crate) fn closure_free_names(
     parameter: PatternId,
     body: ExpressionId,
     self_name: Option<&str>,
-) -> Result<Vec<String>, Diagnostic> {
-    let module = module(context, module_path)?;
-    let mut local = pattern_names(&module, parameter)
+) -> Result<Rc<[String]>, Diagnostic> {
+    // Only syntax is cached. The owner retains one immutable AST; replacing a
+    // loaded module replaces this cache too. Captured values and signatures
+    // must still be read from the current environment on every use.
+    let modules = context.modules.borrow();
+    let loaded = modules.get(module_path).ok_or_else(|| {
+        Diagnostic::new(
+            "BLOT_UNRESOLVED_IMPORT",
+            format!("Module `{module_path}` was not loaded."),
+            Span { start: 0, end: 0 },
+        )
+    })?;
+    let key = ClosureFreeNameKey {
+        parameter: parameter.0,
+        body: body.0,
+        self_name: self_name.map(str::to_owned),
+    };
+    if let Some(names) = loaded.closure_free_names.borrow().entries.get(&key) {
+        return Ok(names.clone());
+    }
+    let mut local = pattern_names(&loaded.module, parameter)
         .into_iter()
         .collect::<HashSet<_>>();
     if let Some(name) = self_name {
         local.insert(name.to_owned());
     }
     let mut free = HashSet::new();
-    collect_free(&module, body, &mut vec![local], &mut free);
+    collect_free(&loaded.module, body, &mut vec![local], &mut free);
     let mut free = free.into_iter().collect::<Vec<_>>();
     free.sort();
+    let free: Rc<[String]> = free.into();
+    loaded
+        .closure_free_names
+        .borrow_mut()
+        .entries
+        .insert(key, free.clone());
     Ok(free)
 }
 
@@ -7784,5 +7822,128 @@ mod representation_demand_tests {
         assert_eq!(error.code, "BLOT_EVALUATION_LIMIT");
         assert_eq!(error.origin.as_deref(), Some(PATH));
         assert_eq!(error.span, SPAN);
+    }
+}
+
+#[cfg(test)]
+mod closure_free_name_cache_tests {
+    use super::*;
+
+    const PATH: &str = "free-name-cache.blot";
+    const SPAN: Span = Span { start: 0, end: 1 };
+
+    fn install(context: &Context, names: &[&str]) -> (PatternId, PatternId, ExpressionId) {
+        let mut arena = crate::ast::AstArena::default();
+        let first = arena.pattern(Pattern::Name {
+            name: "x".to_owned(),
+            qualifier: crate::ast::Qualifier::None,
+            span: SPAN,
+        });
+        let second = arena.pattern(Pattern::Name {
+            name: "y".to_owned(),
+            qualifier: crate::ast::Qualifier::None,
+            span: SPAN,
+        });
+        let elements = names
+            .iter()
+            .map(|name| {
+                arena.expression(Expression::Var {
+                    name: (*name).to_owned(),
+                    span: SPAN,
+                })
+            })
+            .collect();
+        let body = arena.expression(Expression::Tuple {
+            elements,
+            span: SPAN,
+        });
+        let module = Rc::new(Module {
+            parameter: None,
+            declarations: Vec::new(),
+            result: body,
+            result_effects: crate::ast::ResultEffects::Pure,
+            span: SPAN,
+            arena,
+        });
+        context.modules.borrow_mut().insert(
+            PATH.to_owned(),
+            LoadedModule::new(PATH, module, BTreeMap::new(), BTreeMap::new()),
+        );
+        (first, second, body)
+    }
+
+    #[test]
+    fn repeated_closure_queries_reuse_the_same_sorted_syntax_result() {
+        let context = Context::default();
+        let (parameter, _, body) = install(&context, &["z", "x", "a", "z"]);
+        let names = closure_free_names(&context, PATH, parameter, body, None).unwrap();
+        assert_eq!(&*names, &["a", "z"]);
+        for _ in 0..2048 {
+            let repeated = closure_free_names(&context, PATH, parameter, body, None).unwrap();
+            assert!(
+                Rc::ptr_eq(&names, &repeated),
+                "syntax was recomputed/copied"
+            );
+        }
+        assert_eq!(
+            context.modules.borrow()[PATH]
+                .closure_free_names
+                .borrow()
+                .entries
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn free_name_cache_distinguishes_parameters_bodies_and_recursive_binders() {
+        let context = Context::default();
+        let (first, second, body) = install(&context, &["x", "y", "self"]);
+        assert_eq!(
+            &*closure_free_names(&context, PATH, first, body, None).unwrap(),
+            &["self", "y"]
+        );
+        assert_eq!(
+            &*closure_free_names(&context, PATH, second, body, None).unwrap(),
+            &["self", "x"]
+        );
+        assert_eq!(
+            &*closure_free_names(&context, PATH, first, body, Some("self")).unwrap(),
+            &["y"]
+        );
+        assert_eq!(
+            &*closure_free_names(&context, PATH, first, body, Some("y")).unwrap(),
+            &["self"]
+        );
+        assert_eq!(
+            &*closure_free_names(&context, PATH, first, ExpressionId(0), None).unwrap(),
+            &[] as &[&str]
+        );
+    }
+
+    #[test]
+    fn replacing_a_module_cannot_reuse_names_from_the_previous_ast() {
+        let context = Context::default();
+        let (parameter, _, body) = install(&context, &["before"]);
+        let before = closure_free_names(&context, PATH, parameter, body, None).unwrap();
+        let (new_parameter, _, new_body) = install(&context, &["after"]);
+        assert_eq!((parameter, body), (new_parameter, new_body));
+        let after = closure_free_names(&context, PATH, parameter, body, None).unwrap();
+        assert_eq!(&*before, &["before"]);
+        assert_eq!(&*after, &["after"]);
+        assert!(!Rc::ptr_eq(&before, &after));
+    }
+
+    #[test]
+    fn removing_a_module_releases_its_free_name_cache() {
+        let context = Context::default();
+        let (parameter, _, body) = install(&context, &["captured"]);
+        let names = closure_free_names(&context, PATH, parameter, body, None).unwrap();
+        let weak = Rc::downgrade(&names);
+        drop(names);
+        assert!(weak.upgrade().is_some());
+        context.modules.borrow_mut().remove(PATH);
+        assert!(weak.upgrade().is_none());
+        assert!(closure_free_names(&context, PATH, parameter, body, None).is_err());
     }
 }

@@ -4527,6 +4527,40 @@ impl ResidualTrace {
             .get(module)
             .map(|loaded| loaded.module.arena.expression_span(body))
             .ok_or_else(|| hir_error("A residual closure lost its source expression."))?;
+        let recursive_result = context
+            .recursive_closures
+            .borrow()
+            .contains_key(module, &body);
+        let needs_instance_signature = (signature.is_none()
+            && (host_callback || self_name.is_some() || crosses_development_boundary))
+            || (!instance_checked
+                && (self_name.is_some() || (crosses_development_boundary && recursive_result))
+                && signature.is_some_and(crate::value::contains_type_variables))
+            || (host_callback && signature.is_some_and(|mut signature| {
+                while let Value::Forall { body, .. } | Value::Extended { inner: body, .. } = signature {
+                    signature = body;
+                }
+                matches!(signature, Value::Arrow { codomain, .. } if crate::value::contains_type_variables(codomain))
+            }));
+        let result_policy = if self_name.is_some() {
+            ResidualResultPolicy::Recursive
+        } else {
+            ResidualResultPolicy::Ordinary
+        };
+        if !needs_instance_signature
+            && signature.is_some_and(|signature| {
+                residual_signature_requires_staging(
+                    signature,
+                    result_policy,
+                    host_callback,
+                    crosses_development_boundary,
+                )
+            })
+        {
+            return Ok(ResidualFunctionCall::Static(
+                "the callback is deferred or its result requires staging",
+            ));
+        }
         let capture_plan = runtime_capture_plan(context, lexical_closure)?;
         if capture_plan.requires_staging {
             return Ok(ResidualFunctionCall::Static("a capture requires staging"));
@@ -4554,35 +4588,21 @@ impl ResidualTrace {
             ));
         };
         let actual_evidence = self.conservative_value_type(argument);
-        let checked_captures =
-            closure_free_names(context, module, closure_parameter, body, self_name)?
-                .into_iter()
-                .filter_map(|name| {
-                    let value = lookup(environment, &name)?;
-                    let type_ = crate::value::lookup_signature(environment, &name)
-                        .map(|type_| crate::eval::substitute_signature(&type_, environment))
-                        .or_else(|| self.conservative_value_type(&value))?;
-                    Some((name, type_))
-                })
-                .collect::<BTreeMap<_, _>>();
         let mut instance_facts = None;
         let mut signature = signature;
-        let recursive_result = context
-            .recursive_closures
-            .borrow()
-            .contains_key(module, &body);
-        if (signature.is_none()
-            && (host_callback || self_name.is_some() || crosses_development_boundary))
-            || (!instance_checked
-                && (self_name.is_some() || (crosses_development_boundary && recursive_result))
-                && signature.is_some_and(crate::value::contains_type_variables))
-            || (host_callback && signature.is_some_and(|mut signature| {
-                while let Value::Forall { body, .. } | Value::Extended { inner: body, .. } = signature {
-                    signature = body;
-                }
-                matches!(signature, Value::Arrow { codomain, .. } if crate::value::contains_type_variables(codomain))
-            }))
-        {
+        if needs_instance_signature {
+            let checked_captures =
+                closure_free_names(context, module, closure_parameter, body, self_name)?
+                    .iter()
+                    .cloned()
+                    .filter_map(|name| {
+                        let value = lookup(environment, &name)?;
+                        let type_ = crate::value::lookup_signature(environment, &name)
+                            .map(|type_| crate::eval::substitute_signature(&type_, environment))
+                            .or_else(|| self.conservative_value_type(&value))?;
+                        Some((name, type_))
+                    })
+                    .collect::<BTreeMap<_, _>>();
             instance_facts = crate::typecheck::Checker::residual_instance_signature(
                 context.clone(),
                 crate::typecheck::EvaluatedClosure {
@@ -4601,14 +4621,16 @@ impl ResidualTrace {
                     .or(actual_evidence.as_ref()),
                 &self.types,
             )?;
-            signature = instance_facts.as_ref().map(|facts| &facts.signature).or(signature);
+            signature = instance_facts
+                .as_ref()
+                .map(|facts| &facts.signature)
+                .or(signature);
         }
         while let Some(Value::Forall { body, .. }) = signature {
             signature = Some(body);
         }
         let Some(
             signature_value @ Value::Arrow {
-                deferred,
                 domain,
                 codomain,
                 effects,
@@ -4634,25 +4656,12 @@ impl ResidualTrace {
                 span,
             ));
         };
-        let mut result_body = codomain.as_ref();
-        while let Value::Forall { body, .. } | Value::Extended { inner: body, .. } = result_body {
-            result_body = body;
-        }
-        let result_policy = if self_name.is_some() {
-            ResidualResultPolicy::Recursive
-        } else {
-            ResidualResultPolicy::Ordinary
-        };
-        if *deferred
-            || residual_result_requires_staging(codomain, result_policy)
-            || (!host_callback
-                && !crosses_development_boundary
-                && self_name.is_none()
-                && (matches!(result_body, Value::Union(_) | Value::Tag { .. })
-                    || effects
-                        .iter()
-                        .any(|effect| matches!(effect, Value::Effect { host: false, .. }))))
-        {
+        if residual_signature_requires_staging(
+            signature_value,
+            result_policy,
+            host_callback,
+            crosses_development_boundary,
+        ) {
             return Ok(ResidualFunctionCall::Static(
                 "the callback is deferred or its result requires staging",
             ));
@@ -4839,12 +4848,12 @@ impl ResidualTrace {
                 if recursive_result && has_unresolved_representation(codomain, &substitutions) =>
             {
                 if let Some(identity) = self.recursive_result_ids.iter().find(|identity| {
-                    identity.environment_key == environment_key
-                        && identity.module == module
+                    identity.module == module
                         && identity.body == body
                         && identity.argument_type == caller_argument.type_id
                         && identity.argument_reuse == argument_reuse
                         && identity.capture_types == capture_types
+                        && identity.environment_key == environment_key
                         && crate::value::equal(&identity.signature, signature_value)
                 }) {
                     identity.type_id
@@ -4882,13 +4891,13 @@ impl ResidualTrace {
             .function_ids
             .iter()
             .find(|identity| {
-                identity.environment_key == environment_key
-                    && identity.module == module
+                identity.module == module
                     && identity.body == body
                     && identity.argument_type == caller_argument.type_id
                     && identity.argument_reuse == argument_reuse
                     && identity.result_type == result_type
                     && identity.capture_types == capture_types
+                    && identity.environment_key == environment_key
                     && crate::value::equal(&identity.signature, signature_value)
             })
             .map(|identity| {
@@ -8905,6 +8914,39 @@ enum ResidualResultPolicy {
     Recursive,
 }
 
+fn residual_signature_requires_staging(
+    mut signature: &Value,
+    policy: ResidualResultPolicy,
+    host_callback: bool,
+    crosses_development_boundary: bool,
+) -> bool {
+    while let Value::Forall { body, .. } = signature {
+        signature = body;
+    }
+    let Value::Arrow {
+        deferred,
+        codomain,
+        effects,
+        ..
+    } = signature
+    else {
+        return false;
+    };
+    let mut result_body = codomain.as_ref();
+    while let Value::Forall { body, .. } | Value::Extended { inner: body, .. } = result_body {
+        result_body = body;
+    }
+    *deferred
+        || residual_result_requires_staging(codomain, policy)
+        || (!host_callback
+            && !crosses_development_boundary
+            && matches!(policy, ResidualResultPolicy::Ordinary)
+            && (matches!(result_body, Value::Union(_) | Value::Tag { .. })
+                || effects
+                    .iter()
+                    .any(|effect| matches!(effect, Value::Effect { host: false, .. }))))
+}
+
 fn residual_result_requires_staging(type_: &Value, policy: ResidualResultPolicy) -> bool {
     match type_ {
         Value::Arrow { .. } | Value::Effect { .. } => true,
@@ -9660,8 +9702,10 @@ fn collect_closure(
         closure.parameter,
         closure.body,
         closure.self_name,
-    )? {
-        if let Some(value) = lookup(closure.environment, &name) {
+    )?
+    .iter()
+    {
+        if let Some(value) = lookup(closure.environment, name) {
             collect_value(context, &value, visited, captured, requires_staging)?;
         }
     }
@@ -9928,14 +9972,15 @@ fn replace_closure_environment(
             else {
                 unreachable!("recursive groups contain only closure templates")
             };
-            for name in closure_free_names(context, &module, parameter, body, self_name.as_deref())?
+            for name in
+                closure_free_names(context, &module, parameter, body, self_name.as_deref())?.iter()
             {
-                if source_bindings.contains(&name) || result.names.borrow().contains_key(&name) {
+                if source_bindings.contains(name) || result.names.borrow().contains_key(name) {
                     continue;
                 }
-                if let Some(value) = lookup(&environment, &name) {
+                if let Some(value) = lookup(&environment, name) {
                     let value = replace_value(context, &value, replacements, replaced)?;
-                    result.names.borrow_mut().insert(name, value);
+                    result.names.borrow_mut().insert(name.clone(), value);
                 }
             }
         }
@@ -9947,10 +9992,12 @@ fn replace_closure_environment(
         closure.parameter,
         closure.body,
         closure.self_name,
-    )? {
-        if let Some(value) = lookup(closure.environment, &name) {
+    )?
+    .iter()
+    {
+        if let Some(value) = lookup(closure.environment, name) {
             result.names.borrow_mut().insert(
-                name,
+                name.clone(),
                 replace_value(context, &value, replacements, replaced)?,
             );
         }
@@ -14269,6 +14316,133 @@ fn hir_error(message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_residual_signature(result: Value, deferred: bool) -> Value {
+        Value::Arrow {
+            deferred,
+            domain: TypeValue::new(Value::Unit),
+            codomain: TypeValue::new(result),
+            effects: Vec::new(),
+            effect_tail: None,
+        }
+    }
+
+    #[test]
+    fn signature_forced_staging_does_not_read_the_capture_environment() {
+        let path = "residual-demand.blot";
+        let span = crate::ast::Span { start: 0, end: 1 };
+        let mut arena = crate::ast::AstArena::default();
+        let parameter = arena.pattern(crate::ast::Pattern::Unit { span });
+        let body = arena.expression(crate::ast::Expression::Var {
+            name: "captured".to_owned(),
+            span,
+        });
+        let context = Rc::new(Context::default());
+        context.modules.borrow_mut().insert(
+            path.to_owned(),
+            crate::eval::LoadedModule::new(
+                path,
+                Rc::new(crate::ast::Module {
+                    parameter: None,
+                    declarations: Vec::new(),
+                    result: body,
+                    result_effects: crate::ast::ResultEffects::Pure,
+                    span,
+                    arena,
+                }),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+        );
+        let environment = child_env(None);
+        environment
+            .names
+            .borrow_mut()
+            .insert("captured".to_owned(), Value::Unit);
+        let signature = test_residual_signature(Value::Unit, true);
+        let instances = Rc::new(Vec::new());
+        let effects = Rc::new(Vec::new());
+        // A known negative decision must not demand captures merely to discard
+        // the resulting evidence. Any environment lookup would panic here.
+        let _unread_captures = environment.names.borrow_mut();
+        let result = ResidualTrace::new(path)
+            .begin_residual_function(
+                ResidualClosure {
+                    context: &context,
+                    module: path,
+                    parameter,
+                    body,
+                    name: "helper".to_owned(),
+                    self_name: None,
+                    environment: &environment,
+                    module_instances: &instances,
+                    effect_scope: &effects,
+                    signature: Some(&signature),
+                    reuse: false,
+                    root_application: false,
+                    host_callback: false,
+                    crosses_development_boundary: false,
+                    instance_checked: true,
+                },
+                &Value::Unit,
+                None,
+                None,
+                span,
+            )
+            .unwrap();
+        assert!(matches!(
+            result,
+            ResidualFunctionCall::Static("the callback is deferred or its result requires staging")
+        ));
+    }
+
+    #[test]
+    fn early_signature_policy_preserves_recursive_and_host_callback_boundaries() {
+        let ordinary = ResidualResultPolicy::Ordinary;
+        let recursive = ResidualResultPolicy::Recursive;
+        let tag = test_residual_signature(
+            Value::Tag {
+                name: "Ready".into(),
+                payload: None,
+            },
+            false,
+        );
+        assert!(residual_signature_requires_staging(
+            &tag, ordinary, false, false
+        ));
+        assert!(!residual_signature_requires_staging(
+            &tag, recursive, false, false
+        ));
+        assert!(!residual_signature_requires_staging(
+            &tag, ordinary, true, false
+        ));
+        assert!(!residual_signature_requires_staging(
+            &tag, ordinary, false, true
+        ));
+        let scalar = test_residual_signature(Value::Unit, false);
+        assert!(!residual_signature_requires_staging(
+            &scalar, ordinary, false, false
+        ));
+        let deferred = test_residual_signature(Value::Unit, true);
+        let higher_order = test_residual_signature(scalar, false);
+        for signature in [deferred, higher_order] {
+            for policy in [ordinary, recursive] {
+                assert!(residual_signature_requires_staging(
+                    &signature, policy, false, false
+                ));
+                assert!(residual_signature_requires_staging(
+                    &signature, policy, true, true
+                ));
+            }
+        }
+        // An unsettled value is not itself evidence for skipping instance checking.
+        assert!(!residual_signature_requires_staging(
+            &Value::TypeVariable(42),
+            ordinary,
+            false,
+            false
+        ));
+    }
 
     #[test]
     fn constant_empty_children_keep_their_parent_array_representation() {

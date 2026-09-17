@@ -90,6 +90,20 @@ continuations do not consume source-expression fuel. Omitting one must preserve
 source evaluation order, effect and module identities, diagnostic origin and
 span, and the existing trampoline boundaries for real continuations.
 
+Syntactic closure free names may be memoized on the immutable loaded AST, keyed
+by parameter, body, and recursive self binder. Replacing or removing that AST
+replaces or releases its cache. This is not a cache of captured values, types,
+effects, or environments: those remain current-instance inputs on every use.
+
+An already selected signature that definitively requires ordinary staging may
+reject optional residualization before capture planning or environment identity
+construction. A signature requiring instance-specific checking must still be
+checked first; its provisional shape cannot authorize that shortcut. Checked
+capture types are demanded only by that instance check. Recursive,
+host-callback, and development-boundary policies are unchanged. Cheap
+source/representation discriminants may precede exact environment comparisons,
+but cannot replace them.
+
 ## 3. Checked bridges
 
 A compile-time value acquires semantic authority only through the bridge owned

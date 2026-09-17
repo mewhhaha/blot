@@ -4800,8 +4800,10 @@ impl Checker {
                     *parameter,
                     *body,
                     self_name.as_deref(),
-                )? {
-                    if environment.binding_phase(&name) != Some(Phase::Runtime) {
+                )?
+                .iter()
+                {
+                    if environment.binding_phase(name) != Some(Phase::Runtime) {
                         continue;
                     }
                     let Some(capture_span) = closure_free_name_span(
@@ -4809,7 +4811,7 @@ impl Checker {
                         *parameter,
                         *body,
                         self_name.as_deref(),
-                        &name,
+                        name,
                     ) else {
                         // `closure_free_names` is deliberately conservative
                         // around pinned patterns. A name with no unbound source
@@ -8198,7 +8200,8 @@ impl Checker {
             let closure_ast = closure_loaded.module;
             let free_names =
                 closure_free_names(&self.context, closure_module, parameter, body, self_name)?
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .collect::<BTreeSet<_>>();
             self.capture_candidates
                 .set(self.capture_candidates.get() + free_names.len() as u64);
@@ -15515,8 +15518,8 @@ fn certify_recursive_components(
         .collect::<HashMap<_, _>>();
     let mut graph = vec![Vec::new(); closures.len()];
     for (position, (_, parameter, body)) in closures.iter().enumerate() {
-        for free in closure_free_names(&checker.context, path, *parameter, *body, None)? {
-            if let Some(target) = positions.get(&free) {
+        for free in closure_free_names(&checker.context, path, *parameter, *body, None)?.iter() {
+            if let Some(target) = positions.get(free) {
                 graph[position].push(*target);
             }
         }
