@@ -1,3 +1,4 @@
+use crate::value::TypeValue;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
@@ -1878,8 +1879,8 @@ fn tool_grants() -> Value {
         "write".to_owned(),
         Value::Arrow {
             deferred: false,
-            domain: Box::new(Value::Unbounded),
-            codomain: Box::new(Value::Unit),
+            domain: TypeValue::new(Value::Unbounded),
+            codomain: TypeValue::new(Value::Unit),
             effects: Vec::new(),
             effect_tail: None,
         },

@@ -77,31 +77,43 @@ function parseOptions(args: readonly string[]): ProbeOptions {
     } else if (arg.startsWith("--op=")) {
       const value = arg.slice("--op=".length);
       if (!(PROBE_OPS as readonly string[]).includes(value)) {
-        throw new Error(`t2_probe.ts supports only --op=${PROBE_OPS.join("|")} (got ${value})`);
+        throw new Error(
+          `t2_probe.ts supports only --op=${
+            PROBE_OPS.join("|")
+          } (got ${value})`,
+        );
       }
       op = value as ProbeOp;
     } else if (arg.startsWith("--telemetry=")) {
       const value = arg.slice("--telemetry=".length);
       if (value !== "off" && value !== "phase") {
-        throw new Error(`t2_probe.ts supports only --telemetry=off|phase (got ${value})`);
+        throw new Error(
+          `t2_probe.ts supports only --telemetry=off|phase (got ${value})`,
+        );
       }
       telemetry = value;
     } else if (arg === "--help" || arg === "-h") {
-      throw new Error("usage: t2_probe.ts --fixture=PATH --op=OP [--telemetry=off|phase]");
+      throw new Error(
+        "usage: t2_probe.ts --fixture=PATH --op=OP [--telemetry=off|phase]",
+      );
     } else {
       throw new Error(`t2_probe.ts takes no positional arguments (got ${arg})`);
     }
   }
-  if (fixture === null || fixture.length === 0) throw new Error("t2_probe.ts requires --fixture=PATH");
+  if (fixture === null || fixture.length === 0) {
+    throw new Error("t2_probe.ts requires --fixture=PATH");
+  }
   if (op === null) throw new Error("t2_probe.ts requires --op=OP");
   return { fixture: resolve(fixture), op, telemetry };
 }
 
 function rssBytes(): number | null {
   try {
-    const deno = (globalThis as { Deno?: { memoryUsage(): { rss: number } } }).Deno;
+    const deno =
+      (globalThis as { Deno?: { memoryUsage(): { rss: number } } }).Deno;
     if (deno !== undefined) return deno.memoryUsage().rss;
-    const proc = (globalThis as { process?: { memoryUsage(): { rss: number } } }).process;
+    const proc =
+      (globalThis as { process?: { memoryUsage(): { rss: number } } }).process;
     if (proc !== undefined) return proc.memoryUsage().rss;
   } catch {
     // ignore
@@ -195,7 +207,12 @@ async function main(): Promise<void> {
       case "check": {
         const before = performance.now();
         const checked = await compiler.checkSource(options.fixture, source);
-        calls.push({ name: "checkSource", ms: performance.now() - before, type: checked.type, effects: checked.effects });
+        calls.push({
+          name: "checkSource",
+          ms: performance.now() - before,
+          type: checked.type,
+          effects: checked.effects,
+        });
         break;
       }
       case "analyze": {
@@ -218,8 +235,18 @@ async function main(): Promise<void> {
         break;
       }
       case "analyze_twice": {
-        await timedAnalyze(compiler, "analyzeSource#1", options.fixture, source);
-        await timedAnalyze(compiler, "analyzeSource#2", options.fixture, source);
+        await timedAnalyze(
+          compiler,
+          "analyzeSource#1",
+          options.fixture,
+          source,
+        );
+        await timedAnalyze(
+          compiler,
+          "analyzeSource#2",
+          options.fixture,
+          source,
+        );
         break;
       }
       case "check_then_analyze": {
@@ -230,15 +257,37 @@ async function main(): Promise<void> {
         break;
       }
       case "second_compiler": {
-        await timedAnalyze(compiler, "analyzeSource#1", options.fixture, source);
-        if (options.telemetry === "phase") hostTelemetry = compiler.takePhaseTelemetry();
+        await timedAnalyze(
+          compiler,
+          "analyzeSource#1",
+          options.fixture,
+          source,
+        );
+        if (options.telemetry === "phase") {
+          hostTelemetry = compiler.takePhaseTelemetry();
+        }
         compiler = await createCompiler();
-        await timedAnalyze(compiler, "analyzeSource#freshCompiler", options.fixture, source);
+        await timedAnalyze(
+          compiler,
+          "analyzeSource#freshCompiler",
+          options.fixture,
+          source,
+        );
         break;
       }
       case "prime_trivial": {
-        await timedAnalyze(compiler, "analyzeSource#trivial", options.fixture + ".trivial.blot", TRIVIAL_SOURCE);
-        await timedAnalyze(compiler, "analyzeSource#fixture", options.fixture, source);
+        await timedAnalyze(
+          compiler,
+          "analyzeSource#trivial",
+          options.fixture + ".trivial.blot",
+          TRIVIAL_SOURCE,
+        );
+        await timedAnalyze(
+          compiler,
+          "analyzeSource#fixture",
+          options.fixture,
+          source,
+        );
         break;
       }
     }
@@ -281,8 +330,12 @@ async function main(): Promise<void> {
 }
 
 async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 await main();

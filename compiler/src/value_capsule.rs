@@ -1,3 +1,4 @@
+use crate::value::TypeValue;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
@@ -2421,7 +2422,7 @@ fn decode_value(
             )?,
         },
         CapsuleValue::Range { low, high, domain } => Value::Range {
-            low: Box::new(decode_value(
+            low: TypeValue::new(decode_value(
                 low,
                 environments,
                 provenance,
@@ -2429,7 +2430,7 @@ fn decode_value(
                 module,
                 context,
             )?),
-            high: Box::new(decode_value(
+            high: TypeValue::new(decode_value(
                 high,
                 environments,
                 provenance,
@@ -2459,7 +2460,7 @@ fn decode_value(
             effect_tail,
         } => Value::Arrow {
             deferred: *deferred,
-            domain: Box::new(decode_value(
+            domain: TypeValue::new(decode_value(
                 domain,
                 environments,
                 provenance,
@@ -2467,7 +2468,7 @@ fn decode_value(
                 module,
                 context,
             )?),
-            codomain: Box::new(decode_value(
+            codomain: TypeValue::new(decode_value(
                 codomain,
                 environments,
                 provenance,
@@ -2741,8 +2742,8 @@ mod tests {
             module.result,
             Value::Arrow {
                 deferred: false,
-                domain: Box::new(Value::Unit),
-                codomain: Box::new(Value::Unit),
+                domain: TypeValue::new(Value::Unit),
+                codomain: TypeValue::new(Value::Unit),
                 effects: Vec::new(),
                 effect_tail: None,
             },

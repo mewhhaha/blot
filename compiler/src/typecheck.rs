@@ -1,3 +1,4 @@
+use crate::value::TypeValue;
 use std::cell::{Cell, RefCell};
 
 #[path = "member_constraints.rs"]
@@ -15834,8 +15835,8 @@ fn reify_type_with_holes(context: &Context, type_: &Type, next_hole: &mut u32) -
                 return Some(low);
             }
             Some(Value::Range {
-                low: Box::new(low),
-                high: Box::new(high),
+                low: TypeValue::new(low),
+                high: TypeValue::new(high),
                 domain: Some(match domain {
                     Domain::Int => ValueDomain::Int,
                     Domain::Text => ValueDomain::Text,
@@ -15909,8 +15910,8 @@ fn reify_type_with_holes(context: &Context, type_: &Type, next_hole: &mut u32) -
             };
             Some(Value::Arrow {
                 deferred: *deferred,
-                domain: Box::new(reify_type_with_holes(context, parameter, next_hole)?),
-                codomain: Box::new(reify_type_with_holes(context, result, next_hole)?),
+                domain: TypeValue::new(reify_type_with_holes(context, parameter, next_hole)?),
+                codomain: TypeValue::new(reify_type_with_holes(context, result, next_hole)?),
                 effects: labels
                     .iter()
                     .map(|label| context.effect_value(label))

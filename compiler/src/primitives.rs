@@ -1,3 +1,4 @@
+use crate::value::TypeValue;
 use num_bigint::BigInt;
 use num_traits::{ToPrimitive, Zero};
 
@@ -23,23 +24,23 @@ pub fn constant(name: &str) -> Option<Value> {
         "@type.unbounded" => Some(Value::Unbounded),
         "@type.unit" => Some(Value::Unit),
         "@type.int" => Some(Value::Range {
-            low: Box::new(Value::Int(-(BigInt::from(1_u64) << 63_usize))),
-            high: Box::new(Value::Int((BigInt::from(1_u64) << 63_usize) - 1)),
+            low: TypeValue::new(Value::Int(-(BigInt::from(1_u64) << 63_usize))),
+            high: TypeValue::new(Value::Int((BigInt::from(1_u64) << 63_usize) - 1)),
             domain: Some(Domain::Int),
         }),
         "@type.text" => Some(Value::Range {
-            low: Box::new(Value::Unbounded),
-            high: Box::new(Value::Unbounded),
+            low: TypeValue::new(Value::Unbounded),
+            high: TypeValue::new(Value::Unbounded),
             domain: Some(Domain::Text),
         }),
         "@type.float" => Some(Value::Range {
-            low: Box::new(Value::Unbounded),
-            high: Box::new(Value::Unbounded),
+            low: TypeValue::new(Value::Unbounded),
+            high: TypeValue::new(Value::Unbounded),
             domain: Some(Domain::Float),
         }),
         "@type.float32" => Some(Value::Range {
-            low: Box::new(Value::Unbounded),
-            high: Box::new(Value::Unbounded),
+            low: TypeValue::new(Value::Unbounded),
+            high: TypeValue::new(Value::Unbounded),
             domain: Some(Domain::Float32),
         }),
         "@type.f32x4" => Some(Value::OpaqueType(F32X4.to_owned())),
@@ -284,8 +285,8 @@ pub fn run_primitive(
     match name {
         "@continuation.cancel" => cancel(&arguments[0], span),
         "@type.range" => Ok(Value::Range {
-            low: Box::new(arguments[0].clone()),
-            high: Box::new(arguments[1].clone()),
+            low: TypeValue::new(arguments[0].clone()),
+            high: TypeValue::new(arguments[1].clone()),
             domain: None,
         }),
         "@type.union" => {
@@ -301,15 +302,15 @@ pub fn run_primitive(
         "@type.diff" => difference(&arguments[0], &arguments[1], span),
         "@type.arrow" => Ok(Value::Arrow {
             deferred: false,
-            domain: Box::new(arguments[0].clone()),
-            codomain: Box::new(arguments[1].clone()),
+            domain: TypeValue::new(arguments[0].clone()),
+            codomain: TypeValue::new(arguments[1].clone()),
             effects: Vec::new(),
             effect_tail: None,
         }),
         "@type.deferred_arrow" => Ok(Value::Arrow {
             deferred: true,
-            domain: Box::new(arguments[0].clone()),
-            codomain: Box::new(arguments[1].clone()),
+            domain: TypeValue::new(arguments[0].clone()),
+            codomain: TypeValue::new(arguments[1].clone()),
             effects: Vec::new(),
             effect_tail: None,
         }),
@@ -1745,7 +1746,7 @@ fn difference(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnost
         {
             pieces.push(Value::Range {
                 low: low.clone(),
-                high: Box::new(below),
+                high: TypeValue::new(below),
                 domain: *domain,
             });
         }
@@ -1753,7 +1754,7 @@ fn difference(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnost
             || compare(&above, high).is_some_and(|order| order != std::cmp::Ordering::Greater)
         {
             pieces.push(Value::Range {
-                low: Box::new(above),
+                low: TypeValue::new(above),
                 high: high.clone(),
                 domain: *domain,
             });
@@ -2019,7 +2020,7 @@ fn attach_effects(arrow: &Value, effects: &[Value], tail: Option<u32>) -> Option
         return Some(Value::Arrow {
             deferred: *deferred,
             domain: domain.clone(),
-            codomain: Box::new(codomain),
+            codomain: TypeValue::new(codomain),
             effects: existing.clone(),
             effect_tail: *existing_tail,
         });

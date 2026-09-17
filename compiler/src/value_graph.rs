@@ -1,5 +1,7 @@
 //! Call-local graph analyses. Sharing changes work, never a semantic decision.
 use super::*;
+#[cfg(test)]
+use crate::value::TypeValue;
 use std::collections::HashSet;
 
 pub(super) fn reusable_across_module_instances(value: &Value) -> bool {
@@ -274,8 +276,8 @@ mod tests {
                 variable: 2,
                 body: Box::new(Value::Arrow {
                     deferred: false,
-                    domain: Box::new(Value::TypeVariable(2)),
-                    codomain: Box::new(Value::TypeVariable(5)),
+                    domain: TypeValue::new(Value::TypeVariable(2)),
+                    codomain: TypeValue::new(Value::TypeVariable(5)),
                     effects: Vec::new(),
                     effect_tail: Some(9),
                 }),
@@ -306,8 +308,8 @@ mod tests {
             variable: 7,
             body: Box::new(Value::Arrow {
                 deferred: false,
-                domain: Box::new(Value::TypeVariable(7)),
-                codomain: Box::new(Value::Unit),
+                domain: TypeValue::new(Value::TypeVariable(7)),
+                codomain: TypeValue::new(Value::Unit),
                 effects: Vec::new(),
                 effect_tail: Some(tail),
             }),

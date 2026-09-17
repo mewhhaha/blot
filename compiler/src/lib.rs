@@ -28,6 +28,7 @@ mod safety;
 mod session;
 mod source;
 mod source_identity;
+mod type_instantiation;
 mod typecheck;
 mod value;
 mod value_capsule;
@@ -1184,3 +1185,6 @@ mod relational_inference_tests;
 mod abstraction_tests;
 
 mod refinement_evidence;
+
+#[cfg(test)]
+mod staged_type_tests;

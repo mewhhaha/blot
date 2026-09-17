@@ -1,3 +1,8 @@
+pub(crate) use crate::type_instantiation::{
+    record_signature_substitutions, resolve_call_signature, signature_body, substitute_signature,
+};
+#[cfg(test)]
+use crate::value::TypeValue;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -2698,9 +2703,24 @@ pub fn evaluate_expression(
     if let Some(variable) = signature_hole {
         return Computation::value(Value::TypeVariable(variable));
     }
-    let checked_representation = runtime
-        .expression_type(&context, module_path.as_str(), expression_id)
-        .map(|type_| substitute_signature(&type_, &environment));
+    // Most concrete evaluation does not consume an expression's checked type.
+    // Demand it only for literal/aggregate materialization or residual evidence.
+    // Application result contexts and closure signatures are demanded separately
+    // below; those are semantic inputs, not optional tracing metadata.
+    let checked_representation = if runtime.residual.is_some()
+        || matches!(
+            expression,
+            Expression::Int { .. }
+                | Expression::Float { .. }
+                | Expression::Array { .. }
+                | Expression::Case { .. }
+        ) {
+        runtime
+            .expression_type(&context, module_path.as_str(), expression_id)
+            .map(|type_| substitute_signature(&type_, &environment))
+    } else {
+        None
+    };
     let is_definition = !matches!(expression, Expression::Var { .. });
     let representation_trace = runtime.residual.clone();
     let origin = module_path.clone();
@@ -3141,22 +3161,23 @@ pub fn evaluate_expression(
             span,
         )),
     };
-    computation
-        .and_then(move |value| {
-            if let (Some(trace), Some(type_)) = (
-                representation_trace.as_ref(),
-                checked_representation.as_ref(),
-            ) {
+    // Do not suspend every concrete expression merely to execute an empty
+    // representation callback. Real continuations still use the trampoline,
+    // and diagnostic origins must remain attached on both paths.
+    match (representation_trace, checked_representation) {
+        (Some(trace), Some(type_)) => computation
+            .and_then(move |value| {
                 trace
                     .borrow_mut()
-                    .record_checked_aggregate_representation(&value, type_);
+                    .record_checked_aggregate_representation(&value, &type_);
                 if is_definition {
-                    trace.borrow_mut().record_checked_value(&value, type_);
+                    trace.borrow_mut().record_checked_value(&value, &type_);
                 }
-            }
-            Computation::value(value)
-        })
-        .at(origin)
+                Computation::value(value)
+            })
+            .at(origin),
+        _ => computation.at(origin),
+    }
 }
 
 fn evaluate_many(
@@ -4997,16 +5018,16 @@ fn apply_with_expected(
             let mut environment = environment;
             let mut residual_compilation = None;
             let mut instance_facts = None;
-            let recursive_signature = self_name
-                .as_deref()
-                .and_then(|name| lookup_signature(&environment, name));
-            let inferred_signature =
-                runtime.closure_signature(&context, closure_module.as_str(), body);
-            let signature = signature
-                .or_else(|| recursive_signature.map(Rc::new))
-                .or_else(|| inferred_signature.map(Rc::new));
-            let mut signature =
-                signature.map(|signature| Rc::new(substitute_signature(&signature, &environment)));
+            let mut signature = resolve_call_signature(
+                signature,
+                &environment,
+                || {
+                    self_name
+                        .as_deref()
+                        .and_then(|name| lookup_signature(&environment, name))
+                },
+                || runtime.closure_signature(&context, closure_module.as_str(), body),
+            );
 
             let memoized_closure = (runtime.residual.is_none()
                 && memoizable_comptime_signature(signature.as_deref()))
@@ -5113,9 +5134,13 @@ fn apply_with_expected(
                     .filter(|type_| !crate::value::contains_type_variables(type_))
                     .or(actual_type.as_ref())
                     .unwrap_or(&argument);
-                record_signature_substitutions(&scope, domain, signature_argument);
+                if domain.has_variables() {
+                    record_signature_substitutions(&scope, domain, signature_argument);
+                }
                 if let Some(expected_result) = &expected_result {
-                    record_signature_substitutions(&scope, codomain, expected_result);
+                    if codomain.has_variables() {
+                        record_signature_substitutions(&scope, codomain, expected_result);
+                    }
                     if !contains_type_variables(expected_result)
                         && let Some(checked_body) =
                             runtime.expression_type(&context, &closure_module, body)
@@ -6567,338 +6592,6 @@ fn specialize_deferred_scratch(
     }
 }
 
-fn signature_body(mut signature: &Value) -> &Value {
-    while let Value::Forall { body, .. } = signature {
-        signature = body;
-    }
-    signature
-}
-
-pub(crate) fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
-    fn substitution(environment: &Environment, variable: u32) -> Option<Value> {
-        let mut scope = Some(environment.clone());
-        while let Some(current) = scope {
-            if let Some(value) = current.type_substitutions.borrow().get(&variable) {
-                return Some(value.clone());
-            }
-            scope = current.parent.borrow().clone();
-        }
-        None
-    }
-
-    match signature {
-        Value::Effect { id, .. } => {
-            let mut scope = Some(environment.clone());
-            while let Some(current) = scope {
-                if let Some(value) = current.effect_substitutions.borrow().get(id) {
-                    return value.clone();
-                }
-                scope = current.parent.borrow().clone();
-            }
-            signature.clone()
-        }
-        Value::TypeVariable(variable) => {
-            substitution(environment, *variable).unwrap_or_else(|| signature.clone())
-        }
-        Value::Shape(fields) => Value::Shape(
-            fields
-                .iter()
-                .map(|(name, value)| (name.clone(), substitute_signature(value, environment)))
-                .collect(),
-        ),
-        Value::Array(elements) => Value::Array(
-            elements
-                .iter()
-                .map(|value| substitute_signature(value, environment))
-                .collect(),
-        ),
-        Value::ScratchType(element) => {
-            Value::ScratchType(Box::new(substitute_signature(element, environment)))
-        }
-        Value::ResourceType { family, payload } => Value::ResourceType {
-            family: family.clone(),
-            payload: Box::new(substitute_signature(payload, environment)),
-        },
-        Value::EmptyArray { element } => Value::EmptyArray {
-            element: Box::new(substitute_signature(element, environment)),
-        },
-        Value::Union(members) => {
-            members
-                .iter()
-                .fold(Value::Union(Default::default()), |union, member| {
-                    crate::primitives::union(union, substitute_signature(member, environment))
-                })
-        }
-        Value::Tag { name, payload } => Value::Tag {
-            name: name.clone(),
-            payload: payload
-                .as_deref()
-                .map(|value| Box::new(substitute_signature(value, environment))),
-        },
-        Value::Range { low, high, domain } => Value::Range {
-            low: Box::new(substitute_signature(low, environment)),
-            high: Box::new(substitute_signature(high, environment)),
-            domain: *domain,
-        },
-        Value::Arrow {
-            deferred,
-            domain,
-            codomain,
-            effects,
-            effect_tail,
-        } => Value::Arrow {
-            deferred: *deferred,
-            domain: Box::new(substitute_signature(domain, environment)),
-            codomain: Box::new(substitute_signature(codomain, environment)),
-            effects: effects
-                .iter()
-                .map(|effect| substitute_signature(effect, environment))
-                .collect(),
-            effect_tail: *effect_tail,
-        },
-        Value::Forall { variable, body } => Value::Forall {
-            variable: *variable,
-            body: Box::new(substitute_signature(body, environment)),
-        },
-        Value::Extended { inner, members } => Value::Extended {
-            inner: Box::new(substitute_signature(inner, environment)),
-            members: members
-                .iter()
-                .map(|(name, value)| (name.clone(), substitute_signature(value, environment)))
-                .collect(),
-        },
-        Value::Sealed { name, inner } => Value::Sealed {
-            name: name.clone(),
-            inner: Box::new(substitute_signature(inner, environment)),
-        },
-        _ => signature.clone(),
-    }
-}
-
-pub(crate) fn record_signature_substitutions(
-    environment: &Environment,
-    expected: &Value,
-    actual: &Value,
-) {
-    fn value_signature(value: &Value) -> Option<Value> {
-        match value {
-            Value::Closure {
-                signature: Some(signature),
-                ..
-            } => Some((**signature).clone()),
-            Value::Int(_) => crate::primitives::constant("@type.int"),
-            Value::Float(_) => crate::primitives::constant("@type.float"),
-            Value::Float32(_) => crate::primitives::constant("@type.float32"),
-            Value::Text(_) => Some(Value::Range {
-                low: Box::new(Value::Unbounded),
-                high: Box::new(Value::Unbounded),
-                domain: Some(ValueDomain::Text),
-            }),
-            Value::Unit => Some(Value::Unit),
-            Value::Range { .. }
-            | Value::Arrow { .. }
-            | Value::RegionType(_)
-            | Value::ScratchType(_)
-            | Value::ResourceType { .. }
-            | Value::TypeVariable(_) => Some(value.clone()),
-            Value::Shape(fields) => Some(Value::Shape(
-                fields
-                    .iter()
-                    .map(|(name, value)| Some((name.clone(), value_signature(value)?)))
-                    .collect::<Option<OrderedFields>>()?,
-            )),
-            Value::Array(elements) => {
-                if elements.is_empty() {
-                    return None;
-                }
-                let mut element_type = Value::Union(Default::default());
-                for element in elements {
-                    element_type =
-                        crate::primitives::union(element_type, value_signature(element)?);
-                }
-                Some(Value::Array(vec![element_type].into()))
-            }
-            Value::EmptyArray { element } => Some(Value::Array(vec![(**element).clone()].into())),
-            Value::Union(members) => Some(Value::Union(
-                members
-                    .iter()
-                    .map(value_signature)
-                    .collect::<Option<Vec<_>>>()?
-                    .into(),
-            )),
-            Value::Tag { name, payload } => Some(Value::Tag {
-                name: name.clone(),
-                payload: match payload.as_deref() {
-                    Some(payload) => Some(Box::new(value_signature(payload)?)),
-                    None => None,
-                },
-            }),
-            Value::Extended { inner, .. } | Value::Sealed { inner, .. } => value_signature(inner),
-            _ => None,
-        }
-    }
-
-    fn record_types(environment: &Environment, expected: &Value, actual: &Value) {
-        let expected = signature_body(expected);
-        let actual = signature_body(actual);
-        match (expected, actual) {
-            (Value::TypeVariable(variable), actual) => {
-                environment
-                    .type_substitutions
-                    .borrow_mut()
-                    .entry(*variable)
-                    .or_insert_with(|| actual.clone());
-            }
-            (Value::Shape(expected), Value::Shape(actual)) => {
-                for (name, expected) in expected {
-                    if let Some(actual) = actual.get(name) {
-                        record_types(environment, expected, actual);
-                    }
-                }
-            }
-            (Value::Union(expected), actual) => {
-                for expected in expected {
-                    record_types(environment, expected, actual);
-                }
-            }
-            (expected @ Value::Tag { .. }, Value::Union(actual)) => {
-                for actual in actual {
-                    record_types(environment, expected, actual);
-                }
-            }
-            (
-                Value::Tag {
-                    name: expected_name,
-                    payload: Some(expected),
-                },
-                Value::Tag {
-                    name: actual_name,
-                    payload: Some(actual),
-                },
-            ) if expected_name == actual_name => {
-                record_types(environment, expected, actual);
-            }
-            (Value::Array(expected), Value::Array(actual)) => {
-                if let Some(expected) = expected.first() {
-                    for actual in actual {
-                        record_types(environment, expected, actual);
-                    }
-                }
-            }
-            (Value::Array(expected), Value::EmptyArray { element }) => {
-                if let Some(expected) = expected.first() {
-                    record_types(environment, expected, element);
-                }
-            }
-            (
-                Value::ResourceType {
-                    family: expected_family,
-                    payload: expected,
-                },
-                Value::ResourceType {
-                    family: actual_family,
-                    payload: actual,
-                },
-            ) if expected_family == actual_family => {
-                record_types(environment, expected, actual);
-            }
-            (
-                Value::Arrow {
-                    domain: expected_domain,
-                    codomain: expected_codomain,
-                    ..
-                },
-                Value::Arrow {
-                    domain: actual_domain,
-                    codomain: actual_codomain,
-                    ..
-                },
-            ) => {
-                record_types(environment, expected_domain, actual_domain);
-                record_types(environment, expected_codomain, actual_codomain);
-            }
-            _ => {}
-        }
-    }
-
-    match (signature_body(expected), signature_body(actual)) {
-        (Value::Shape(expected), Value::Shape(actual)) => {
-            for (name, expected) in expected {
-                if let Some(actual) = actual.get(name) {
-                    record_signature_substitutions(environment, expected, actual);
-                }
-            }
-        }
-        (Value::Union(expected), actual) => {
-            for expected in expected {
-                record_signature_substitutions(environment, expected, actual);
-            }
-        }
-        (expected @ Value::Tag { .. }, Value::Union(actual)) => {
-            for actual in actual {
-                record_signature_substitutions(environment, expected, actual);
-            }
-        }
-        (
-            Value::Tag {
-                name: expected_name,
-                payload: Some(expected),
-            },
-            Value::Tag {
-                name: actual_name,
-                payload: Some(actual),
-            },
-        ) if expected_name == actual_name => {
-            record_signature_substitutions(environment, expected, actual);
-        }
-        (Value::Array(expected), Value::Array(actual)) => {
-            if let Some(expected) = expected.first()
-                && let Some(Value::Array(types)) = value_signature(&Value::Array(actual.clone()))
-            {
-                record_types(environment, expected, &types[0]);
-            }
-        }
-        (Value::Array(expected), Value::EmptyArray { element }) => {
-            if let Some(expected) = expected.first() {
-                record_signature_substitutions(environment, expected, element);
-            }
-        }
-        (
-            Value::ResourceType {
-                family: expected_family,
-                payload: expected,
-            },
-            Value::ResourceType {
-                family: actual_family,
-                payload: actual,
-            },
-        ) if expected_family == actual_family => {
-            record_types(environment, expected, actual);
-        }
-        (expected @ Value::Arrow { .. }, Value::Closure { .. })
-        | (expected @ Value::TypeVariable(_), Value::Closure { .. }) => {
-            if let Some(actual) = value_signature(actual) {
-                record_types(environment, expected, &actual);
-            }
-        }
-        (expected @ Value::Arrow { .. }, actual @ Value::Arrow { .. })
-            if !crate::value::contains_free_type_variables(actual) =>
-        {
-            record_types(environment, expected, actual);
-        }
-        (Value::TypeVariable(variable), actual) => {
-            if let Some(actual) = value_signature(actual) {
-                environment
-                    .type_substitutions
-                    .borrow_mut()
-                    .entry(*variable)
-                    .or_insert(actual);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn admits_omission(value: &Value) -> bool {
     let mut pending = vec![value];
     while let Some(value) = pending.pop() {
@@ -7522,8 +7215,8 @@ mod tests {
                     variable,
                     body: Box::new(Value::Arrow {
                         deferred: false,
-                        domain: Box::new(Value::TypeVariable(variable)),
-                        codomain: Box::new(Value::TypeVariable(variable)),
+                        domain: TypeValue::new(Value::TypeVariable(variable)),
+                        codomain: TypeValue::new(Value::TypeVariable(variable)),
                         effects: Vec::new(),
                         effect_tail: None,
                     }),
@@ -7534,8 +7227,8 @@ mod tests {
             "map".to_owned(),
             Value::Arrow {
                 deferred: false,
-                domain: Box::new(Value::Unit),
-                codomain: Box::new(Value::Unit),
+                domain: TypeValue::new(Value::Unit),
+                codomain: TypeValue::new(Value::Unit),
                 effects: Vec::new(),
                 effect_tail: None,
             },
@@ -7886,5 +7579,210 @@ mod operator_projection_regression_tests {
                 if name == "@type.resolve_member"
                     && matches!(applied.as_slice(), [Value::Text(member)] if member.as_ref() == "add")
         ));
+    }
+}
+
+#[cfg(test)]
+mod representation_demand_tests {
+    use super::*;
+
+    const PATH: &str = "representation-demand.blot";
+    const SPAN: Span = Span { start: 4, end: 12 };
+
+    fn context_for(expression: Expression) -> (Rc<Context>, ExpressionId) {
+        let mut arena = crate::ast::AstArena::default();
+        let result = arena.expression(expression);
+        let module = Rc::new(Module {
+            parameter: None,
+            declarations: Vec::new(),
+            result,
+            result_effects: crate::ast::ResultEffects::Pure,
+            span: SPAN,
+            arena,
+        });
+        let context = Rc::new(Context::default());
+        context.modules.borrow_mut().insert(
+            PATH.to_owned(),
+            LoadedModule::new(PATH, module, BTreeMap::new(), BTreeMap::new()),
+        );
+        (context, result)
+    }
+
+    fn count_resolution(context: &Context, type_: Value) -> Rc<Cell<usize>> {
+        let calls = Rc::new(Cell::new(0));
+        let observed = calls.clone();
+        context.expression_type_resolvers.borrow_mut().insert(
+            PATH.to_owned(),
+            Rc::new(move |_| {
+                observed.set(observed.get() + 1);
+                Some(type_.clone())
+            }),
+        );
+        calls
+    }
+
+    #[test]
+    fn concrete_leaf_does_not_resolve_a_type_or_allocate_a_step() {
+        for expression in [
+            Expression::Text {
+                value: "hello".to_owned(),
+                span: SPAN,
+            },
+            Expression::Unit { span: SPAN },
+            Expression::Tag {
+                name: "Ready".to_owned(),
+                span: SPAN,
+            },
+        ] {
+            let (context, expression) = context_for(expression);
+            let calls = count_resolution(&context, Value::Unit);
+            let runtime = Runtime::new(Phase::Comptime, PATH.to_owned());
+            let fuel = runtime.fuel.clone();
+            let before = fuel.get();
+            let computation = evaluate_expression(
+                context,
+                Rc::new(PATH.to_owned()),
+                expression,
+                child_env(None),
+                runtime,
+            );
+            assert_eq!(
+                calls.get(),
+                0,
+                "concrete leaves do not consume type evidence"
+            );
+            assert!(
+                matches!(computation, Computation::Done(Ok(_))),
+                "a leaf must not allocate a no-op trampoline step"
+            );
+            assert_eq!(
+                fuel.get(),
+                before - 1,
+                "fuel still counts source expressions"
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_literals_still_demand_their_checked_representation() {
+        for (expression, type_name, expected) in [
+            (
+                Expression::Int {
+                    value: 7.into(),
+                    span: SPAN,
+                },
+                "@type.float",
+                "F64",
+            ),
+            (
+                Expression::Int {
+                    value: 7.into(),
+                    span: SPAN,
+                },
+                "@type.float32",
+                "F32",
+            ),
+            (
+                Expression::Float {
+                    value: 0.1,
+                    span: SPAN,
+                },
+                "@type.float32",
+                "F32",
+            ),
+        ] {
+            let (context, expression) = context_for(expression);
+            let calls = count_resolution(&context, constant(type_name).unwrap());
+            let value = run(evaluate_expression(
+                context,
+                Rc::new(PATH.to_owned()),
+                expression,
+                child_env(None),
+                Runtime::new(Phase::Comptime, PATH.to_owned()),
+            ))
+            .unwrap();
+            assert_eq!(calls.get(), 1);
+            match expected {
+                "F64" => assert!(matches!(value, Value::Float(7.0))),
+                "F32" => assert!(matches!(value, Value::Float32(_))),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn residual_evaluation_keeps_its_representation_continuation() {
+        let (context, expression) = context_for(Expression::Text {
+            value: "hello".to_owned(),
+            span: SPAN,
+        });
+        let calls = count_resolution(&context, constant("@type.text").unwrap());
+        let trace = Rc::new(RefCell::new(crate::hir::ResidualTrace::new(PATH)));
+        let computation = evaluate_expression(
+            context,
+            Rc::new(PATH.to_owned()),
+            expression,
+            child_env(None),
+            Runtime::residual(Phase::Comptime, PATH.to_owned(), trace),
+        );
+        assert_eq!(calls.get(), 1, "residual evidence is not optional");
+        assert!(matches!(computation, Computation::Step(_)));
+        assert!(matches!(run(computation), Ok(Value::Text(text)) if text.as_ref() == "hello"));
+    }
+
+    #[test]
+    fn absent_residual_evidence_does_not_allocate_a_callback() {
+        let (context, expression) = context_for(Expression::Unit { span: SPAN });
+        let trace = Rc::new(RefCell::new(crate::hir::ResidualTrace::new(PATH)));
+        let computation = evaluate_expression(
+            context,
+            Rc::new(PATH.to_owned()),
+            expression,
+            child_env(None),
+            Runtime::residual(Phase::Comptime, PATH.to_owned(), trace),
+        );
+        assert!(matches!(computation, Computation::Done(Ok(Value::Unit))));
+    }
+
+    #[test]
+    fn immediate_errors_preserve_their_source_origin_and_span() {
+        let (context, expression) = context_for(Expression::Var {
+            name: "missing".to_owned(),
+            span: SPAN,
+        });
+        let error = run(evaluate_expression(
+            context,
+            Rc::new(PATH.to_owned()),
+            expression,
+            child_env(None),
+            Runtime::new(Phase::Comptime, PATH.to_owned()),
+        ))
+        .unwrap_err();
+        assert_eq!(error.code, "BLOT_UNBOUND");
+        assert_eq!(error.origin.as_deref(), Some(PATH));
+        assert_eq!(error.span, SPAN);
+    }
+
+    #[test]
+    fn fuel_limit_precedes_representation_demand() {
+        let (context, expression) = context_for(Expression::Int {
+            value: 1.into(),
+            span: SPAN,
+        });
+        let calls = count_resolution(&context, constant("@type.int").unwrap());
+        let runtime = Runtime::new(Phase::Comptime, PATH.to_owned());
+        runtime.fuel.set(0);
+        let error = run(evaluate_expression(
+            context,
+            Rc::new(PATH.to_owned()),
+            expression,
+            child_env(None),
+            runtime,
+        ))
+        .unwrap_err();
+        assert_eq!(calls.get(), 0);
+        assert_eq!(error.code, "BLOT_EVALUATION_LIMIT");
+        assert_eq!(error.origin.as_deref(), Some(PATH));
+        assert_eq!(error.span, SPAN);
     }
 }

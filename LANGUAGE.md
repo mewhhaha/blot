@@ -594,8 +594,7 @@ let value = "now text"
 
 ### 4.2 Declaration tags
 
-One or more compile-time descriptors may transform a `let` or `const`
-statement:
+One or more compile-time descriptors may transform a `let` or `const` statement:
 
 ```blot
 @[derive(add_accessors)]
@@ -618,10 +617,10 @@ A descriptor is a compile-time shape with these members:
 `.name` must be non-empty text, `.metadata` may be any compile-time value, and
 `.transform` must be callable. Other fields are permitted. The prelude's
 `tag (name, metadata, transform)` adapts a value function
-`fn value => replacement` by projecting the statement's `.value` before
-calling it. `tag_statement (name, metadata, transform)` passes the whole
-statement record instead. `derive transform` constructs a value tag named
-`"derive"`, and `test` is one named `"test"` whose function is `identity`.
+`fn value => replacement` by projecting the statement's `.value` before calling
+it. `tag_statement (name, metadata, transform)` passes the whole statement
+record instead. `derive transform` constructs a value tag named `"derive"`, and
+`test` is one named `"test"` whose function is `identity`.
 
 Every transform receives the statement record:
 
@@ -634,9 +633,9 @@ Every transform receives the statement record:
 ```
 
 `.kind` is `#Let` or `#Const`, `.name` is the bound name as `Option Text`
-(`#None` when the pattern binds no single name), and `.value` is the
-declaration value. A descriptor built without the prelude receives this record
-too; where it previously took the bare value, it now projects `.value` itself.
+(`#None` when the pattern binds no single name), and `.value` is the declaration
+value. A descriptor built without the prelude receives this record too; where it
+previously took the bare value, it now projects `.value` itself.
 
 Descriptors are evaluated in source order before the declaration value and in
 the scope preceding the declaration; they cannot refer to the name being bound.
@@ -649,10 +648,10 @@ let value = source
 ```
 
 evaluates `inner.transform` on the statement carrying `source`, then
-`outer.transform` on the statement carrying that result. The replacement is
-the value matched by the binding pattern and may have a different type. An
-adjacent signature header constrains that final value. A `let` transform runs
-in the binding's runtime phase and contributes its ordinary effects; a `const`
+`outer.transform` on the statement carrying that result. The replacement is the
+value matched by the binding pattern and may have a different type. An adjacent
+signature header constrains that final value. A `let` transform runs in the
+binding's runtime phase and contributes its ordinary effects; a `const`
 transform runs at compile time. Tags are not admitted on signature headers
 because a signature binds no value.
 
@@ -3176,8 +3175,8 @@ payloads, and resource payloads. Passing those values to the host preserves the
 checked aggregate type, including every admitted constructor.
 
 Effects created by `@effect` are generative by semantic occurrence. Two written
-calls of an effect-producing function create distinct effect values even when their
-arguments print alike, while aliasing one result preserves its identity.
+calls of an effect-producing function create distinct effect values even when
+their arguments print alike, while aliasing one result preserves its identity.
 Re-evaluating the same written occurrence in the same source and dependency
 revision recovers that occurrence's identity. A changed operation signature,
 source revision, observable dependency revision, or module-import occurrence
@@ -3188,8 +3187,8 @@ nonempty compile-time text key and its complete normalized operation contract.
 The same key and contract yield the same effect across factory calls and module
 imports, regardless of the local binding names. Operation types compare exactly,
 including alpha-equivalence of quantified variables. A different key, operation
-type, ownership contract, or suspension contract denotes a different effect.
-Use qualified keys to distinguish independently defined interfaces.
+type, ownership contract, or suspension contract denotes a different effect. Use
+qualified keys to distinguish independently defined interfaces.
 
 Shared effects use ordinary source handlers and effect inference. Sharing an
 effect identity creates no global state or host authority: separate handlers can
@@ -3201,16 +3200,15 @@ handled by one provider.
 
 `@effect.attach_meta effect key payload` associates an arbitrary compile-time
 payload with one canonical effect identity under a namespaced text key, and
-`@effect.meta effect key` recovers it as `#Some payload` or `#None`. Either
-an effect or one of its operations identifies the effect. Unlike attached
-type namespaces, which inference drops when effects flow into rows, metadata
-rides the identity itself, so reflecting an inferred row and looking up each
-member recovers whatever the declaration stored. Attachment runs only during
+`@effect.meta effect key` recovers it as `#Some payload` or `#None`. Either an
+effect or one of its operations identifies the effect. Unlike attached type
+namespaces, which inference drops when effects flow into rows, metadata rides
+the identity itself, so reflecting an inferred row and looking up each member
+recovers whatever the declaration stored. Attachment runs only during
 compile-time evaluation. Each `(effect, key)` pair has one owning module:
-re-attaching from the same module overwrites, while a different module
-claiming it is `BLOT_EFFECT_META_CONFLICT`. Entries vanish with their
-owner's module revision. Use qualified keys to avoid collisions between
-independent frameworks.
+re-attaching from the same module overwrites, while a different module claiming
+it is `BLOT_EFFECT_META_CONFLICT`. Entries vanish with their owner's module
+revision. Use qualified keys to avoid collisions between independent frameworks.
 
 Projecting an operation from an effect and calling it performs that operation:
 
@@ -3459,20 +3457,20 @@ Everything not listed here belongs in source, normally the prelude.
 
 ### 13.1 Control, files, and effects
 
-| primitive      | meaning                                                                   |
-| -------------- | ------------------------------------------------------------------------- |
-| `@include`     | parse a dependency-tracked file at compile time                           |
-| `@json.parse`  | decode JSON under an explicit compile-time inference policy               |
-| `@effect`      | create a fresh source effect from operation types                         |
-| `@effect.host` | create a fresh host effect                                                |
-| `@effect.shared` | construct a source effect from a shared text key and operation contract |
+| primitive             | meaning                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------- |
+| `@include`            | parse a dependency-tracked file at compile time                                        |
+| `@json.parse`         | decode JSON under an explicit compile-time inference policy                            |
+| `@effect`             | create a fresh source effect from operation types                                      |
+| `@effect.host`        | create a fresh host effect                                                             |
+| `@effect.shared`      | construct a source effect from a shared text key and operation contract                |
 | `@effect.attach_meta` | associate a payload with an effect identity under a namespaced key (compile time only) |
-| `@effect.meta` | recover an effect identity's payload as `#Some` or `#None` |
-| `@handle`      | discharge one effect from a nullary computation                           |
-| `@forall`      | evaluate a type function with a fresh rigid variable                      |
-| `@satisfies`   | refine an open value by a type, or prove its closed type with a predicate |
-| `@fail`        | refuse compile-time evaluation with a diagnostic                          |
-| `@panic`       | trap with a text message                                                  |
+| `@effect.meta`        | recover an effect identity's payload as `#Some` or `#None`                             |
+| `@handle`             | discharge one effect from a nullary computation                                        |
+| `@forall`             | evaluate a type function with a fresh rigid variable                                   |
+| `@satisfies`          | refine an open value by a type, or prove its closed type with a predicate              |
+| `@fail`               | refuse compile-time evaluation with a diagnostic                                       |
+| `@panic`              | trap with a text message                                                               |
 
 ### 13.2 Numeric and text operations
 
