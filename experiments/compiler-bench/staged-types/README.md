@@ -113,9 +113,9 @@ The evaluator no longer resolves and substitutes every expression's type merely
 for an optional representation-recording callback. Concrete expressions demand
 that evidence only for numeric literals, arrays and cases; application result
 contexts and closure signatures keep their independent semantic demands. A
-representation callback is installed only when a residual trace and checked
-type are both present. This is an interpreter/type-evidence boundary change,
-not a new subtype relation or broader closure memoization policy.
+representation callback is installed only when a residual trace and checked type
+are both present. This is an interpreter/type-evidence boundary change, not a
+new subtype relation or broader closure memoization policy.
 
 The comparison driver accepts `--telemetry=on` (default) and `--telemetry=off`.
 Run both modes to distinguish a production-path improvement from measurement
@@ -140,14 +140,14 @@ spans, deterministic expression fuel, and concrete leaves without an added
 trampoline step are asserted directly; the ordinary compiler suites remain the
 semantic authority.
 
-The telemetry `eval.steps` counter counts trampoline drive-loop transitions,
-not source-expression evaluations. Removing administrative callbacks lowers
-that counter without reducing the number of source-level closure calls. Report
-both counters and wall time; a transition reduction is not evidence that a
-source algorithm has become asymptotically cheaper. Expression fuel is charged
-inside `evaluate_expression` independently of those transitions.
+The telemetry `eval.steps` counter counts trampoline drive-loop transitions, not
+source-expression evaluations. Removing administrative callbacks lowers that
+counter without reducing the number of source-level closure calls. Report both
+counters and wall time; a transition reduction is not evidence that a source
+algorithm has become asymptotically cheaper. Expression fuel is charged inside
+`evaluate_expression` independently of those transitions.
 
 Measured follow-up results and reproduction details are in `DEMAND_RESULTS.md`.
 The complete fresh-process samples are retained in `demand-off.jsonl` and
-`demand-on.jsonl`. Those results compare this increment with PR #170; they do not
-replace the earlier comparison against `main` recorded in `RESULTS.md`.
+`demand-on.jsonl`. Those results compare this increment with PR #170; they do
+not replace the earlier comparison against `main` recorded in `RESULTS.md`.

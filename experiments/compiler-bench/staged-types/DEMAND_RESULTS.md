@@ -106,12 +106,12 @@ prefix     009d4e05d86b3b437f036ee7573656506bc72141186c9f58214079908faa168e
 Times are milliseconds; each cell is a median of five fresh-process samples. The
 change is candidate / baseline minus one.
 
-| Telemetry | Fixture | PR #170 baseline | Candidate | Change |
-| --- | --- | ---: | ---: | ---: |
-| off | prefix | 1,898.100 | 1,721.993 | -9.28% |
-| off | full | 20,179.157 | 17,706.759 | -12.25% |
-| on | prefix | 1,817.952 | 1,804.063 | -0.76% |
-| on | full | 20,259.033 | 17,176.681 | -15.21% |
+| Telemetry | Fixture | PR #170 baseline |  Candidate |  Change |
+| --------- | ------- | ---------------: | ---------: | ------: |
+| off       | prefix  |        1,898.100 |  1,721.993 |  -9.28% |
+| off       | full    |       20,179.157 | 17,706.759 | -12.25% |
+| on        | prefix  |        1,817.952 |  1,804.063 |  -0.76% |
+| on        | full    |       20,259.033 | 17,176.681 | -15.21% |
 
 Complete analysis-time vectors in iteration order, not sorted:
 
@@ -134,9 +134,9 @@ preflight evaluation spans into the sequential phase totals.
 The following counters are deterministic across all five telemetry-on samples:
 
 | Fixture | Baseline transitions | Candidate transitions | Baseline closure applications | Candidate closure applications |
-| --- | ---: | ---: | ---: | ---: |
-| prefix | 71,055 | 38,202 | 5,282 | 5,282 |
-| full | 4,014,502 | 2,237,600 | 332,118 | 332,118 |
+| ------- | -------------------: | --------------------: | ----------------------------: | -----------------------------: |
+| prefix  |               71,055 |                38,202 |                         5,282 |                          5,282 |
+| full    |            4,014,502 |             2,237,600 |                       332,118 |                        332,118 |
 
 `eval.steps` counts interpreter/trampoline transitions, not source expressions.
 The lower transition count does not imply fewer staged closure executions or
@@ -153,12 +153,12 @@ claim all compiler-work counters are unchanged.
 Wasm allocated linear memory at analysis completion, in bytes (distinct values
 observed in each group):
 
-| Telemetry | Fixture | Baseline | Candidate |
-| --- | --- | ---: | ---: |
-| off | prefix | 40239104 | 40239104 |
-| off | full | 117374976 | 117112832 |
-| on | prefix | 40370176 | 40370176 |
-| on | full | 117440512 | 117374976 |
+| Telemetry | Fixture |  Baseline | Candidate |
+| --------- | ------- | --------: | --------: |
+| off       | prefix  |  40239104 |  40239104 |
+| off       | full    | 117374976 | 117112832 |
+| on        | prefix  |  40370176 |  40370176 |
+| on        | full    | 117440512 | 117374976 |
 
 These are not process RSS, peak live heap or allocation-volume measurements.
 
