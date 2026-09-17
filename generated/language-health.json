@@ -187,6 +187,7 @@
     "BLOT_BAD_PIN",
     "BLOT_BAD_REBINDING_TARGET",
     "BLOT_BAD_TEST",
+    "BLOT_BENCH_FIXTURE",
     "BLOT_BINDING_MISMATCH",
     "BLOT_BORROW",
     "BLOT_BORROW_",
@@ -788,15 +789,15 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 19161
+      "lines": 19163
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 16118
+      "lines": 16136
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 13054
+      "lines": 13290
     },
     {
       "path": "compiler/src/backend.rs",
@@ -804,7 +805,7 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 7797
+      "lines": 7789
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -824,7 +825,7 @@
     },
     {
       "path": "compiler/src/value_capsule.rs",
-      "lines": 3598
+      "lines": 3599
     },
     {
       "path": "src/prelude/prelude.blot",
@@ -832,11 +833,11 @@
     },
     {
       "path": "compiler/src/primitives.rs",
-      "lines": 2499
+      "lines": 2500
     },
     {
       "path": "compiler/src/value.rs",
-      "lines": 2486
+      "lines": 2491
     },
     {
       "path": "src/language_service.ts",

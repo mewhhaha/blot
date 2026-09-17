@@ -17,6 +17,7 @@ export const diagnosticCodes = [
   "BLOT_BAD_PIN",
   "BLOT_BAD_REBINDING_TARGET",
   "BLOT_BAD_TEST",
+  "BLOT_BENCH_FIXTURE",
   "BLOT_BINDING_MISMATCH",
   "BLOT_BORROW",
   "BLOT_BORROW_",
