@@ -912,6 +912,15 @@ fn lower_tagged_value(
         value,
         span: arena.expression_span(value),
     }));
+    let kind_tag = match kind {
+        DeclarationKind::Let => "Let",
+        DeclarationKind::Const => "Const",
+        DeclarationKind::Effect => "Effect",
+    };
+    let bound_name: Option<(String, Span)> = match &arena.patterns[pattern.0 as usize] {
+        Pattern::Name { name, span, .. } => Some((name.clone(), *span)),
+        _ => None,
+    };
     let mut transformed = variable(&raw_name, arena.expression_span(value), arena);
     for (index, tag) in tags.iter().enumerate().rev() {
         let descriptor = variable(&format!("tag${index}"), tag.span, arena);
@@ -920,9 +929,16 @@ fn lower_tagged_value(
             start: tag.span.start,
             end: arena.expression_span(transformed).end,
         };
+        let statement = statement_record(
+            kind_tag,
+            bound_name.as_ref(),
+            transformed,
+            applied_span,
+            arena,
+        );
         transformed = arena.expression(Expression::Apply {
             function: transformer,
-            argument: transformed,
+            argument: statement,
             span: applied_span,
         });
     }
@@ -930,6 +946,62 @@ fn lower_tagged_value(
         declarations,
         result: transformed,
         result_effects: ResultEffects::Ambient,
+        span,
+    })
+}
+
+/// Builds the statement record a tag transform receives: the binding kind,
+/// the bound name when the pattern binds one, and the accumulated value.
+/// The constructors are structural AST nodes, so the record never depends on
+/// a name being in scope. Value tags keep working because the prelude's `tag`
+/// projects `.value` before calling the wrapped function.
+fn statement_record(
+    kind_tag: &str,
+    bound_name: Option<&(String, Span)>,
+    value: ExpressionId,
+    span: Span,
+    arena: &mut AstArena,
+) -> ExpressionId {
+    let kind = arena.expression(Expression::Tag {
+        name: kind_tag.to_owned(),
+        span,
+    });
+    let name = match bound_name {
+        Some((name, name_span)) => {
+            let some = arena.expression(Expression::Tag {
+                name: "Some".to_owned(),
+                span,
+            });
+            let text = arena.expression(Expression::Text {
+                value: name.clone(),
+                span: *name_span,
+            });
+            arena.expression(Expression::Apply {
+                function: some,
+                argument: text,
+                span,
+            })
+        }
+        None => arena.expression(Expression::Tag {
+            name: "None".to_owned(),
+            span,
+        }),
+    };
+    arena.expression(Expression::Shape {
+        members: vec![
+            ShapeMember::Field {
+                name: "kind".to_owned(),
+                value: kind,
+            },
+            ShapeMember::Field {
+                name: "name".to_owned(),
+                value: name,
+            },
+            ShapeMember::Field {
+                name: "value".to_owned(),
+                value,
+            },
+        ],
         span,
     })
 }

@@ -3056,6 +3056,14 @@ impl ResidualTrace {
             .filter_map(|(end, value)| value.map(|value| (end, value)))
             .collect::<Vec<_>>();
         let Some((_, first)) = survivors.first() else {
+            // Every arm trapped, so the join is unreachable: terminate it
+            // before reporting. An enclosing arm treats this error as a
+            // diverging arm and keeps staging, which would otherwise leave
+            // the abandoned join without a terminator.
+            self.blocks[switch.join].terminator = Some(StagedTerminator::Trap {
+                message: "Every residual switch arm traps.".to_owned(),
+                span: self.span(span),
+            });
             return Err(Diagnostic::new(
                 "BLOT_PANIC",
                 "Every residual switch arm traps.",
@@ -3504,7 +3512,14 @@ impl ResidualTrace {
     /// evaluates `@panic`: the arm contributes no value to its join, and the
     /// program traps if execution reaches it.
     pub(crate) fn trap_current_block(&mut self, message: &str, span: crate::ast::Span) {
-        let block = self.current_block;
+        self.trap_block(self.current_block, message, span);
+    }
+
+    /// Ends any block with a runtime trap without moving the staging cursor.
+    /// Used for joins abandoned when every arm trapped: the join is
+    /// unreachable, but an enclosing arm may catch the panic and keep
+    /// staging, which requires every created block to carry a terminator.
+    pub(crate) fn trap_block(&mut self, block: usize, message: &str, span: crate::ast::Span) {
         self.blocks[block].terminator = Some(StagedTerminator::Trap {
             message: message.to_owned(),
             span: self.span(span),

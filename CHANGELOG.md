@@ -109,6 +109,22 @@ formatting request, latency from request send to response.
   byte for byte on that shape).
 - `audit:lints` excludes `value-rejected/` pathology directories alongside
   `pending/`, `rejected/`, and `traps/` (24/24 never analyze).
+- Declaration-tag transforms now receive the statement record
+  `{ .kind; .name; .value; }` instead of the bare value. The prelude's `tag`
+  adapts existing value functions by projecting `.value`, so tags built with
+  `tag`, `derive`, and `test` behave exactly as before; a new `tag_statement`
+  constructor passes the whole record. Descriptors built literally without the
+  prelude must project `.value` themselves (`LANGUAGE.md` §4.2).
+- `unused-binding` no longer reports bindings whose value may perform an effect
+  when evaluated. Calls can register effects, attach metadata, or force a
+  deferred argument, so only provably pure values (literals, constructor
+  applications, aggregates of pure values, lambdas, and reads that force
+  nothing) are still offered for removal.
+- Residual staging terminates the join of a switch or conditional whose arms all
+  trap instead of abandoning it. A diverging arm nested inside another residual
+  arm previously failed code generation; it now stages as a trapping arm. A
+  top-level all-trapping switch is still rejected with
+  `Every residual switch arm traps.`
 
 ### Remaining limitations
 
@@ -124,5 +140,6 @@ formatting request, latency from request send to response.
 - `spec/COMPILER.md` is unchanged: no pass boundary, trusted fact, certificate,
   target relation, or compiler benchmark boundary moved. Host contracts moved to
   `spec/WORKSPACE_GRAPH.md` (staged overlays, disk refresh, workspace closure)
-  and `spec/FRONTEND.md` (buffer snapshot identity). No language-surface change
-  was made; `LANGUAGE.md` is untouched.
+  and `spec/FRONTEND.md` (buffer snapshot identity). The declaration-tag
+  statement record is the release's one language-surface change (`LANGUAGE.md`
+  §4.2).

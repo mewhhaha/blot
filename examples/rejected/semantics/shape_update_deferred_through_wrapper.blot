@@ -1,0 +1,14 @@
+// A deferred requirement must survive one generic wrapper.
+//
+// `Shape.update` cannot check its patch until the call supplies a concrete
+// shape, so checking `make` defers the requirement. Specializing the concrete
+// call must check it: `.positon` is not a field of the base record, so the
+// program is refused while compiling.
+
+open import "blot:prelude"
+
+const defaults = { .position = 0.0; .scale = 1.0; }
+
+const make = fn partial => Shape.update (defaults, partial)
+
+return make { .positon = 5.0; }

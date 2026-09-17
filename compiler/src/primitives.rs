@@ -63,7 +63,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
     }
     let arity = match name {
         "@effect" | "@effect.host" | "@forall" | "@handle" | "@import" => 1,
-        "@include" | "@resource.type" | "@effect.shared" => 2,
+        "@include" | "@resource.type" | "@effect.shared" | "@effect.meta" => 2,
         "@continuation.cancel"
         | "@type.of"
         | "@type.open"
@@ -178,6 +178,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@text.slice_bytes"
         | "@text.find_byte_from"
         | "@text.find_from"
+        | "@effect.attach_meta"
         | "@f32x4.select" => 3,
         "@f32x4.of" => 4,
         "@f32x4.shuffle" => 6,

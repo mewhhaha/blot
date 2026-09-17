@@ -14,6 +14,7 @@ mod layout;
 mod lower;
 mod ownership;
 mod partition;
+mod phase_telemetry;
 mod predicate_refinement;
 mod primitives;
 mod protocol;

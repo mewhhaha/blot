@@ -47,8 +47,10 @@ import {
 } from "./revision.ts";
 import {
   type AddedCompilerModuleResult,
+  type CompilerAnalyzeTimings,
   type CompilerInvalidationTelemetry,
   type CompilerOwnershipFact,
+  type CompilerPhaseTelemetry,
   type CompilerReadabilityFact,
   type CompilerSimplificationFact,
   type CompilerSourceDiagnostic,
@@ -64,7 +66,14 @@ import {
   type DevelopmentWork,
 } from "./wasm.ts";
 
-export type { DevelopmentWork } from "./wasm.ts";
+export type {
+  CompilerEvalTelemetry,
+  CompilerPhaseTelemetry,
+  CompilerRustPhase,
+  CompilerRustSubSpan,
+  CompilerStructuralTelemetry,
+  DevelopmentWork,
+} from "./wasm.ts";
 
 const bundledCompiler = new URL(
   "../../generated/compiler/compiler.wasm",
@@ -184,6 +193,29 @@ export interface CompilerAnalysis extends CheckedModule {
   readonly work: CompilerWork | null;
   readonly invalidation: CompilerInvalidationTelemetry;
   readonly targetPreflight: CompilerTargetPreflight;
+  /**
+   * Guest phase telemetry, present only when the compiler was created with
+   * `phaseTelemetry: true`. Never part of a semantic identity or certificate.
+   */
+  readonly phaseTelemetry?: CompilerPhaseTelemetry | null;
+}
+
+export interface CompilerHostPhaseSpan {
+  readonly name: string;
+  readonly milliseconds: number;
+  readonly detail?: unknown;
+}
+
+export interface CompilerHostPhaseCall {
+  readonly operation: "analyze" | "analyzeSource";
+  readonly spans: readonly CompilerHostPhaseSpan[];
+  readonly totalMilliseconds: number;
+}
+
+export interface CompilerHostPhaseTelemetry {
+  readonly schema: 1;
+  readonly clock: "performance.now";
+  readonly calls: readonly CompilerHostPhaseCall[];
 }
 
 export interface CompilerExplanation {
@@ -203,6 +235,12 @@ export interface CompilerOptions {
   readonly wasm?: Uint8Array;
   readonly preludeSnapshot?: Uint8Array;
   readonly targetPolicy?: CompilerTargetPolicy;
+  /**
+   * Collect coarse host phase spans for analyze calls and request guest
+   * phase telemetry with them. Off by default; when off the analyze path is
+   * unchanged. Drain with takePhaseTelemetry().
+   */
+  readonly phaseTelemetry?: boolean;
 }
 
 export interface CompilerHost {
@@ -247,6 +285,12 @@ interface InspectedSource {
   readonly module: AddedCompilerModule;
 }
 
+interface MutablePhaseCall {
+  readonly operation: "analyze" | "analyzeSource";
+  readonly spans: CompilerHostPhaseSpan[];
+  readonly start: number;
+}
+
 /** The sole high-level host for Blot's Rust/Wasm semantic compiler. */
 export class Compiler implements CompilerHost {
   readonly developmentCacheNamespace: string;
@@ -262,6 +306,8 @@ export class Compiler implements CompilerHost {
     Map<string, DevelopmentUnitIdentity>
   >();
   readonly #workspace: WorkspaceGraph;
+  readonly #collectPhaseTelemetry: boolean;
+  readonly #phaseCalls: CompilerHostPhaseCall[] = [];
   #inspectionCandidate: Map<string, InspectedSource> | undefined;
   #requests: Promise<void> = Promise.resolve();
   #developmentChangesKnown = false;
@@ -272,8 +318,10 @@ export class Compiler implements CompilerHost {
     preludeSnapshot: Uint8Array,
     preludeSnapshotDigest: string,
     cacheNamespace: string,
+    phaseTelemetry: boolean,
   ) {
     this.developmentCacheNamespace = cacheNamespace;
+    this.#collectPhaseTelemetry = phaseTelemetry;
     this.#compiler = compiler;
     this.#handle = compiler.createCompilerSession();
     this.#inspectionHandle = compiler.createCompilerSession();
@@ -401,6 +449,7 @@ export class Compiler implements CompilerHost {
           hostAbi: COMPILER_HOST_ABI_VERSION,
           target: resolveTargetPolicy(options.targetPolicy),
         }))),
+        options.phaseTelemetry === true,
       );
     } catch (error) {
       throw new CompilerInvariantFailure("compiler initialization", error);
@@ -428,21 +477,43 @@ export class Compiler implements CompilerHost {
 
   async analyze(path: string): Promise<CompilerAnalysis> {
     return await this.#request(async () => {
+      const call = this.#beginPhaseCall("analyze");
       const absolute = resolve(path);
-      await this.#sync(absolute);
-      return this.#analyzeResident(absolute);
+      await this.#sync(absolute, call);
+      const analysis = this.#analyzeResident(absolute, call);
+      this.#endPhaseCall(call);
+      return analysis;
     });
   }
 
   async analyzeSource(path: string, source: string): Promise<CompilerAnalysis> {
     return await this.#request(async () => {
+      const call = this.#beginPhaseCall("analyzeSource");
       const absolute = resolve(path);
-      const root = await this.#loadWorkspaceRevision(
-        () => this.#workspace.updateOverlay(absolute, source),
+      const root = await this.#spanAsync(
+        call,
+        "load-workspace-revision",
+        () =>
+          this.#loadWorkspaceRevision(
+            () => this.#workspace.updateOverlay(absolute, source),
+          ),
       );
-      await this.#syncLoaded(root);
-      return this.#analyzeResident(root.path);
+      this.#spanSync(call, "sync-loaded", () => this.#syncLoaded(root));
+      const analysis = this.#analyzeResident(root.path, call);
+      this.#endPhaseCall(call);
+      return analysis;
     });
+  }
+
+  /**
+   * Drains collected host phase spans. Returns null when the compiler was
+   * created without `phaseTelemetry: true`. Only completed analyze calls are
+   * reported; a failed call keeps no record.
+   */
+  takePhaseTelemetry(): CompilerHostPhaseTelemetry | null {
+    if (!this.#collectPhaseTelemetry) return null;
+    const calls = this.#phaseCalls.splice(0, this.#phaseCalls.length);
+    return { schema: 1, clock: "performance.now", calls };
   }
 
   async explain(
@@ -951,11 +1022,60 @@ export class Compiler implements CompilerHost {
     }
   }
 
-  async #sync(path: string): Promise<ResidentRevision> {
-    const loaded = await this.#loadWorkspaceRevision(
-      () => this.#workspace.refresh(path),
+  async #sync(
+    path: string,
+    call: MutablePhaseCall | null = null,
+  ): Promise<ResidentRevision> {
+    const loaded = await this.#spanAsync(
+      call,
+      "load-workspace-revision",
+      () => this.#loadWorkspaceRevision(() => this.#workspace.refresh(path)),
     );
-    return await this.#syncLoaded(loaded);
+    return this.#spanSync(call, "sync-loaded", () => this.#syncLoaded(loaded));
+  }
+
+  #beginPhaseCall(
+    operation: "analyze" | "analyzeSource",
+  ): MutablePhaseCall | null {
+    if (!this.#collectPhaseTelemetry) return null;
+    return { operation, spans: [], start: performance.now() };
+  }
+
+  #endPhaseCall(call: MutablePhaseCall | null): void {
+    if (call === null) return;
+    this.#phaseCalls.push({
+      operation: call.operation,
+      spans: call.spans,
+      totalMilliseconds: performance.now() - call.start,
+    });
+  }
+
+  async #spanAsync<T>(
+    call: MutablePhaseCall | null,
+    name: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    if (call === null) return await run();
+    const start = performance.now();
+    try {
+      return await run();
+    } finally {
+      call.spans.push({ name, milliseconds: performance.now() - start });
+    }
+  }
+
+  #spanSync<T>(
+    call: MutablePhaseCall | null,
+    name: string,
+    run: () => T,
+  ): T {
+    if (call === null) return run();
+    const start = performance.now();
+    try {
+      return run();
+    } finally {
+      call.spans.push({ name, milliseconds: performance.now() - start });
+    }
   }
 
   #syncLoaded(root: Loaded): ResidentRevision {
@@ -1148,11 +1268,29 @@ export class Compiler implements CompilerHost {
     };
   }
 
-  #analyzeResident(path: string): CompilerAnalysis {
+  #analyzeResident(
+    path: string,
+    call: MutablePhaseCall | null = null,
+  ): CompilerAnalysis {
+    const timings: CompilerAnalyzeTimings | undefined = call === null
+      ? undefined
+      : { guestMilliseconds: 0, decodeMilliseconds: 0, responseBytes: 0 };
     const result = this.#compiler.analyzeCompilerSessionModule(
       this.#handle,
       path,
+      call === null ? {} : { phaseTelemetry: true, timings },
     );
+    if (timings !== undefined && call !== null) {
+      call.spans.push({
+        name: "guest-call",
+        milliseconds: timings.guestMilliseconds,
+      });
+      call.spans.push({
+        name: "decode-response",
+        milliseconds: timings.decodeMilliseconds,
+        detail: { responseBytes: timings.responseBytes },
+      });
+    }
     if (!result.ok) this.#throwFailure(result, path, "analysis");
     if (typeof result.interfaceKey !== "string") {
       throw new Error("compiler analysis omitted its interface key");
@@ -1171,6 +1309,11 @@ export class Compiler implements CompilerHost {
       work: result.work,
       invalidation: result.invalidation,
       targetPreflight: result.targetPreflight,
+      // The key exists only on telemetry runs so default-run analysis
+      // objects keep their exact shape.
+      ...(call === null
+        ? {}
+        : { phaseTelemetry: result.phaseTelemetry ?? null }),
     };
   }
 

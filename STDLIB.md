@@ -15,6 +15,7 @@ Focused imports are available as `blot:array`, `blot:collections`, `blot:iter`, 
 | `compose` | `blot:prelude` |
 | `flip` | `blot:prelude` |
 | `tag` | `blot:prelude` |
+| `tag_statement` | `blot:prelude` |
 | `derive` | `blot:prelude` |
 | `test` | `blot:prelude` |
 | `assert` | `blot:prelude` |

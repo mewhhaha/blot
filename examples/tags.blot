@@ -41,4 +41,20 @@ let transformations_work = fn () => do:
     "tags apply nearest-first"
   )
 
-return { .ordered = ordered; .label = Count.label; .factorial = factorial 5; }
+// A statement tag observes the whole declaration: its kind, its bound name,
+// and its value. Value tags keep receiving the bare value.
+const observe = tag_statement ("observe", (), fn stmt => stmt)
+const observe_pair =
+  tag_statement ("observe_pair", (), fn stmt => (stmt.name, stmt.value))
+
+@[observe]
+const observed_const = 41
+
+@[observe]
+let observed_let = 42
+
+@[observe_pair]
+const (observed_name, observed_pair) = (1, 2)
+
+return
+  { .ordered = ordered; .label = Count.label; .factorial = factorial 5; .observed_const; .observed_let; .observed_name; .observed_pair; }

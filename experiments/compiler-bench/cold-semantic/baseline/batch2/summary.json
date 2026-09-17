@@ -1,0 +1,565 @@
+{
+  "schema": 1,
+  "samplesPerFixturePerRun": 15,
+  "runs": 1,
+  "telemetry": "off",
+  "provenanceBefore": {
+    "commit": "f5e0957db3f69a09022bb295c383454d05444568",
+    "worktreeStatus": "M CHANGELOG.md\n M LANGUAGE.md\n M STDLIB.md\n M compiler/src/eval.rs\n M compiler/src/host_transport.rs\n M compiler/src/lower.rs\n M compiler/src/ownership.rs\n M compiler/src/session.rs\n M compiler/src/typecheck.rs\n M examples.test.ts\n M examples/expected/tags.txt\n M examples/tags.blot\n M generated/compiler/prelude.snapshot\n M generated/language-health.json\n M src/compiler.ts\n M src/compiler/session.test.ts\n M src/compiler/session.ts\n M src/compiler/wasm.ts\n M src/diagnostic_codes.generated.ts\n M src/prelude/prelude.blot\n?? examples/rejected/semantics/shape_update_deferred_through_wrapper.blot\n?? experiments/compiler-bench/cold-semantic/",
+    "scopedHostSha256": "f75a78367f93a4c338b3370baecc4412c0ad1db54954ef8cfb690894f085f8be",
+    "denoExecutableSha256": "bceb5b6a6239b0b010418406d8c77a508f67cf4337d94288f1c19fe71304aab0",
+    "denoVersion": "2.9.6 (v8 15.0.245.2-rusty)",
+    "nodeVersion": null,
+    "platform": "linux",
+    "arch": "x86_64",
+    "fixtureSha256": {
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/prefix.blot": "009d4e05d86b3b437f036ee7573656506bc72141186c9f58214079908faa168e",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/full.blot": "8ec9d28a1c8c6b9bd4a345881e91a0c2c6b55f147f5e535d217459289d324054",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/build_only.blot": "d0259ad3eae69402ab805412aa5063d3bea14239641468698d1621c18c5ec606",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/schedule_only.blot": "88074dbc745788c0ccc1f65691f56d103dcd17968d2654e4880601b47802fd34",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/union_only.blot": "5c06ec1aec763edf18b36a212b4faa534967ad4a5cfec9052eb1ae8043d7ee45",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_stages1.blot": "2de9a6a39afb1f89b4ff4fb2bdeb8bead542847e00b29818c98268db1e1d8320",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_c8s8.blot": "9f52f32c58437621a57c92f3581932db29c4b0e5ee396d616559022109e6cb11",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_c2s2.blot": "f78cf4f2a0dd363a3873eadc365469d255abaa64b2b2f6c4120a34c50f46f5e1"
+    },
+    "harnessSha256": {
+      "generate.ts": "47eb5c4275cf480121eef534003f3b129af38b07bc6b1cbb8ff79160c65c5827",
+      "sample.ts": "30d7da57a0d6a9b3aae771f15e82e4e3b639c650850256672d37b358bd79cb1f",
+      "run.ts": "8e6f78dc78e7feb1fca4f3f5b564a5eab2a48ac5bbb994f53986e2c6bb67d122",
+      "framework.blot": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15"
+    },
+    "compilerArtifactSha256": "86bcf00b6e4afb95d23f7e256ceca6555f552118b745b9830ce11d62c26468f3",
+    "compilerManifestSha256": "37e5b814ce79ba3cdbffbd0e2083b7fad6151e6570f8593b5bc34fbbf6773cef",
+    "preludeSha256": "dbde55fca742e4f9a5e5c54ee510df4143e0645ce52a46c37f0cc9607afbc414",
+    "invocation": [
+      "run.ts",
+      "--fixtures=/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/prefix.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/full.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/build_only.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/schedule_only.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/union_only.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_stages1.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_c8s8.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_c2s2.blot",
+      "--samples=15",
+      "--runs=1",
+      "--out=/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/baseline/batch2"
+    ],
+    "samplePath": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/sample.ts",
+    "denoPath": "/home/mewhhaha/.deno/bin/deno"
+  },
+  "provenanceAfter": {
+    "commit": "f5e0957db3f69a09022bb295c383454d05444568",
+    "worktreeStatus": "M CHANGELOG.md\n M LANGUAGE.md\n M STDLIB.md\n M compiler/src/eval.rs\n M compiler/src/host_transport.rs\n M compiler/src/lower.rs\n M compiler/src/ownership.rs\n M compiler/src/session.rs\n M compiler/src/typecheck.rs\n M examples.test.ts\n M examples/expected/tags.txt\n M examples/tags.blot\n M generated/compiler/prelude.snapshot\n M generated/language-health.json\n M src/compiler.ts\n M src/compiler/session.test.ts\n M src/compiler/session.ts\n M src/compiler/wasm.ts\n M src/diagnostic_codes.generated.ts\n M src/prelude/prelude.blot\n?? examples/rejected/semantics/shape_update_deferred_through_wrapper.blot\n?? experiments/compiler-bench/cold-semantic/",
+    "scopedHostSha256": "f75a78367f93a4c338b3370baecc4412c0ad1db54954ef8cfb690894f085f8be",
+    "denoExecutableSha256": "bceb5b6a6239b0b010418406d8c77a508f67cf4337d94288f1c19fe71304aab0",
+    "denoVersion": "2.9.6 (v8 15.0.245.2-rusty)",
+    "nodeVersion": null,
+    "platform": "linux",
+    "arch": "x86_64",
+    "fixtureSha256": {
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/prefix.blot": "009d4e05d86b3b437f036ee7573656506bc72141186c9f58214079908faa168e",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/full.blot": "8ec9d28a1c8c6b9bd4a345881e91a0c2c6b55f147f5e535d217459289d324054",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/build_only.blot": "d0259ad3eae69402ab805412aa5063d3bea14239641468698d1621c18c5ec606",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/schedule_only.blot": "88074dbc745788c0ccc1f65691f56d103dcd17968d2654e4880601b47802fd34",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/union_only.blot": "5c06ec1aec763edf18b36a212b4faa534967ad4a5cfec9052eb1ae8043d7ee45",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_stages1.blot": "2de9a6a39afb1f89b4ff4fb2bdeb8bead542847e00b29818c98268db1e1d8320",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_c8s8.blot": "9f52f32c58437621a57c92f3581932db29c4b0e5ee396d616559022109e6cb11",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_c2s2.blot": "f78cf4f2a0dd363a3873eadc365469d255abaa64b2b2f6c4120a34c50f46f5e1"
+    },
+    "harnessSha256": {
+      "generate.ts": "47eb5c4275cf480121eef534003f3b129af38b07bc6b1cbb8ff79160c65c5827",
+      "sample.ts": "30d7da57a0d6a9b3aae771f15e82e4e3b639c650850256672d37b358bd79cb1f",
+      "run.ts": "8e6f78dc78e7feb1fca4f3f5b564a5eab2a48ac5bbb994f53986e2c6bb67d122",
+      "framework.blot": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15"
+    },
+    "compilerArtifactSha256": "c67d51cf797deb233b1d56279c0314d097087cc1ecaa563fbdd2e7431b5f4ae7",
+    "compilerManifestSha256": "d0fea9151973d052ca78b7d93ec58c60272dd1e6e6e856a657d27f8351584cf5",
+    "preludeSha256": "dbde55fca742e4f9a5e5c54ee510df4143e0645ce52a46c37f0cc9607afbc414",
+    "invocation": [
+      "run.ts",
+      "--fixtures=/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/prefix.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/full.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/build_only.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/schedule_only.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/union_only.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_stages1.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_c8s8.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_c2s2.blot",
+      "--samples=15",
+      "--runs=1",
+      "--out=/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/baseline/batch2"
+    ],
+    "samplePath": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/sample.ts",
+    "denoPath": "/home/mewhhaha/.deno/bin/deno"
+  },
+  "provenanceStable": false,
+  "fixtures": [
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/prefix.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 755.35603,
+            "mad": 19.768054000000006,
+            "p95": 873.993294,
+            "min": 726.802509,
+            "max": 873.993294
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 79.981551,
+            "mad": 2.890355999999997,
+            "p95": 89.873061,
+            "min": 75.506942,
+            "max": 89.873061
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 914.6775200000266,
+            "mad": 22.11637800000608,
+            "p95": 1044.0725419999799,
+            "min": 877.2047509999829,
+            "max": 1044.0725419999799
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 755.35603,
+          "mad": 19.768054000000006,
+          "p95": 873.993294,
+          "min": 726.802509,
+          "max": 873.993294
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 79.981551,
+          "mad": 2.890355999999997,
+          "p95": 89.873061,
+          "min": 75.506942,
+          "max": 89.873061
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 914.6775200000266,
+          "mad": 22.11637800000608,
+          "p95": 1044.0725419999799,
+          "min": 877.2047509999829,
+          "max": 1044.0725419999799
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/full.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 8161.926542,
+            "mad": 76.61470100000133,
+            "p95": 9337.586303,
+            "min": 8085.311840999999,
+            "max": 9337.586303
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 79.395645,
+            "mad": 2.9004229999999893,
+            "p95": 89.455946,
+            "min": 75.63817800000001,
+            "max": 89.455946
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 8336.604621999999,
+            "mad": 72.40450799999235,
+            "p95": 9522.280608000001,
+            "min": 8264.200114000007,
+            "max": 9522.280608000001
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 8161.926542,
+          "mad": 76.61470100000133,
+          "p95": 9337.586303,
+          "min": 8085.311840999999,
+          "max": 9337.586303
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 79.395645,
+          "mad": 2.9004229999999893,
+          "p95": 89.455946,
+          "min": 75.63817800000001,
+          "max": 89.455946
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 8336.604621999999,
+          "mad": 72.40450799999235,
+          "p95": 9522.280608000001,
+          "min": 8264.200114000007,
+          "max": 9522.280608000001
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/build_only.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 1546.658664,
+            "mad": 26.303513000000066,
+            "p95": 1704.968358,
+            "min": 1498.570513,
+            "max": 1704.968358
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 78.59235899999999,
+            "mad": 1.5863019999999892,
+            "p95": 89.201425,
+            "min": 76.58362199999999,
+            "max": 89.201425
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 1712.6604539999971,
+            "mad": 29.372391999990214,
+            "p95": 1883.6834190000081,
+            "min": 1662.1008930000244,
+            "max": 1883.6834190000081
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 1546.658664,
+          "mad": 26.303513000000066,
+          "p95": 1704.968358,
+          "min": 1498.570513,
+          "max": 1704.968358
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 78.59235899999999,
+          "mad": 1.5863019999999892,
+          "p95": 89.201425,
+          "min": 76.58362199999999,
+          "max": 89.201425
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 1712.6604539999971,
+          "mad": 29.372391999990214,
+          "p95": 1883.6834190000081,
+          "min": 1662.1008930000244,
+          "max": 1883.6834190000081
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/schedule_only.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 4763.576744,
+            "mad": 50.501820999999836,
+            "p95": 5336.239598,
+            "min": 4682.529879000001,
+            "max": 5336.239598
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 78.103376,
+            "mad": 0.7088389999999976,
+            "p95": 85.979904,
+            "min": 76.922532,
+            "max": 85.979904
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 4930.882485000009,
+            "mad": 58.2023390000104,
+            "p95": 5510.600942000005,
+            "min": 4838.266052999999,
+            "max": 5510.600942000005
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 4763.576744,
+          "mad": 50.501820999999836,
+          "p95": 5336.239598,
+          "min": 4682.529879000001,
+          "max": 5336.239598
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 78.103376,
+          "mad": 0.7088389999999976,
+          "p95": 85.979904,
+          "min": 76.922532,
+          "max": 85.979904
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 4930.882485000009,
+          "mad": 58.2023390000104,
+          "p95": 5510.600942000005,
+          "min": 4838.266052999999,
+          "max": 5510.600942000005
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/union_only.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 1556.356832,
+            "mad": 28.92537799999991,
+            "p95": 1726.6936200000002,
+            "min": 1521.556423,
+            "max": 1726.6936200000002
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 78.116044,
+            "mad": 1.5450230000000005,
+            "p95": 87.293532,
+            "min": 76.25758,
+            "max": 87.293532
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 1721.329423999996,
+            "mad": 28.914590000000317,
+            "p95": 1902.9150640000007,
+            "min": 1686.9846569999936,
+            "max": 1902.9150640000007
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 1556.356832,
+          "mad": 28.92537799999991,
+          "p95": 1726.6936200000002,
+          "min": 1521.556423,
+          "max": 1726.6936200000002
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 78.116044,
+          "mad": 1.5450230000000005,
+          "p95": 87.293532,
+          "min": 76.25758,
+          "max": 87.293532
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 1721.329423999996,
+          "mad": 28.914590000000317,
+          "p95": 1902.9150640000007,
+          "min": 1686.9846569999936,
+          "max": 1902.9150640000007
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_stages1.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 6697.363405,
+            "mad": 173.4121009999999,
+            "p95": 7356.673465,
+            "min": 6444.276825,
+            "max": 7356.673465
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 78.733592,
+            "mad": 2.007278999999997,
+            "p95": 89.17384200000001,
+            "min": 76.313713,
+            "max": 89.17384200000001
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 6868.92973600002,
+            "mad": 173.13466700000572,
+            "p95": 7542.388384999998,
+            "min": 6612.748886000016,
+            "max": 7542.388384999998
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 6697.363405,
+          "mad": 173.4121009999999,
+          "p95": 7356.673465,
+          "min": 6444.276825,
+          "max": 7356.673465
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 78.733592,
+          "mad": 2.007278999999997,
+          "p95": 89.17384200000001,
+          "min": 76.313713,
+          "max": 89.17384200000001
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 6868.92973600002,
+          "mad": 173.13466700000572,
+          "p95": 7542.388384999998,
+          "min": 6612.748886000016,
+          "max": 7542.388384999998
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_c8s8.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 8743.199944999998,
+            "mad": 284.27312699999857,
+            "p95": 9591.545596999998,
+            "min": 8443.202178,
+            "max": 9591.545596999998
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 79.526216,
+            "mad": 1.5042119999999954,
+            "p95": 88.683764,
+            "min": 76.927256,
+            "max": 88.683764
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 8921.61931899999,
+            "mad": 290.2841500000213,
+            "p95": 9782.409392999994,
+            "min": 8615.673985000001,
+            "max": 9782.409392999994
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 8743.199944999998,
+          "mad": 284.27312699999857,
+          "p95": 9591.545596999998,
+          "min": 8443.202178,
+          "max": 9591.545596999998
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 79.526216,
+          "mad": 1.5042119999999954,
+          "p95": 88.683764,
+          "min": 76.927256,
+          "max": 88.683764
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 8921.61931899999,
+          "mad": 290.2841500000213,
+          "p95": 9782.409392999994,
+          "min": 8615.673985000001,
+          "max": 9782.409392999994
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/controls/full_c2s2.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 1200.7220300000001,
+            "mad": 31.235705000000053,
+            "p95": 1367.360216,
+            "min": 1165.448811,
+            "max": 1367.360216
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 79.579424,
+            "mad": 3.049323000000001,
+            "p95": 90.456784,
+            "min": 75.730971,
+            "max": 90.456784
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 1360.2655269999523,
+            "mad": 33.38966699995217,
+            "p95": 1542.4089769999991,
+            "min": 1319.1568670000415,
+            "max": 1542.4089769999991
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 1200.7220300000001,
+          "mad": 31.235705000000053,
+          "p95": 1367.360216,
+          "min": 1165.448811,
+          "max": 1367.360216
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 79.579424,
+          "mad": 3.049323000000001,
+          "p95": 90.456784,
+          "min": 75.730971,
+          "max": 90.456784
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 1360.2655269999523,
+          "mad": 33.38966699995217,
+          "p95": 1542.4089769999991,
+          "min": 1319.1568670000415,
+          "max": 1542.4089769999991
+        }
+      }
+    }
+  ]
+}

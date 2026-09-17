@@ -130,8 +130,16 @@ const Resource = {
 
 // The compiler reads this ordinary shape at compile time. The transform stays
 // ordinary blot code: a `let` runs it at run time, while a `const` runs it at
-// compile time with the value it enriches.
+// compile time with the statement it enriches. Every transform receives the
+// statement record `{ .kind; .name; .value; }`; `tag` adapts a value function
+// by projecting `.value`, while `tag_statement` passes the whole record.
 const tag = fn (name, metadata, transform) => {
+  .name = name;
+  .metadata = metadata;
+  .transform = fn stmt => transform stmt.value;
+}
+
+const tag_statement = fn (name, metadata, transform) => {
   .name = name;
   .metadata = metadata;
   .transform = transform;
@@ -3449,6 +3457,7 @@ return {
   .compose = compose;
   .flip = flip;
   .tag = tag;
+  .tag_statement = tag_statement;
   .derive = derive;
   .test = test;
   .assert = assert;

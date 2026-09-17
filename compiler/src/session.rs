@@ -22,8 +22,8 @@ use crate::eval::{
 use crate::frontend::{FrontendState, SyntaxSnapshot};
 use crate::protocol::MODULE_SNAPSHOT_SCHEMA;
 use crate::typecheck::{
-    CachedModuleAnalyses, CachedModuleInterface, CheckedModuleCertificate, Checker, empty_effects,
-    type_exposes_generative_effect,
+    CachedModuleAnalyses, CachedModuleInterface, CheckedModuleCertificate, Checker, CompilerWork,
+    WorkSnapshot, empty_effects, type_exposes_generative_effect,
 };
 use crate::value::{
     EffectOperationContract, EffectOwnership, OrderedFields, Value,
@@ -116,6 +116,214 @@ struct TargetPreflight {
     inferred_type: String,
     unsupported_component: Option<String>,
     alternatives: Vec<&'static str>,
+}
+
+/// Opt-in coarse phase telemetry for one `analyze_module` request.
+///
+/// Additive solver counters are reported as per-phase deltas.
+/// `solverWorklistPeak` inside a delta is the cumulative request peak
+/// observed at that phase boundary (monotonic within a request), never a
+/// phase-local maximum. A nested semantic request can reset the arena-backed
+/// counters mid-request; a clamped counter reads 0 and is named in
+/// `counterResets`, so deltas never wrap. Phase spans carry guest wall time
+/// from the host-imported clock plus nested sub-spans (see
+/// `crate::phase_telemetry` for the charge-once accounting).
+struct PhaseTelemetry {
+    request_start: WorkSnapshot,
+    phase_start: WorkSnapshot,
+    phase_start_ms: f64,
+    phases: Vec<serde_json::Value>,
+    phase_resets: Vec<String>,
+    request_work: Option<CompilerWork>,
+    request_resets: Vec<String>,
+    failed_phase: Option<String>,
+}
+
+impl PhaseTelemetry {
+    fn start(checker: &Checker) -> Self {
+        let snapshot = checker.work_snapshot();
+        Self {
+            request_start: snapshot,
+            phase_start: snapshot,
+            phase_start_ms: crate::phase_telemetry::now_ms(),
+            phases: Vec::new(),
+            phase_resets: Vec::new(),
+            request_work: None,
+            request_resets: Vec::new(),
+            failed_phase: None,
+        }
+    }
+
+    fn close_phase(
+        &mut self,
+        phase: crate::phase_telemetry::PhaseId,
+        checker: &Checker,
+        detail: Option<serde_json::Value>,
+    ) {
+        let (delta, resets) = checker.work_delta_saturating(self.phase_start);
+        self.phase_resets
+            .extend(resets.iter().map(|reset| reset.to_string()));
+        self.phase_start = checker.work_snapshot();
+        let now = crate::phase_telemetry::now_ms();
+        let milliseconds = now - self.phase_start_ms;
+        self.phase_start_ms = now;
+        let table = crate::phase_telemetry::sub_ms_table().unwrap_or_default();
+        let index = phase.index();
+        let eval_ms = table.eval[index];
+        let conversion_ms = table.conversion[index];
+        let conversion_inside_eval_ms = table.conversion_inside_eval[index].min(conversion_ms);
+        let conversion_outside_eval_ms = conversion_ms - conversion_inside_eval_ms;
+        let coverage_ms = table.coverage[index];
+        let ownership_ms = table.ownership[index];
+        let safety_ms = table.safety[index];
+        // Only disjoint children enter the residual: conversions inside
+        // evaluation already overlap the eval sub-span.
+        let other_ms = (milliseconds
+            - (eval_ms + conversion_outside_eval_ms + coverage_ms + ownership_ms + safety_ms))
+            .max(0.0);
+        let mut phase_value = serde_json::json!({
+            "name": phase.name(),
+            "milliseconds": milliseconds,
+            "workDelta": delta,
+            "counterResets": resets,
+            "subSpans": [
+                {"name": crate::phase_telemetry::SubSpan::Eval.name(), "milliseconds": eval_ms},
+                {"name": crate::phase_telemetry::SubSpan::Conversion.name(), "milliseconds": conversion_ms, "detail": {
+                    "insideEvalMs": conversion_inside_eval_ms,
+                    "outsideEvalMs": conversion_outside_eval_ms,
+                }},
+                {"name": crate::phase_telemetry::SubSpan::Coverage.name(), "milliseconds": coverage_ms},
+                {"name": crate::phase_telemetry::SubSpan::Ownership.name(), "milliseconds": ownership_ms},
+                {"name": crate::phase_telemetry::SubSpan::Safety.name(), "milliseconds": safety_ms},
+                {"name": "other", "milliseconds": other_ms, "detail": {
+                    "note": "phase wall minus disjoint children; inference and biunification live here",
+                }},
+            ],
+        });
+        if let (Some(object), Some(detail)) = (phase_value.as_object_mut(), detail) {
+            object.insert("detail".to_owned(), detail);
+        }
+        self.phases.push(phase_value);
+    }
+
+    fn close_preflight(
+        &mut self,
+        checker: &Checker,
+        detail: Option<serde_json::Value>,
+        timings: &PreflightTimings,
+    ) {
+        let phase = crate::phase_telemetry::PhaseId::Preflight;
+        let (delta, resets) = checker.work_delta_saturating(self.phase_start);
+        self.phase_resets
+            .extend(resets.iter().map(|reset| reset.to_string()));
+        self.phase_start = checker.work_snapshot();
+        let now = crate::phase_telemetry::now_ms();
+        let milliseconds = now - self.phase_start_ms;
+        self.phase_start_ms = now;
+        let table = crate::phase_telemetry::sub_ms_table().unwrap_or_default();
+        let eval_ms = table.eval[phase.index()];
+        let other_ms = (milliseconds
+            - (timings.reprepare_ms + timings.check_ms + timings.hir_ms + timings.backend_ms))
+            .max(0.0);
+        let mut detail_map = serde_json::Map::new();
+        detail_map.insert(
+            "evalMsWithinPreflight".to_owned(),
+            serde_json::Value::from(eval_ms),
+        );
+        detail_map.insert(
+            "evalMsNote".to_owned(),
+            serde_json::Value::from(
+                "informational overlap with the sequential sub-spans above; never sum it with them",
+            ),
+        );
+        if let Some(detail) = detail
+            && let Some(extra) = detail.as_object()
+        {
+            detail_map.extend(
+                extra
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+        }
+        self.phases.push(serde_json::json!({
+            "name": phase.name(),
+            "milliseconds": milliseconds,
+            "workDelta": delta,
+            "counterResets": resets,
+            "subSpans": [
+                {"name": "re-prepare", "milliseconds": timings.reprepare_ms},
+                {"name": "check", "milliseconds": timings.check_ms},
+                {"name": "hir-elaborate", "milliseconds": timings.hir_ms},
+                {"name": "backend-close", "milliseconds": timings.backend_ms},
+                {"name": "other", "milliseconds": other_ms},
+            ],
+            "detail": detail_map,
+        }));
+    }
+
+    fn finish_ok(&mut self, checker: &Checker) {
+        self.finish_request(checker);
+    }
+
+    fn finish_failed(&mut self, failed_phase: &str, checker: &Checker) {
+        self.finish_request(checker);
+        self.failed_phase = Some(failed_phase.to_owned());
+    }
+
+    fn finish_request(&mut self, checker: &Checker) {
+        let (work, resets) = checker.work_delta_saturating(self.request_start);
+        self.request_work = Some(work);
+        // Endpoint sampling can miss a mid-request reset followed by
+        // regrowth, so the request level unions every phase reset: a named
+        // counter reset somewhere in this request, and its requestWork delta
+        // is a net change, not cumulative work.
+        let mut union = self.phase_resets.clone();
+        union.extend(resets.into_iter().map(str::to_owned));
+        union.sort();
+        union.dedup();
+        self.request_resets = union;
+    }
+
+    fn attach(&self, value: &mut serde_json::Value) {
+        let Some(object) = value.as_object_mut() else {
+            return;
+        };
+        let snapshot = crate::phase_telemetry::snapshot();
+        object.insert(
+            "phaseTelemetry".to_owned(),
+            serde_json::json!({
+                "schema": 2,
+                "clock": crate::phase_telemetry::CLOCK_NAME,
+                "peakSemantics": "solverWorklistPeak in each workDelta is the cumulative request peak observed at that phase boundary (monotonic within a request), not a phase-local maximum",
+                "deltaSemantics": "deltas are saturating: a counter reset by a nested request inside the span clamps at 0 and is named in counterResets",
+                "spanSemantics": "phase milliseconds are sequential guest wall spans; subSpans charge a phase once (see the other/conversion detail notes); target-preflight evalMsWithinPreflight overlaps its sequential sub-spans and must never be summed with them",
+                "phases": self.phases,
+                "eval": snapshot.as_ref().and_then(|snapshot| snapshot.get("eval")).cloned().unwrap_or(serde_json::Value::Null),
+                "structural": snapshot.as_ref().and_then(|snapshot| snapshot.get("structural")).cloned().unwrap_or(serde_json::Value::Null),
+                "requestWork": self.request_work,
+                "requestCounterResets": self.request_resets,
+                "failedPhase": self.failed_phase,
+            }),
+        );
+    }
+}
+
+/// Sequential wall spans inside target preflight. Unreached spans (cache hit
+/// or early failure) read zero.
+#[derive(Default)]
+struct PreflightTimings {
+    reprepare_ms: f64,
+    check_ms: f64,
+    hir_ms: f64,
+    backend_ms: f64,
+}
+
+/// Banks the time since `boundary` into `slot` and restarts the boundary.
+fn bank_preflight_span(slot: &mut f64, boundary: &mut Option<f64>) {
+    let now = crate::phase_telemetry::now_ms();
+    if let Some(start) = boundary.replace(now) {
+        *slot = now - start;
+    }
 }
 
 impl Default for CompilerSession {
@@ -648,10 +856,61 @@ impl CompilerSession {
     }
 
     pub fn analyze_module(&self, path: &str) -> serde_json::Value {
+        self.analyze_module_inner(path, None)
+    }
+
+    /// Opt-in coarse phase telemetry. The call sequence is identical to
+    /// [`Self::analyze_module`] except for one cached root check that splits
+    /// inference from fact materialization (the checker's own result cache
+    /// makes the second call free), plus counter snapshots and wall spans at
+    /// phase boundaries. Semantic results, `work`, invalidation, and preflight
+    /// are unchanged; telemetry travels in a separately named `phaseTelemetry`
+    /// field that is never part of a semantic identity or certificate.
+    /// Guest wall time comes from the host-imported clock; sub-span
+    /// accounting is documented in `crate::phase_telemetry`.
+    pub fn analyze_module_traced(&self, path: &str) -> serde_json::Value {
+        let _collection = crate::phase_telemetry::activate();
+        crate::phase_telemetry::set_phase(crate::phase_telemetry::PhaseId::Preparation);
+        self.analyze_module_inner(path, Some(PhaseTelemetry::start(&self.checker)))
+    }
+
+    fn analyze_module_inner(
+        &self,
+        path: &str,
+        mut telemetry: Option<PhaseTelemetry>,
+    ) -> serde_json::Value {
         if let Err(diagnostic) = self.begin_semantic_request(path) {
-            return diagnostic.failure_json("semantic preparation");
+            let mut failure = diagnostic.failure_json("semantic preparation");
+            if let Some(telemetry) = telemetry.as_mut() {
+                telemetry.finish_failed("semantic-preparation", &self.checker);
+                telemetry.attach(&mut failure);
+            }
+            return failure;
+        }
+        if let Some(telemetry) = telemetry.as_mut() {
+            telemetry.close_phase(
+                crate::phase_telemetry::PhaseId::Preparation,
+                &self.checker,
+                None,
+            );
+            crate::phase_telemetry::set_phase(crate::phase_telemetry::PhaseId::Check);
+            // Rank the root check ahead of analysis so its solver work lands
+            // in the check span; analysis_json then reuses the cached result.
+            if let Err(diagnostic) = self.checker.check(path) {
+                let mut failure = diagnostic.failure_json("analysis");
+                telemetry.close_phase(crate::phase_telemetry::PhaseId::Check, &self.checker, None);
+                telemetry.finish_failed("check", &self.checker);
+                telemetry.attach(&mut failure);
+                return failure;
+            }
+            telemetry.close_phase(crate::phase_telemetry::PhaseId::Check, &self.checker, None);
+            crate::phase_telemetry::set_phase(crate::phase_telemetry::PhaseId::Facts);
         }
         let mut analysis = self.checker.analysis_json(path);
+        if let Some(telemetry) = telemetry.as_mut() {
+            telemetry.close_phase(crate::phase_telemetry::PhaseId::Facts, &self.checker, None);
+            crate::phase_telemetry::set_phase(crate::phase_telemetry::PhaseId::Preflight);
+        }
         if let Some(object) = analysis.as_object_mut() {
             let inferred_type = object
                 .get("type")
@@ -660,7 +919,16 @@ impl CompilerSession {
                 .to_owned();
             let invalidation = serde_json::to_value(&*self.invalidation.borrow())
                 .expect("invalidation telemetry serialization failed");
-            let target_preflight = match self.close_program(path) {
+            let preflight_cache_hit =
+                telemetry.is_some() && self.closed_programs.borrow().contains_key(path);
+            let (preflight_result, preflight_timings) = if telemetry.is_some() {
+                let mut timings = PreflightTimings::default();
+                let result = self.close_program_inner(path, Some(&mut timings));
+                (result, Some(timings))
+            } else {
+                (self.close_program(path), None)
+            };
+            let target_preflight = match preflight_result {
                 Ok(_) => TargetPreflight {
                     supported: true,
                     code: None,
@@ -689,6 +957,21 @@ impl CompilerSession {
                 serde_json::to_value(target_preflight)
                     .expect("target preflight serialization failed"),
             );
+            if let Some(telemetry) = telemetry.as_mut() {
+                telemetry.close_preflight(
+                    &self.checker,
+                    Some(serde_json::json!({
+                        "closedProgramCacheHit": preflight_cache_hit,
+                    })),
+                    preflight_timings
+                        .as_ref()
+                        .expect("traced preflight timings"),
+                );
+            }
+        }
+        if let Some(telemetry) = telemetry.as_mut() {
+            telemetry.finish_ok(&self.checker);
+            telemetry.attach(&mut analysis);
         }
         analysis
     }
@@ -1227,24 +1510,58 @@ impl CompilerSession {
     }
 
     fn close_program(&self, path: &str) -> Result<Rc<ClosedProgram>, Diagnostic> {
-        self.begin_semantic_request(path)?;
+        self.close_program_inner(path, None)
+    }
+
+    /// Shared backend-closure path. `timings` is `Some` only on the traced
+    /// analysis path, where it receives the sequential sub-span walls; the
+    /// `None` path is behaviorally identical to the historical `close_program`.
+    fn close_program_inner(
+        &self,
+        path: &str,
+        mut timings: Option<&mut PreflightTimings>,
+    ) -> Result<Rc<ClosedProgram>, Diagnostic> {
+        // `boundary` stays `None` on the untraced path, where no clock is
+        // read at all.
+        let mut boundary = timings.is_some().then(crate::phase_telemetry::now_ms);
+        if let Err(diagnostic) = self.begin_semantic_request(path) {
+            if let Some(timings) = timings.as_mut() {
+                bank_preflight_span(&mut timings.reprepare_ms, &mut boundary);
+            }
+            return Err(diagnostic);
+        }
+        if let Some(timings) = timings.as_mut() {
+            bank_preflight_span(&mut timings.reprepare_ms, &mut boundary);
+        }
         if let Some(program) = self.closed_programs.borrow().get(path) {
             return Ok(program.clone());
         }
         let checked = self
             .checker
             .check(path)
-            .map_err(|diagnostic| diagnostic.at(path))?;
+            .map_err(|diagnostic| diagnostic.at(path));
+        if let Some(timings) = timings.as_mut() {
+            bank_preflight_span(&mut timings.check_ms, &mut boundary);
+        }
+        let checked = checked?;
         let runtime = crate::hir::elaborate(self.context.clone(), path, checked)
-            .map_err(|diagnostic| diagnostic.at(path))?;
-        let program = Rc::new(crate::backend::close(runtime).map_err(|message| {
+            .map_err(|diagnostic| diagnostic.at(path));
+        if let Some(timings) = timings.as_mut() {
+            bank_preflight_span(&mut timings.hir_ms, &mut boundary);
+        }
+        let runtime = runtime?;
+        let program = crate::backend::close(runtime).map_err(|message| {
             Diagnostic::new(
                 "BLOT_BACKEND_ERROR",
                 message,
                 crate::ast::Span { start: 0, end: 0 },
             )
             .at(path)
-        })?);
+        });
+        if let Some(timings) = timings.as_mut() {
+            bank_preflight_span(&mut timings.backend_ms, &mut boundary);
+        }
+        let program = Rc::new(program?);
         self.closed_programs
             .borrow_mut()
             .insert(path.to_owned(), program.clone());
@@ -5266,6 +5583,202 @@ mod tests {
 
         let unchanged = session.analyze_module("main.blot");
         assert_eq!(unchanged["work"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn traced_analysis_reports_phase_telemetry_without_changing_results() {
+        let source_text = "let identity = fn value => value\n\u{e000}return identity 1\u{e000}";
+        let mut traced = CompilerSession::default();
+        traced
+            .add_source("main.blot".to_owned(), source(source_text))
+            .expect("traced source should load");
+        traced
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("traced source should configure");
+        let mut plain = CompilerSession::default();
+        plain
+            .add_source("main.blot".to_owned(), source(source_text))
+            .expect("plain source should load");
+        plain
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("plain source should configure");
+
+        let analysis = traced.analyze_module_traced("main.blot");
+        assert_eq!(analysis["ok"], true);
+        let expected = plain.analyze_module("main.blot");
+        for key in ["type", "effects", "interfaceKey", "work", "targetPreflight"] {
+            assert_eq!(analysis[key], expected[key], "key {key} differs");
+        }
+        assert!(expected.get("phaseTelemetry").is_none());
+
+        let telemetry = &analysis["phaseTelemetry"];
+        assert_eq!(telemetry["schema"], 2);
+        assert!(
+            telemetry["clock"]
+                .as_str()
+                .is_some_and(|clock| clock.contains("now_ms")),
+            "guest clock must be named, got {}",
+            telemetry["clock"]
+        );
+        assert_eq!(telemetry["failedPhase"], serde_json::Value::Null);
+        let phases = telemetry["phases"].as_array().expect("phases array");
+        let names: Vec<&str> = phases
+            .iter()
+            .map(|phase| phase["name"].as_str().expect("phase name"))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "semantic-preparation",
+                "check",
+                "fact-materialization",
+                "target-preflight"
+            ]
+        );
+        // Every phase carries guest wall time plus charge-once sub-spans.
+        for phase in phases {
+            assert!(
+                phase["milliseconds"].as_f64().is_some_and(|ms| ms >= 0.0),
+                "phase {} lacks wall time: {phase}",
+                phase["name"]
+            );
+            let sub_spans = phase["subSpans"].as_array().expect("sub-spans array");
+            assert!(
+                sub_spans
+                    .iter()
+                    .all(|span| span["milliseconds"].as_f64().is_some_and(|ms| ms >= 0.0)),
+                "phase {} has a timeless sub-span: {phase}",
+                phase["name"]
+            );
+        }
+        let sub_names = |index: usize| -> Vec<&str> {
+            phases[index]["subSpans"]
+                .as_array()
+                .expect("sub-spans array")
+                .iter()
+                .map(|span| span["name"].as_str().expect("sub-span name"))
+                .collect()
+        };
+        for index in 0..3 {
+            assert_eq!(
+                sub_names(index),
+                [
+                    "eval",
+                    "conversion",
+                    "coverage",
+                    "ownership",
+                    "safety",
+                    "other"
+                ]
+            );
+        }
+        assert_eq!(
+            sub_names(3),
+            [
+                "re-prepare",
+                "check",
+                "hir-elaborate",
+                "backend-close",
+                "other"
+            ]
+        );
+        // Charge-once: disjoint children never exceed their phase wall.
+        for (index, phase) in phases.iter().enumerate() {
+            let wall = phase["milliseconds"].as_f64().expect("phase wall");
+            let sub_spans = phase["subSpans"].as_array().expect("sub-spans array");
+            let children: f64 = if index < 3 {
+                let conversion_outside = sub_spans[1]["detail"]["outsideEvalMs"]
+                    .as_f64()
+                    .expect("conversion split");
+                sub_spans[0]["milliseconds"].as_f64().expect("eval wall")
+                    + conversion_outside
+                    + sub_spans[2]["milliseconds"]
+                        .as_f64()
+                        .expect("coverage wall")
+                    + sub_spans[3]["milliseconds"]
+                        .as_f64()
+                        .expect("ownership wall")
+                    + sub_spans[4]["milliseconds"].as_f64().expect("safety wall")
+                    + sub_spans[5]["milliseconds"].as_f64().expect("other wall")
+            } else {
+                sub_spans
+                    .iter()
+                    .map(|span| span["milliseconds"].as_f64().expect("sub-span wall"))
+                    .sum()
+            };
+            assert!(
+                children <= wall + 0.5,
+                "phase {} over-charges: children {children} exceed wall {wall}",
+                phase["name"]
+            );
+        }
+        // Eval and structural counter sections are present and well-typed.
+        for key in [
+            "expressionCalls",
+            "bindingCalls",
+            "cacheHits",
+            "uniqueInputs",
+            "runs",
+            "steps",
+            "closureApplications",
+            "moduleApplications",
+            "conversionCalls",
+            "templateHits",
+            "reconstructionsAdmitted",
+        ] {
+            assert!(
+                telemetry["eval"][key].as_u64().is_some(),
+                "eval section lacks counter {key}: {}",
+                telemetry["eval"]
+            );
+        }
+        for key in [
+            "internHits",
+            "internMisses",
+            "sameTypeCalls",
+            "coverageCalls",
+            "ownershipCalls",
+            "safetyCalls",
+        ] {
+            assert!(
+                telemetry["structural"][key].as_u64().is_some(),
+                "structural section lacks counter {key}: {}",
+                telemetry["structural"]
+            );
+        }
+        // The nested request inside target preflight resets the arena-backed
+        // counters, so those clamp at zero and are reported, never wrapped.
+        let preflight_resets = phases[3]["counterResets"]
+            .as_array()
+            .expect("preflight resets");
+        assert!(preflight_resets.iter().any(|reset| reset == "typeNodes"));
+        assert!(preflight_resets.iter().any(|reset| reset == "typeInterns"));
+        assert_eq!(phases[3]["workDelta"]["typeNodes"], 0);
+        let request_resets = telemetry["requestCounterResets"]
+            .as_array()
+            .expect("request resets");
+        assert!(request_resets.iter().any(|reset| reset == "typeNodes"));
+        // Monotonic counters reconcile: phase deltas sum to requestWork.
+        for key in [
+            "constraints",
+            "settleVisits",
+            "freshenVisits",
+            "unionVisits",
+            "boundaryMaterializations",
+            "captureCandidates",
+            "capturesBridged",
+            "interfaceFieldsDemanded",
+        ] {
+            let sum: u64 = phases
+                .iter()
+                .map(|phase| phase["workDelta"][key].as_u64().expect("delta"))
+                .sum();
+            assert_eq!(
+                sum,
+                telemetry["requestWork"][key].as_u64().expect("request"),
+                "counter {key} does not reconcile"
+            );
+        }
     }
 
     #[test]
@@ -10809,6 +11322,155 @@ return { .pick = pick; }
     }
 
     #[test]
+    fn comptime_memo_results_are_shared_across_checker_entries() {
+        // Two bindings apply the same pure closure to the same argument.
+        // Each binding is its own checker evaluation, so a per-evaluation
+        // table would miss twice; the request-scoped table hits once.
+        const PATH: &str = "shared-comptime-call.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const f = fn x => @int.add (@int.mul x x) 1\n\u{e000}const a = f 21\n\u{e000}const b = f 21\n\u{e000}return (a, b)\u{e000}\n",
+                ),
+            )
+            .expect("shared-call source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("shared-call source should configure");
+
+        crate::eval::reset_comptime_call_cache_hits();
+        let checked = session.check_module(PATH);
+        assert_eq!(checked["ok"], true, "{checked}");
+        let cache_hits = crate::eval::comptime_call_cache_hits();
+        assert!(
+            cache_hits >= 1,
+            "the second `f 21` evaluation produced {cache_hits} comptime cache hits"
+        );
+        assert_eq!(session.evaluate_module(PATH)["display"], "(442, 442)");
+    }
+
+    #[test]
+    fn comptime_memo_results_do_not_survive_across_requests() {
+        // Editing the callee starts a new request with a fresh table: the
+        // re-check must observe the edited body, never a retained result.
+        const PATH: &str = "comptime-call-revision.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const f = fn x => @int.add x 1\n\u{e000}const a = f 10\n\u{e000}return a\u{e000}\n",
+                ),
+            )
+            .expect("initial source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("initial source should configure");
+        assert_eq!(session.evaluate_module(PATH)["display"], "11");
+
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const f = fn x => @int.add x 2\n\u{e000}const a = f 10\n\u{e000}return a\u{e000}\n",
+                ),
+            )
+            .expect("edited source should load");
+        assert_eq!(session.evaluate_module(PATH)["display"], "12");
+    }
+
+    #[test]
+    fn comptime_memo_never_shares_generative_effect_identities() {
+        // The same factory applied to the same data argument still mints a
+        // distinct effect per call: effect results cannot be memoized, so
+        // request-scoped sharing must not merge them.
+        const PATH: &str = "comptime-call-effect-identity.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const make = fn tag => @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const first = make 1\n\u{e000}const second = make 1\n\u{e000}return @type.equal first second\u{e000}\n",
+                ),
+            )
+            .expect("effect factory source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("effect factory source should configure");
+
+        assert_eq!(session.evaluate_module(PATH)["display"], "#False");
+    }
+
+    #[test]
+    fn comptime_memo_duplicate_calls_scale_with_hits_not_reevaluation() {
+        // Eight bindings apply the same pure closure to the same argument.
+        // Request-scoped sharing evaluates once and hits seven times, so
+        // duplicate-call work stays flat as duplicates grow; a
+        // per-evaluation table would re-evaluate per binding and record no
+        // cross-binding hit. Deterministic: no timing, only the memo counter.
+        const PATH: &str = "comptime-call-duplicate-scale.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const f = fn x => @int.add (@int.mul x x) 1\n\u{e000}const a0 = f 21\n\u{e000}const a1 = f 21\n\u{e000}const a2 = f 21\n\u{e000}const a3 = f 21\n\u{e000}const a4 = f 21\n\u{e000}const a5 = f 21\n\u{e000}const a6 = f 21\n\u{e000}const a7 = f 21\n\u{e000}return (a0, a1, a2, a3, a4, a5, a6, a7)\u{e000}\n",
+                ),
+            )
+            .expect("duplicate-call source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("duplicate-call source should configure");
+
+        crate::eval::reset_comptime_call_cache_hits();
+        let checked = session.check_module(PATH);
+        assert_eq!(checked["ok"], true, "{checked}");
+        let cache_hits = crate::eval::comptime_call_cache_hits();
+        assert!(
+            cache_hits >= 7,
+            "eight identical `f 21` evaluations produced {cache_hits} comptime cache hits, expected at least 7"
+        );
+        assert_eq!(
+            session.evaluate_module(PATH)["display"],
+            "(442, 442, 442, 442, 442, 442, 442, 442)"
+        );
+    }
+
+    #[test]
+    fn comptime_memo_sharing_is_stable_across_fresh_sessions() {
+        // The same source checked in two fresh sessions must produce the
+        // same answers and the same memo-sharing behavior: request-scoped
+        // caches must not leak anything across requests or restarts.
+        const PATH: &str = "comptime-call-restart-stability.blot";
+        const SOURCE: &str = "const f = fn x => @int.add (@int.mul x x) 1\n\u{e000}const a = f 21\n\u{e000}const b = f 21\n\u{e000}return (a, b)\u{e000}\n";
+        let mut displays = Vec::new();
+        let mut hits = Vec::new();
+        for _ in 0..2 {
+            let mut session = CompilerSession::default();
+            session
+                .add_source(PATH.to_owned(), source(SOURCE))
+                .expect("restart-stability source should load");
+            session
+                .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+                .expect("restart-stability source should configure");
+            crate::eval::reset_comptime_call_cache_hits();
+            let checked = session.check_module(PATH);
+            assert_eq!(checked["ok"], true, "{checked}");
+            hits.push(crate::eval::comptime_call_cache_hits());
+            displays.push(session.evaluate_module(PATH)["display"].clone());
+        }
+        assert_eq!(displays[0], displays[1]);
+        assert_eq!(displays[0], "(442, 442)");
+        assert_eq!(hits[0], hits[1], "memo hits differed across fresh sessions");
+        assert!(
+            hits[0] >= 1,
+            "expected cross-binding sharing in both sessions"
+        );
+    }
+
+    #[test]
     fn demand_driven_boolean_case_prepares_and_emits_wasm() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
@@ -11680,6 +12342,306 @@ return ()
             session
                 .compile_module("main.blot")
                 .expect("captured elements must emit Wasm");
+        });
+    }
+
+    #[test]
+    fn nested_all_trapping_switch_terminates_its_abandoned_join() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(
+                        r#"open import "blot:prelude"
+let go = fn (outer :: Option Int, inner :: Option Int) => do:
+  let value = case outer of
+    #Some x => case inner of
+      #Some y => @panic "a"
+      #None => @panic "b"
+    #None => 0
+  return value
+return { .go; }
+"#,
+                    ),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("a diverging switch arm must stage");
+        });
+    }
+
+    #[test]
+    fn nested_all_trapping_boolean_case_terminates_its_abandoned_join() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(
+                        r#"open import "blot:prelude"
+let go = fn (outer :: Option Int, flag :: Bool) => do:
+  let value = case outer of
+    #Some x => case flag of
+      #True => @panic "a"
+      #False => @panic "b"
+    #None => 0
+  return value
+return { .go; }
+"#,
+                    ),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("a diverging conditional arm must stage");
+        });
+    }
+
+    #[test]
+    fn effect_metadata_survives_row_inference() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            // The operation is extracted before use, severing any lexical path
+            // from the system back to the declaration; only the effect
+            // identity carries the owner spec into the inferred row.
+            let program = concat!(
+                "open import \"blot:prelude\"\n",
+                "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n",
+                "const Tagged =\n",
+                "  @effect.attach_meta Fault \"owner\" { .tag = \"fault-owner\"; }\n",
+                "const op = Fault.raise\n",
+                "const work = fn () => do:\n",
+                "  use _ <- op ()\n",
+                "  return 0\n",
+                "const row = case @type.reflect (@type.of work) of\n",
+                "  #Arrow arrow => arrow.effects\n",
+                "  _ => @fail \"a system must be a function\"\n",
+                "const has_owner = fn eff => case @effect.meta eff \"owner\" of\n",
+                "  #Some spec => spec.tag == \"fault-owner\"\n",
+                "  #None => False\n",
+                "const has_nope = fn eff => case @effect.meta eff \"nope\" of\n",
+                "  #Some _ => True\n",
+                "  #None => False\n",
+                "const found = any ((&row), has_owner)\n",
+                "const missing = any ((&row), has_nope)\n",
+                "const _assert = do:\n",
+                "  if found:\n",
+                "    if missing:\n",
+                "      return @fail \"unexpected metadata\"\n",
+                "    else:\n",
+                "      return 0\n",
+                "  else:\n",
+                "    return @fail \"metadata lost through row\"\n",
+                "return fn () => 0\n",
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source("main.blot".to_owned(), source(program))
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            drop(session);
+        });
+    }
+
+    #[test]
+    fn effect_metadata_conflicts_across_modules() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let dep = concat!(
+                "open import \"blot:prelude\"\n",
+                "const Fault =\n",
+                "  @effect.shared \"meta-conflict\" { .raise = @type.unit -> @type.unit; }\n",
+                "const Tagged = @effect.attach_meta Fault \"owner\" { .tag = \"dep\"; }\n",
+                "return { .Fault; }\n",
+            );
+            let base = concat!(
+                "open import \"blot:prelude\"\n",
+                "const Dep = import \"dep\"\n",
+                "const Fault =\n",
+                "  @effect.shared \"meta-conflict\" { .raise = @type.unit -> @type.unit; }\n",
+                "CLAIM\n",
+                "return fn () => 0\n",
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source("dep.blot".to_owned(), source(dep))
+                .expect("dep source should load");
+            session
+                .configure_module(
+                    "dep.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("dep source should configure");
+            let claiming = base.replace(
+                "CLAIM",
+                "const Claimed = @effect.attach_meta Fault \"owner\" { .tag = \"main\"; }",
+            );
+            session
+                .add_source("main.blot".to_owned(), source(&claiming))
+                .expect("claiming source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        ("dep".to_owned(), "dep.blot".to_owned()),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("claiming source should configure");
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], false, "{checked}");
+            assert_eq!(
+                checked["diagnostic"]["code"], "BLOT_EFFECT_META_CONFLICT",
+                "{checked}"
+            );
+            let released = base.replace("CLAIM", "const Unused = 0");
+            session
+                .add_source("main.blot".to_owned(), source(&released))
+                .expect("released source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        ("dep".to_owned(), "dep.blot".to_owned()),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("released source should configure");
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            drop(session);
+        });
+    }
+
+    #[test]
+    fn speculative_nested_specialization_does_not_replay_stale_analyses() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let dep = concat!(
+                "open import \"blot:prelude\"\n",
+                "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n",
+                "const good =\n",
+                "  {\n",
+                "    .raise = fn ((), !resume) => do:\n",
+                "      use r <- resume ()\n",
+                "      return r\n",
+                "    ;\n",
+                "  }\n",
+                "const defaults = { .position = 0.0; .scale = 1.0; }\n",
+                "const wrap = fn thunk => thunk |> @handle (Fault, good)\n",
+                "const other = fn thunk => thunk |> @handle (Fault, good)\n",
+                "return { .wrap; .other; .defaults; .Fault; }\n",
+            );
+            // `inner` wraps `Shape.update`, so checking it defers the patch
+            // requirement; `outer` forces a nested specialization probe of
+            // `inner`, which reaches the dependency's handler while the
+            // request served the dependency from cache. The probe must not
+            // replay ownership over those fragmentary facts.
+            let base = concat!(
+                "open import \"blot:prelude\"\n",
+                "const Dep = import \"dep\"\n",
+                "const prog = fn () => do:\n",
+                "  use _ <- Dep.Fault.raise ()\n",
+                "  return MARK\n",
+                "const inner = fn partial => do:\n",
+                "  use _ <- Dep.wrap prog\n",
+                "  return Shape.update (Dep.defaults, partial)\n",
+                "const outer = fn f => f { .position = 1.0; }\n",
+                "return outer inner\n",
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source("dep.blot".to_owned(), source(dep))
+                .expect("dep source should load");
+            session
+                .configure_module(
+                    "dep.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("dep source should configure");
+            for mark in [0, 1] {
+                let edited = base.replace("MARK", &mark.to_string());
+                session
+                    .add_source("main.blot".to_owned(), source(&edited))
+                    .expect("edited source should load");
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([
+                            ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                            ("dep".to_owned(), "dep.blot".to_owned()),
+                        ]),
+                        BTreeMap::new(),
+                    )
+                    .expect("edited source should configure");
+                let checked = session.check_module("main.blot");
+                assert_eq!(checked["ok"], true, "{checked}");
+            }
+            drop(session);
         });
     }
 

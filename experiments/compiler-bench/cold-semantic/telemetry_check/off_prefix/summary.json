@@ -1,0 +1,133 @@
+{
+  "schema": 1,
+  "samplesPerFixturePerRun": 1,
+  "runs": 1,
+  "telemetry": "off",
+  "provenanceBefore": {
+    "commit": "f5e0957db3f69a09022bb295c383454d05444568",
+    "worktreeStatus": "M ../../../CHANGELOG.md\n M ../../../LANGUAGE.md\n M ../../../STDLIB.md\n M ../../../compiler/src/host_transport.rs\n M ../../../compiler/src/lower.rs\n M ../../../compiler/src/ownership.rs\n M ../../../compiler/src/session.rs\n M ../../../compiler/src/typecheck.rs\n M ../../../examples/expected/tags.txt\n M ../../../examples/tags.blot\n M ../../../generated/compiler/prelude.snapshot\n M ../../../generated/language-health.json\n M ../../../src/compiler.ts\n M ../../../src/compiler/session.ts\n M ../../../src/compiler/wasm.ts\n M ../../../src/diagnostic_codes.generated.ts\n M ../../../src/prelude/prelude.blot\n?? ./",
+    "scopedHostSha256": "6875e14aefd09d21aad51678f941ff9c65705e03df3610c55acf6c18978a950b",
+    "denoExecutableSha256": "bceb5b6a6239b0b010418406d8c77a508f67cf4337d94288f1c19fe71304aab0",
+    "denoVersion": "2.9.6 (v8 15.0.245.2-rusty)",
+    "nodeVersion": null,
+    "platform": "linux",
+    "arch": "x86_64",
+    "fixtureSha256": {
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/prefix.blot": "009d4e05d86b3b437f036ee7573656506bc72141186c9f58214079908faa168e"
+    },
+    "harnessSha256": {
+      "generate.ts": "47eb5c4275cf480121eef534003f3b129af38b07bc6b1cbb8ff79160c65c5827",
+      "sample.ts": "c2b6f4cab7305429383aab30d4411f52ed928b65687b91203f015be9695840d1",
+      "run.ts": "f8fe6c2642c3acc1abab4baf8641fcb711bc2d8fe7f1edbb3dbc1524691bc76c",
+      "framework.blot": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15"
+    },
+    "compilerArtifactSha256": null,
+    "compilerManifestSha256": null,
+    "preludeSha256": null,
+    "invocation": [
+      "run.ts",
+      "--fixtures=/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/prefix.blot",
+      "--samples=1",
+      "--runs=1",
+      "--out=telemetry_check/off_prefix",
+      "--telemetry=off"
+    ],
+    "samplePath": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/sample.ts",
+    "denoPath": "/home/mewhhaha/.deno/bin/deno"
+  },
+  "provenanceAfter": {
+    "commit": "f5e0957db3f69a09022bb295c383454d05444568",
+    "worktreeStatus": "M ../../../CHANGELOG.md\n M ../../../LANGUAGE.md\n M ../../../STDLIB.md\n M ../../../compiler/src/host_transport.rs\n M ../../../compiler/src/lower.rs\n M ../../../compiler/src/ownership.rs\n M ../../../compiler/src/session.rs\n M ../../../compiler/src/typecheck.rs\n M ../../../examples/expected/tags.txt\n M ../../../examples/tags.blot\n M ../../../generated/compiler/prelude.snapshot\n M ../../../generated/language-health.json\n M ../../../src/compiler.ts\n M ../../../src/compiler/session.ts\n M ../../../src/compiler/wasm.ts\n M ../../../src/diagnostic_codes.generated.ts\n M ../../../src/prelude/prelude.blot\n?? ./",
+    "scopedHostSha256": "6875e14aefd09d21aad51678f941ff9c65705e03df3610c55acf6c18978a950b",
+    "denoExecutableSha256": "bceb5b6a6239b0b010418406d8c77a508f67cf4337d94288f1c19fe71304aab0",
+    "denoVersion": "2.9.6 (v8 15.0.245.2-rusty)",
+    "nodeVersion": null,
+    "platform": "linux",
+    "arch": "x86_64",
+    "fixtureSha256": {
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/prefix.blot": "009d4e05d86b3b437f036ee7573656506bc72141186c9f58214079908faa168e"
+    },
+    "harnessSha256": {
+      "generate.ts": "47eb5c4275cf480121eef534003f3b129af38b07bc6b1cbb8ff79160c65c5827",
+      "sample.ts": "c2b6f4cab7305429383aab30d4411f52ed928b65687b91203f015be9695840d1",
+      "run.ts": "f8fe6c2642c3acc1abab4baf8641fcb711bc2d8fe7f1edbb3dbc1524691bc76c",
+      "framework.blot": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15"
+    },
+    "compilerArtifactSha256": null,
+    "compilerManifestSha256": null,
+    "preludeSha256": null,
+    "invocation": [
+      "run.ts",
+      "--fixtures=/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/prefix.blot",
+      "--samples=1",
+      "--runs=1",
+      "--out=telemetry_check/off_prefix",
+      "--telemetry=off"
+    ],
+    "samplePath": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/sample.ts",
+    "denoPath": "/home/mewhhaha/.deno/bin/deno"
+  },
+  "provenanceStable": true,
+  "fixtures": [
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/prefix.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 1,
+            "p50": 615.1959019999999,
+            "mad": 0,
+            "p95": 615.1959019999999,
+            "min": 615.1959019999999,
+            "max": 615.1959019999999
+          },
+          "createMilliseconds": {
+            "count": 1,
+            "p50": 78.87312700000001,
+            "mad": 0,
+            "p95": 78.87312700000001,
+            "min": 78.87312700000001,
+            "max": 78.87312700000001
+          },
+          "wallMilliseconds": {
+            "count": 1,
+            "p50": 765.916799,
+            "mad": 0,
+            "p95": 765.916799,
+            "min": 765.916799,
+            "max": 765.916799
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 1,
+          "p50": 615.1959019999999,
+          "mad": 0,
+          "p95": 615.1959019999999,
+          "min": 615.1959019999999,
+          "max": 615.1959019999999
+        },
+        "createMilliseconds": {
+          "count": 1,
+          "p50": 78.87312700000001,
+          "mad": 0,
+          "p95": 78.87312700000001,
+          "min": 78.87312700000001,
+          "max": 78.87312700000001
+        },
+        "wallMilliseconds": {
+          "count": 1,
+          "p50": 765.916799,
+          "mad": 0,
+          "p95": 765.916799,
+          "min": 765.916799,
+          "max": 765.916799
+        }
+      }
+    }
+  ]
+}

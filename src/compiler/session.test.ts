@@ -1018,3 +1018,96 @@ test(
     }
   },
 );
+
+test("phase telemetry stays off unless requested", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const analysis = await compiler.analyze("examples/minimal.blot");
+    assert.equal("phaseTelemetry" in analysis, false);
+    assert.equal(compiler.takePhaseTelemetry(), null);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("opt-in phase telemetry reports host spans and guest phases", async () => {
+  const compiler = await Compiler.create({ phaseTelemetry: true });
+  try {
+    const analysis = await compiler.analyze("examples/minimal.blot");
+    assert.equal(analysis.type, "42");
+
+    const telemetry = compiler.takePhaseTelemetry();
+    assert.ok(telemetry !== null);
+    assert.equal(telemetry.schema, 1);
+    assert.equal(telemetry.calls.length, 1);
+    const [call] = telemetry.calls;
+    assert.equal(call.operation, "analyze");
+    assert.deepEqual(
+      call.spans.map((span) => span.name),
+      [
+        "load-workspace-revision",
+        "sync-loaded",
+        "guest-call",
+        "decode-response",
+      ],
+    );
+    const spanTotal = call.spans.reduce(
+      (sum, span) => sum + span.milliseconds,
+      0,
+    );
+    assert.ok(call.totalMilliseconds >= spanTotal);
+
+    const guest = analysis.phaseTelemetry;
+    assert.ok(guest !== undefined && guest !== null);
+    assert.equal(guest.schema, 2);
+    assert.ok(
+      typeof guest.clock === "string" && guest.clock.includes("now_ms"),
+    );
+    assert.deepEqual(
+      guest.phases.map((phase) => phase.name),
+      [
+        "semantic-preparation",
+        "check",
+        "fact-materialization",
+        "target-preflight",
+      ],
+    );
+    for (const phase of guest.phases) {
+      assert.ok(
+        typeof phase.milliseconds === "number" && phase.milliseconds >= 0,
+        `phase ${phase.name} lacks guest wall time`,
+      );
+      assert.ok(
+        Array.isArray(phase.subSpans) && phase.subSpans.length > 0,
+        `phase ${phase.name} lacks sub-spans`,
+      );
+    }
+    assert.deepEqual(
+      guest.phases[0].subSpans?.map((span) => span.name),
+      ["eval", "conversion", "coverage", "ownership", "safety", "other"],
+    );
+    assert.deepEqual(
+      guest.phases[3].subSpans?.map((span) => span.name),
+      ["re-prepare", "check", "hir-elaborate", "backend-close", "other"],
+    );
+    // Guest phase walls explain the host guest-call span within clock slack.
+    const guestTotal = guest.phases.reduce(
+      (sum, phase) => sum + (phase.milliseconds ?? 0),
+      0,
+    );
+    const guestCall = call.spans.find((span) => span.name === "guest-call");
+    assert.ok(guestCall !== undefined);
+    assert.ok(
+      guestTotal <= guestCall.milliseconds + 5,
+      `guest walls ${guestTotal} exceed host guest-call ${guestCall.milliseconds}`,
+    );
+    assert.ok(guest.eval !== undefined && guest.eval !== null);
+    assert.ok(guest.structural !== undefined && guest.structural !== null);
+    assert.ok(guest.requestWork !== null);
+    assert.equal(guest.failedPhase, null);
+
+    assert.equal(compiler.takePhaseTelemetry()?.calls.length, 0);
+  } finally {
+    compiler.destroy();
+  }
+});

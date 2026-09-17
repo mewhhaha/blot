@@ -1,0 +1,565 @@
+{
+  "schema": 1,
+  "samplesPerFixturePerRun": 15,
+  "runs": 1,
+  "telemetry": "off",
+  "provenanceBefore": {
+    "commit": "f5e0957db3f69a09022bb295c383454d05444568",
+    "worktreeStatus": "M CHANGELOG.md\n M LANGUAGE.md\n M STDLIB.md\n M compiler/src/eval.rs\n M compiler/src/host_transport.rs\n M compiler/src/lower.rs\n M compiler/src/ownership.rs\n M compiler/src/session.rs\n M compiler/src/typecheck.rs\n M examples.test.ts\n M examples/expected/tags.txt\n M examples/tags.blot\n M generated/compiler/prelude.snapshot\n M generated/language-health.json\n M src/compiler.ts\n M src/compiler/session.test.ts\n M src/compiler/session.ts\n M src/compiler/wasm.ts\n M src/diagnostic_codes.generated.ts\n M src/prelude/prelude.blot\n?? examples/rejected/semantics/shape_update_deferred_through_wrapper.blot\n?? experiments/compiler-bench/cold-semantic/",
+    "scopedHostSha256": "789110fbf2a992319d88149c71f1fe075601b02edb77784111e8ad34a6606ce4",
+    "denoExecutableSha256": "bceb5b6a6239b0b010418406d8c77a508f67cf4337d94288f1c19fe71304aab0",
+    "denoVersion": "2.9.6 (v8 15.0.245.2-rusty)",
+    "nodeVersion": null,
+    "platform": "linux",
+    "arch": "x86_64",
+    "fixtureSha256": {
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/build_only.blot": "d0259ad3eae69402ab805412aa5063d3bea14239641468698d1621c18c5ec606",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/schedule_only.blot": "88074dbc745788c0ccc1f65691f56d103dcd17968d2654e4880601b47802fd34",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/union_only.blot": "5c06ec1aec763edf18b36a212b4faa534967ad4a5cfec9052eb1ae8043d7ee45",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_stages1.blot": "2de9a6a39afb1f89b4ff4fb2bdeb8bead542847e00b29818c98268db1e1d8320",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_c8s8.blot": "9f52f32c58437621a57c92f3581932db29c4b0e5ee396d616559022109e6cb11",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_c2s2.blot": "f78cf4f2a0dd363a3873eadc365469d255abaa64b2b2f6c4120a34c50f46f5e1",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/prefix.blot": "009d4e05d86b3b437f036ee7573656506bc72141186c9f58214079908faa168e",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/full.blot": "8ec9d28a1c8c6b9bd4a345881e91a0c2c6b55f147f5e535d217459289d324054"
+    },
+    "harnessSha256": {
+      "generate.ts": "47eb5c4275cf480121eef534003f3b129af38b07bc6b1cbb8ff79160c65c5827",
+      "sample.ts": "30d7da57a0d6a9b3aae771f15e82e4e3b639c650850256672d37b358bd79cb1f",
+      "run.ts": "8e6f78dc78e7feb1fca4f3f5b564a5eab2a48ac5bbb994f53986e2c6bb67d122",
+      "framework.blot": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15"
+    },
+    "compilerArtifactSha256": "9f73b799bbc6fec1f59d66f119d48d7a2d26e77bfcef6f16ea494ef125cd4746",
+    "compilerManifestSha256": "95284b457cd6a203ad957510e5812ed9caae7b3203cae93c7b342435b771c12b",
+    "preludeSha256": "ecb5fc95e977bbc504fbad59fe33d148a74ac6fee462d013246e036b094ac13d",
+    "invocation": [
+      "run.ts",
+      "--fixtures=/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/build_only.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/schedule_only.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/union_only.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_stages1.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_c8s8.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_c2s2.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/prefix.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/full.blot",
+      "--samples=15",
+      "--runs=1",
+      "--out=/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/baseline/clean2"
+    ],
+    "samplePath": "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/sample.ts",
+    "denoPath": "/home/mewhhaha/.deno/bin/deno"
+  },
+  "provenanceAfter": {
+    "commit": "f5e0957db3f69a09022bb295c383454d05444568",
+    "worktreeStatus": "M CHANGELOG.md\n M LANGUAGE.md\n M STDLIB.md\n M compiler/src/eval.rs\n M compiler/src/host_transport.rs\n M compiler/src/lower.rs\n M compiler/src/ownership.rs\n M compiler/src/session.rs\n M compiler/src/typecheck.rs\n M examples.test.ts\n M examples/expected/tags.txt\n M examples/tags.blot\n M generated/compiler/prelude.snapshot\n M generated/language-health.json\n M src/compiler.ts\n M src/compiler/session.test.ts\n M src/compiler/session.ts\n M src/compiler/wasm.ts\n M src/diagnostic_codes.generated.ts\n M src/prelude/prelude.blot\n?? examples/rejected/semantics/shape_update_deferred_through_wrapper.blot\n?? experiments/compiler-bench/cold-semantic/",
+    "scopedHostSha256": "789110fbf2a992319d88149c71f1fe075601b02edb77784111e8ad34a6606ce4",
+    "denoExecutableSha256": "bceb5b6a6239b0b010418406d8c77a508f67cf4337d94288f1c19fe71304aab0",
+    "denoVersion": "2.9.6 (v8 15.0.245.2-rusty)",
+    "nodeVersion": null,
+    "platform": "linux",
+    "arch": "x86_64",
+    "fixtureSha256": {
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/build_only.blot": "d0259ad3eae69402ab805412aa5063d3bea14239641468698d1621c18c5ec606",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/schedule_only.blot": "88074dbc745788c0ccc1f65691f56d103dcd17968d2654e4880601b47802fd34",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/union_only.blot": "5c06ec1aec763edf18b36a212b4faa534967ad4a5cfec9052eb1ae8043d7ee45",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_stages1.blot": "2de9a6a39afb1f89b4ff4fb2bdeb8bead542847e00b29818c98268db1e1d8320",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_c8s8.blot": "9f52f32c58437621a57c92f3581932db29c4b0e5ee396d616559022109e6cb11",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_c2s2.blot": "f78cf4f2a0dd363a3873eadc365469d255abaa64b2b2f6c4120a34c50f46f5e1",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/prefix.blot": "009d4e05d86b3b437f036ee7573656506bc72141186c9f58214079908faa168e",
+      "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/full.blot": "8ec9d28a1c8c6b9bd4a345881e91a0c2c6b55f147f5e535d217459289d324054"
+    },
+    "harnessSha256": {
+      "generate.ts": "47eb5c4275cf480121eef534003f3b129af38b07bc6b1cbb8ff79160c65c5827",
+      "sample.ts": "30d7da57a0d6a9b3aae771f15e82e4e3b639c650850256672d37b358bd79cb1f",
+      "run.ts": "8e6f78dc78e7feb1fca4f3f5b564a5eab2a48ac5bbb994f53986e2c6bb67d122",
+      "framework.blot": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15"
+    },
+    "compilerArtifactSha256": "9f73b799bbc6fec1f59d66f119d48d7a2d26e77bfcef6f16ea494ef125cd4746",
+    "compilerManifestSha256": "95284b457cd6a203ad957510e5812ed9caae7b3203cae93c7b342435b771c12b",
+    "preludeSha256": "ecb5fc95e977bbc504fbad59fe33d148a74ac6fee462d013246e036b094ac13d",
+    "invocation": [
+      "run.ts",
+      "--fixtures=/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/build_only.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/schedule_only.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/union_only.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_stages1.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_c8s8.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_c2s2.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/prefix.blot,/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/full.blot",
+      "--samples=15",
+      "--runs=1",
+      "--out=/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/baseline/clean2"
+    ],
+    "samplePath": "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/sample.ts",
+    "denoPath": "/home/mewhhaha/.deno/bin/deno"
+  },
+  "provenanceStable": true,
+  "fixtures": [
+    {
+      "fixture": "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/build_only.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 1168.27659,
+            "mad": 11.63567699999976,
+            "p95": 3245.232325,
+            "min": 1123.625949,
+            "max": 3245.232325
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 78.724958,
+            "mad": 1.4576279999999997,
+            "p95": 87.32104799999999,
+            "min": 76.970541,
+            "max": 87.32104799999999
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 1327.7555160000338,
+            "mad": 23.640586999972584,
+            "p95": 3620.7681199999934,
+            "min": 1284.4559489999992,
+            "max": 3620.7681199999934
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 1168.27659,
+          "mad": 11.63567699999976,
+          "p95": 3245.232325,
+          "min": 1123.625949,
+          "max": 3245.232325
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 78.724958,
+          "mad": 1.4576279999999997,
+          "p95": 87.32104799999999,
+          "min": 76.970541,
+          "max": 87.32104799999999
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 1327.7555160000338,
+          "mad": 23.640586999972584,
+          "p95": 3620.7681199999934,
+          "min": 1284.4559489999992,
+          "max": 3620.7681199999934
+        }
+      }
+    },
+    {
+      "fixture": "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/schedule_only.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 4273.092439,
+            "mad": 82.31136900000001,
+            "p95": 13572.924638,
+            "min": 4147.643587,
+            "max": 13572.924638
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 79.44663700000001,
+            "mad": 1.5344840000000204,
+            "p95": 639.557767,
+            "min": 76.375712,
+            "max": 639.557767
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 4427.185559000005,
+            "mad": 90.4442380000255,
+            "p95": 14782.882341000004,
+            "min": 4298.887516000001,
+            "max": 14782.882341000004
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 4273.092439,
+          "mad": 82.31136900000001,
+          "p95": 13572.924638,
+          "min": 4147.643587,
+          "max": 13572.924638
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 79.44663700000001,
+          "mad": 1.5344840000000204,
+          "p95": 639.557767,
+          "min": 76.375712,
+          "max": 639.557767
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 4427.185559000005,
+          "mad": 90.4442380000255,
+          "p95": 14782.882341000004,
+          "min": 4298.887516000001,
+          "max": 14782.882341000004
+        }
+      }
+    },
+    {
+      "fixture": "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/union_only.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 1169.884857,
+            "mad": 28.588130999999976,
+            "p95": 4703.182987,
+            "min": 1132.953393,
+            "max": 4703.182987
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 80.30061,
+            "mad": 3.2881240000000105,
+            "p95": 655.050785,
+            "min": 76.098034,
+            "max": 655.050785
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 1329.6298160000006,
+            "mad": 33.60917100001825,
+            "p95": 5665.111961999995,
+            "min": 1291.3330279999936,
+            "max": 5665.111961999995
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 1169.884857,
+          "mad": 28.588130999999976,
+          "p95": 4703.182987,
+          "min": 1132.953393,
+          "max": 4703.182987
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 80.30061,
+          "mad": 3.2881240000000105,
+          "p95": 655.050785,
+          "min": 76.098034,
+          "max": 655.050785
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 1329.6298160000006,
+          "mad": 33.60917100001825,
+          "p95": 5665.111961999995,
+          "min": 1291.3330279999936,
+          "max": 5665.111961999995
+        }
+      }
+    },
+    {
+      "fixture": "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_stages1.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 5603.15185,
+            "mad": 117.43192799999997,
+            "p95": 14607.308924,
+            "min": 5389.639389,
+            "max": 14607.308924
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 78.832145,
+            "mad": 2.032239000000004,
+            "p95": 662.556443,
+            "min": 76.14035,
+            "max": 662.556443
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 5771.416139999987,
+            "mad": 122.35354300000472,
+            "p95": 15994.759408000013,
+            "min": 5551.263671000022,
+            "max": 15994.759408000013
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 5603.15185,
+          "mad": 117.43192799999997,
+          "p95": 14607.308924,
+          "min": 5389.639389,
+          "max": 14607.308924
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 78.832145,
+          "mad": 2.032239000000004,
+          "p95": 662.556443,
+          "min": 76.14035,
+          "max": 662.556443
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 5771.416139999987,
+          "mad": 122.35354300000472,
+          "p95": 15994.759408000013,
+          "min": 5551.263671000022,
+          "max": 15994.759408000013
+        }
+      }
+    },
+    {
+      "fixture": "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_c8s8.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 7374.175165000001,
+            "mad": 140.03070499999922,
+            "p95": 14587.210897,
+            "min": 7196.8373520000005,
+            "max": 14587.210897
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 81.19152299999999,
+            "mad": 3.577564999999993,
+            "p95": 412.684517,
+            "min": 76.086219,
+            "max": 412.684517
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 7540.03924100002,
+            "mad": 148.97629199997755,
+            "p95": 15189.376932999992,
+            "min": 7362.737079999992,
+            "max": 15189.376932999992
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 7374.175165000001,
+          "mad": 140.03070499999922,
+          "p95": 14587.210897,
+          "min": 7196.8373520000005,
+          "max": 14587.210897
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 81.19152299999999,
+          "mad": 3.577564999999993,
+          "p95": 412.684517,
+          "min": 76.086219,
+          "max": 412.684517
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 7540.03924100002,
+          "mad": 148.97629199997755,
+          "p95": 15189.376932999992,
+          "min": 7362.737079999992,
+          "max": 15189.376932999992
+        }
+      }
+    },
+    {
+      "fixture": "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/controls/full_c2s2.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 939.531756,
+            "mad": 37.865587000000005,
+            "p95": 1126.4048119999998,
+            "min": 882.5035230000001,
+            "max": 1126.4048119999998
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 80.02010200000001,
+            "mad": 2.7132229999999993,
+            "p95": 98.443047,
+            "min": 76.89385300000001,
+            "max": 98.443047
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 1098.3898659999832,
+            "mad": 42.97167599998647,
+            "p95": 1299.3237110000337,
+            "min": 1035.53744,
+            "max": 1299.3237110000337
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 939.531756,
+          "mad": 37.865587000000005,
+          "p95": 1126.4048119999998,
+          "min": 882.5035230000001,
+          "max": 1126.4048119999998
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 80.02010200000001,
+          "mad": 2.7132229999999993,
+          "p95": 98.443047,
+          "min": 76.89385300000001,
+          "max": 98.443047
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 1098.3898659999832,
+          "mad": 42.97167599998647,
+          "p95": 1299.3237110000337,
+          "min": 1035.53744,
+          "max": 1299.3237110000337
+        }
+      }
+    },
+    {
+      "fixture": "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/prefix.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 649.413433,
+            "mad": 22.016073000000006,
+            "p95": 801.282166,
+            "min": 614.8117110000001,
+            "max": 801.282166
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 81.555547,
+            "mad": 3.097720999999993,
+            "p95": 92.33683300000001,
+            "min": 76.547748,
+            "max": 92.33683300000001
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 808.8002360000391,
+            "mad": 30.050303000040003,
+            "p95": 975.7658210000372,
+            "min": 769.264307999998,
+            "max": 975.7658210000372
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 649.413433,
+          "mad": 22.016073000000006,
+          "p95": 801.282166,
+          "min": 614.8117110000001,
+          "max": 801.282166
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 81.555547,
+          "mad": 3.097720999999993,
+          "p95": 92.33683300000001,
+          "min": 76.547748,
+          "max": 92.33683300000001
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 808.8002360000391,
+          "mad": 30.050303000040003,
+          "p95": 975.7658210000372,
+          "min": 769.264307999998,
+          "max": 975.7658210000372
+        }
+      }
+    },
+    {
+      "fixture": "/tmp/blot-cold-a3/experiments/compiler-bench/cold-semantic/full.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 15,
+            "p50": 7123.764646,
+            "mad": 133.11765099999957,
+            "p95": 8239.558418,
+            "min": 6935.254491,
+            "max": 8239.558418
+          },
+          "createMilliseconds": {
+            "count": 15,
+            "p50": 80.101132,
+            "mad": 2.6938450000000103,
+            "p95": 91.28118400000001,
+            "min": 75.98440199999999,
+            "max": 91.28118400000001
+          },
+          "wallMilliseconds": {
+            "count": 15,
+            "p50": 7297.896737000032,
+            "mad": 133.5307310000353,
+            "p95": 8429.85506000003,
+            "min": 7098.610456999999,
+            "max": 8429.85506000003
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 15,
+          "p50": 7123.764646,
+          "mad": 133.11765099999957,
+          "p95": 8239.558418,
+          "min": 6935.254491,
+          "max": 8239.558418
+        },
+        "createMilliseconds": {
+          "count": 15,
+          "p50": 80.101132,
+          "mad": 2.6938450000000103,
+          "p95": 91.28118400000001,
+          "min": 75.98440199999999,
+          "max": 91.28118400000001
+        },
+        "wallMilliseconds": {
+          "count": 15,
+          "p50": 7297.896737000032,
+          "mad": 133.5307310000353,
+          "p95": 8429.85506000003,
+          "min": 7098.610456999999,
+          "max": 8429.85506000003
+        }
+      }
+    }
+  ]
+}

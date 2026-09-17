@@ -393,6 +393,106 @@ export interface CompilerRefinementFact {
   readonly reasons: readonly string[];
 }
 
+export interface CompilerAnalyzeTimings {
+  guestMilliseconds: number;
+  decodeMilliseconds: number;
+  responseBytes: number;
+}
+
+export interface CompilerAnalyzeOptions {
+  /**
+   * Request guest phase telemetry for this call only. The guest attaches a
+   * separately named `phaseTelemetry` payload; semantic results are unchanged.
+   */
+  readonly phaseTelemetry?: boolean;
+  /** Filled with guest-call vs response-decode timings when provided. */
+  readonly timings?: CompilerAnalyzeTimings;
+}
+
+export interface CompilerRustSubSpan {
+  readonly name: string;
+  readonly milliseconds: number;
+  readonly detail?: unknown;
+}
+
+export interface CompilerRustPhase {
+  readonly name: string;
+  /** Guest wall time in milliseconds (schema 2; absent in schema 1). */
+  readonly milliseconds?: number;
+  readonly workDelta: CompilerWork;
+  /** Counters reset by a nested request inside this span (clamped at 0). */
+  readonly counterResets: readonly string[];
+  /** Charge-once nested spans (schema 2; absent in schema 1). */
+  readonly subSpans?: readonly CompilerRustSubSpan[];
+  readonly detail?: unknown;
+}
+
+/** Comptime-evaluation counters (schema 2; see compiler phase_telemetry). */
+export interface CompilerEvalTelemetry {
+  readonly expressionCalls: number;
+  readonly bindingCalls: number;
+  readonly cacheHits: number;
+  readonly uniqueInputs: number;
+  readonly uniqueInputSemantics: string;
+  readonly hotExpressions: readonly {
+    readonly module: string;
+    readonly expression: number;
+    readonly calls: number;
+  }[];
+  readonly hotOverflow: number;
+  readonly runs: number;
+  readonly steps: number;
+  readonly closureApplications: number;
+  readonly moduleApplications: number;
+  readonly moduleResultHits: number;
+  readonly memoEligible: number;
+  readonly memoProbes: number;
+  readonly memoHits: number;
+  readonly memoStores: number;
+  readonly memoStoreDroppedAtLimit: number;
+  readonly memoNonmemoizableResults: number;
+  readonly memoUniqueMax: number;
+  readonly conversionCalls: number;
+  readonly conversionInsideEvalCalls: number;
+  readonly conversionOutsideEvalCalls: number;
+  readonly templateHits: number;
+  readonly reconstructionsAdmitted: number;
+  readonly reconstructionsDecodedOk: number;
+  readonly reconstructionsDecodedErr: number;
+  readonly reconstructionsFallbackFullEval: number;
+}
+
+/** Structural-work counters (schema 2; see compiler phase_telemetry). */
+export interface CompilerStructuralTelemetry {
+  readonly internHits: number;
+  readonly internMisses: number;
+  readonly sameTypeCalls: number;
+  readonly coverageCalls: number;
+  readonly ownershipCalls: number;
+  readonly safetyCalls: number;
+}
+
+/**
+ * Guest phase telemetry attached to an analysis response when the caller
+ * sets the telemetry fact-mask bit. Schema 1 spans carry solver-counter
+ * deltas only (clock is null; wall time comes from host spans). Schema 2
+ * adds guest wall time from the host-imported clock plus eval/structural
+ * counter sections.
+ */
+export interface CompilerPhaseTelemetry {
+  readonly schema: 1 | 2;
+  readonly clock: string | null;
+  readonly peakSemantics: string;
+  readonly deltaSemantics: string;
+  readonly spanSemantics?: string;
+  readonly phases: readonly CompilerRustPhase[];
+  readonly eval?: CompilerEvalTelemetry | null;
+  readonly structural?: CompilerStructuralTelemetry | null;
+  readonly requestWork: CompilerWork | null;
+  readonly requestCounterResets: readonly string[];
+  readonly failedPhase: string | null;
+}
+
 export type CompilerAnalysisResult =
   | {
     readonly ok: true;
@@ -409,6 +509,8 @@ export type CompilerAnalysisResult =
     readonly work: CompilerWork | null;
     readonly invalidation: CompilerInvalidationTelemetry;
     readonly targetPreflight: CompilerTargetPreflight;
+    /** Present only when the caller requested guest phase telemetry. */
+    readonly phaseTelemetry?: CompilerPhaseTelemetry | null;
   }
   | CompilerTransportFailure;
 
@@ -536,7 +638,14 @@ export class CompilerWasm {
   }
 
   static async instantiate(module: WebAssembly.Module): Promise<CompilerWasm> {
-    const instance = await WebAssembly.instantiate(module);
+    // Host-imported monotonic clock for opt-in guest phase telemetry. Extra
+    // imports are ignored when instantiating an artifact that does not
+    // declare them, so artifacts built before the import keep loading.
+    const instance = await WebAssembly.instantiate(module, {
+      blot: {
+        blot_now_ms: () => performance.now(),
+      },
+    });
     const exports = instance.exports as unknown as CompilerWasmExports;
     if (
       typeof exports.compiler_host_abi_version !== "function" ||
@@ -829,16 +938,32 @@ export class CompilerWasm {
   analyzeCompilerSessionModule(
     handle: number,
     path: string,
+    options: CompilerAnalyzeOptions = {},
   ): CompilerAnalysisResult {
     const moduleId = this.#moduleId(handle, path);
+    const mask = options.phaseTelemetry === true
+      ? (compilerAnalysisFactMask | compilerAnalysisTelemetryBit) >>> 0
+      : compilerAnalysisFactMask;
+    const timings = options.timings;
+    const guestStart = timings !== undefined ? performance.now() : 0;
     const length = this.#exports.analyze_compiler_session_module_v2(
       handle,
       moduleId,
-      compilerAnalysisFactMask,
+      mask,
     );
-    return JSON.parse(
-      new TextDecoder().decode(this.#readBinaryResponse(length)),
+    if (timings !== undefined) {
+      timings.guestMilliseconds = performance.now() - guestStart;
+    }
+    const decodeStart = timings !== undefined ? performance.now() : 0;
+    const payload = this.#readBinaryResponse(length);
+    const result = JSON.parse(
+      new TextDecoder().decode(payload),
     ) as CompilerAnalysisResult;
+    if (timings !== undefined) {
+      timings.decodeMilliseconds = performance.now() - decodeStart;
+      timings.responseBytes = payload.byteLength;
+    }
+    return result;
   }
 
   shareCompilerSessionModule(
@@ -1268,7 +1393,12 @@ interface ByteAllocation {
 
 const compilerBinaryFrameMagic = 0x33544c42;
 const compilerBinaryFrameSchema = 3;
-const compilerAnalysisFactMask = 0xffff_ffff;
+// The guest ignores every fact-mask bit except the telemetry bit, so the
+// default mask carries no telemetry request. Callers opt in per call via
+// CompilerAnalyzeOptions.phaseTelemetry; the bit must match
+// ANALYZE_TELEMETRY_FACT_BIT in compiler/src/host_transport.rs.
+const compilerAnalysisFactMask = 0x7fff_ffff;
+const compilerAnalysisTelemetryBit = 0x8000_0000;
 
 function encodeDeltaPayload(
   encoder: BinaryEncoder,

@@ -1,0 +1,1851 @@
+{
+  "schema": 1,
+  "samplesPerFixturePerRun": 5,
+  "runs": 1,
+  "telemetry": "phase",
+  "provenanceBefore": {
+    "commit": "f5e0957db3f69a09022bb295c383454d05444568",
+    "worktreeStatus": "M CHANGELOG.md\n M LANGUAGE.md\n M STDLIB.md\n M compiler/src/eval.rs\n M compiler/src/host_transport.rs\n M compiler/src/lib.rs\n M compiler/src/lower.rs\n M compiler/src/ownership.rs\n M compiler/src/primitives.rs\n M compiler/src/session.rs\n M compiler/src/typecheck.rs\n M examples.test.ts\n M examples/expected/tags.txt\n M examples/tags.blot\n M generated/compiler/prelude.snapshot\n M generated/language-health.json\n M src/compiler.ts\n M src/compiler/session.test.ts\n M src/compiler/session.ts\n M src/compiler/wasm.ts\n M src/diagnostic_codes.generated.ts\n M src/prelude/prelude.blot\n?? compiler/src/phase_telemetry.rs\n?? examples/rejected/semantics/shape_update_deferred_through_wrapper.blot\n?? experiments/compiler-bench/cold-semantic/",
+    "scopedHostSha256": "2afc90642f3b276cd086fe81e1190ade22cc45de13312a98b5183cf59129d4b1",
+    "denoExecutableSha256": "bceb5b6a6239b0b010418406d8c77a508f67cf4337d94288f1c19fe71304aab0",
+    "denoVersion": "2.9.6 (v8 15.0.245.2-rusty)",
+    "nodeVersion": null,
+    "platform": "linux",
+    "arch": "x86_64",
+    "fixtureSha256": {
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s1.blot": "efb12a9f81bd527a4966929fba7fb081e0639ddb0db014c2bd2a1c3df7a616b1",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s2.blot": "400102e09271d1d987dcbb96f271bf1d637776f0fc9152b53c324d56a944b93d",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s4.blot": "3a25e8d4f5e94b1975992be1923e4f621acd422c625c7df753fb46e8fe1903b7",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/sched_c4s2.blot": "821401124babb03099cab91c179d7aca72628d7781617cea6edf33e84fca1645",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/sched_c4s4.blot": "d4d2012a8e8ffbdb5511e44ad1da34b07c4f12ec3628efeb0fe845720c9c3c5c"
+    },
+    "harnessSha256": {
+      "generate.ts": "47eb5c4275cf480121eef534003f3b129af38b07bc6b1cbb8ff79160c65c5827",
+      "sample.ts": "30d7da57a0d6a9b3aae771f15e82e4e3b639c650850256672d37b358bd79cb1f",
+      "run.ts": "36c85c24491384a0b5c52256f650b8605a5b907755280a35770a4c137dc928df",
+      "framework.blot": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15"
+    },
+    "compilerArtifactSha256": "30d81f0974849ede849b85341c5fb2ebba5f0124a31cf56dbd60f9630572c005",
+    "compilerManifestSha256": "d712f4836be63f14f00dda91d360e3dc8c86653ab3fc54b7a1fe1a96f1317de1",
+    "preludeSha256": "dd980347acb0c39ac42e110a00232975abe20d4aecb9c8e3c092a2f4f6a05b54",
+    "invocation": [
+      "run.ts",
+      "--fixtures=/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s1.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s2.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s4.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/sched_c4s2.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/sched_c4s4.blot",
+      "--samples=5",
+      "--runs=1",
+      "--telemetry=phase",
+      "--out=/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/t2_scales"
+    ],
+    "samplePath": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/sample.ts",
+    "denoPath": "/home/mewhhaha/.deno/bin/deno"
+  },
+  "provenanceAfter": {
+    "commit": "f5e0957db3f69a09022bb295c383454d05444568",
+    "worktreeStatus": "M CHANGELOG.md\n M LANGUAGE.md\n M STDLIB.md\n M compiler/src/eval.rs\n M compiler/src/host_transport.rs\n M compiler/src/lib.rs\n M compiler/src/lower.rs\n M compiler/src/ownership.rs\n M compiler/src/primitives.rs\n M compiler/src/session.rs\n M compiler/src/typecheck.rs\n M examples.test.ts\n M examples/expected/tags.txt\n M examples/tags.blot\n M generated/compiler/prelude.snapshot\n M generated/language-health.json\n M src/compiler.ts\n M src/compiler/session.test.ts\n M src/compiler/session.ts\n M src/compiler/wasm.ts\n M src/diagnostic_codes.generated.ts\n M src/prelude/prelude.blot\n?? compiler/src/phase_telemetry.rs\n?? examples/rejected/semantics/shape_update_deferred_through_wrapper.blot\n?? experiments/compiler-bench/cold-semantic/",
+    "scopedHostSha256": "2afc90642f3b276cd086fe81e1190ade22cc45de13312a98b5183cf59129d4b1",
+    "denoExecutableSha256": "bceb5b6a6239b0b010418406d8c77a508f67cf4337d94288f1c19fe71304aab0",
+    "denoVersion": "2.9.6 (v8 15.0.245.2-rusty)",
+    "nodeVersion": null,
+    "platform": "linux",
+    "arch": "x86_64",
+    "fixtureSha256": {
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s1.blot": "efb12a9f81bd527a4966929fba7fb081e0639ddb0db014c2bd2a1c3df7a616b1",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s2.blot": "400102e09271d1d987dcbb96f271bf1d637776f0fc9152b53c324d56a944b93d",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s4.blot": "3a25e8d4f5e94b1975992be1923e4f621acd422c625c7df753fb46e8fe1903b7",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/sched_c4s2.blot": "821401124babb03099cab91c179d7aca72628d7781617cea6edf33e84fca1645",
+      "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/sched_c4s4.blot": "d4d2012a8e8ffbdb5511e44ad1da34b07c4f12ec3628efeb0fe845720c9c3c5c"
+    },
+    "harnessSha256": {
+      "generate.ts": "47eb5c4275cf480121eef534003f3b129af38b07bc6b1cbb8ff79160c65c5827",
+      "sample.ts": "30d7da57a0d6a9b3aae771f15e82e4e3b639c650850256672d37b358bd79cb1f",
+      "run.ts": "36c85c24491384a0b5c52256f650b8605a5b907755280a35770a4c137dc928df",
+      "framework.blot": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15"
+    },
+    "compilerArtifactSha256": "30d81f0974849ede849b85341c5fb2ebba5f0124a31cf56dbd60f9630572c005",
+    "compilerManifestSha256": "d712f4836be63f14f00dda91d360e3dc8c86653ab3fc54b7a1fe1a96f1317de1",
+    "preludeSha256": "dd980347acb0c39ac42e110a00232975abe20d4aecb9c8e3c092a2f4f6a05b54",
+    "invocation": [
+      "run.ts",
+      "--fixtures=/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s1.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s2.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s4.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/sched_c4s2.blot,/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/sched_c4s4.blot",
+      "--samples=5",
+      "--runs=1",
+      "--telemetry=phase",
+      "--out=/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/t2_scales"
+    ],
+    "samplePath": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/sample.ts",
+    "denoPath": "/home/mewhhaha/.deno/bin/deno"
+  },
+  "provenanceStable": true,
+  "fixtures": [
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s1.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 5,
+            "p50": 1061.219111,
+            "mad": 4.2886949999999615,
+            "p95": 1073.745979,
+            "min": 1056.2782089999998,
+            "max": 1073.745979
+          },
+          "createMilliseconds": {
+            "count": 5,
+            "p50": 78.10222,
+            "mad": 0.8040459999999996,
+            "p95": 78.906266,
+            "min": 76.817538,
+            "max": 78.906266
+          },
+          "wallMilliseconds": {
+            "count": 5,
+            "p50": 1218.6446450000003,
+            "mad": 7.755485000001499,
+            "p95": 1228.4366189999964,
+            "min": 1210.132083,
+            "max": 1228.4366189999964
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 5,
+          "p50": 1061.219111,
+          "mad": 4.2886949999999615,
+          "p95": 1073.745979,
+          "min": 1056.2782089999998,
+          "max": 1073.745979
+        },
+        "createMilliseconds": {
+          "count": 5,
+          "p50": 78.10222,
+          "mad": 0.8040459999999996,
+          "p95": 78.906266,
+          "min": 76.817538,
+          "max": 78.906266
+        },
+        "wallMilliseconds": {
+          "count": 5,
+          "p50": 1218.6446450000003,
+          "mad": 7.755485000001499,
+          "p95": 1228.4366189999964,
+          "min": 1210.132083,
+          "max": 1228.4366189999964
+        }
+      },
+      "telemetrySummary": {
+        "samples": 5,
+        "guestSchema": 2,
+        "guestClock": "host-imported blot.now_ms (performance.now)",
+        "guestPhaseMs": {
+          "check": {
+            "count": 5,
+            "p50": 0.14009899999996378,
+            "mad": 0.005350000000134969,
+            "p95": 0.14871900000002825,
+            "min": 0.1346490000000813,
+            "max": 0.14871900000002825
+          },
+          "fact-materialization": {
+            "count": 5,
+            "p50": 19.75047399999994,
+            "mad": 0.08093899999994392,
+            "p95": 19.831412999999884,
+            "min": 19.55106499999988,
+            "max": 19.831412999999884
+          },
+          "semantic-preparation": {
+            "count": 5,
+            "p50": 805.292939,
+            "mad": 2.6639950000001136,
+            "p95": 812.581525,
+            "min": 802.6289439999999,
+            "max": 812.581525
+          },
+          "target-preflight": {
+            "count": 5,
+            "p50": 98.19846200000006,
+            "mad": 2.4694449999999506,
+            "p95": 109.53803500000004,
+            "min": 95.1413,
+            "max": 109.53803500000004
+          }
+        },
+        "subSpanMs": {
+          "check.conversion": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.coverage": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.eval": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.other": {
+            "count": 5,
+            "p50": 0.14009899999996378,
+            "mad": 0.005350000000134969,
+            "p95": 0.14871900000002825,
+            "min": 0.1346490000000813,
+            "max": 0.14871900000002825
+          },
+          "check.ownership": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.safety": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.conversion": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.coverage": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.eval": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.other": {
+            "count": 5,
+            "p50": 19.75047399999994,
+            "mad": 0.08093899999994392,
+            "p95": 19.831412999999884,
+            "min": 19.55106499999988,
+            "max": 19.831412999999884
+          },
+          "fact-materialization.ownership": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.safety": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "semantic-preparation.conversion": {
+            "count": 5,
+            "p50": 6.8532780000017794,
+            "mad": 0.040167999997265724,
+            "p95": 6.992050000004326,
+            "min": 6.790615999998465,
+            "max": 6.992050000004326
+          },
+          "semantic-preparation.coverage": {
+            "count": 5,
+            "p50": 1.804353000000333,
+            "mad": 0.00040400000108320455,
+            "p95": 1.8153020000006563,
+            "min": 1.7883370000001264,
+            "max": 1.8153020000006563
+          },
+          "semantic-preparation.eval": {
+            "count": 5,
+            "p50": 155.24526300000247,
+            "mad": 0.12343900000004737,
+            "p95": 156.42292399999718,
+            "min": 153.96035200000006,
+            "max": 156.42292399999718
+          },
+          "semantic-preparation.other": {
+            "count": 5,
+            "p50": 617.0352549999961,
+            "mad": 1.6297939999983555,
+            "p95": 623.3393459999986,
+            "min": 615.4054609999978,
+            "max": 623.3393459999986
+          },
+          "semantic-preparation.ownership": {
+            "count": 5,
+            "p50": 15.288509999999803,
+            "mad": 0.14732000000020662,
+            "p95": 15.43583000000001,
+            "min": 14.939491000000032,
+            "max": 15.43583000000001
+          },
+          "semantic-preparation.safety": {
+            "count": 5,
+            "p50": 8.453419999999994,
+            "mad": 0.11541999999991504,
+            "p95": 9.331665000000044,
+            "min": 8.33800000000008,
+            "max": 9.331665000000044
+          },
+          "target-preflight.backend-close": {
+            "count": 5,
+            "p50": 1.0095639999999548,
+            "mad": 0.015609000000040396,
+            "p95": 1.0841730000001917,
+            "min": 0.9939549999999144,
+            "max": 1.0841730000001917
+          },
+          "target-preflight.check": {
+            "count": 5,
+            "p50": 0.15744900000004236,
+            "mad": 0.012619999999969878,
+            "p95": 0.2895579999999427,
+            "min": 0.13134900000000016,
+            "max": 0.2895579999999427
+          },
+          "target-preflight.hir-elaborate": {
+            "count": 5,
+            "p50": 83.93334600000003,
+            "mad": 1.6859400000000733,
+            "p95": 89.12227499999995,
+            "min": 82.24740599999996,
+            "max": 89.12227499999995
+          },
+          "target-preflight.other": {
+            "count": 5,
+            "p50": 0.14086900000006608,
+            "mad": 0.0011899999999513966,
+            "p95": 0.1443490000001475,
+            "min": 0.1342090000000553,
+            "max": 0.1443490000001475
+          },
+          "target-preflight.re-prepare": {
+            "count": 5,
+            "p50": 13.103341999999884,
+            "mad": 0.4392680000000837,
+            "p95": 18.979268000000047,
+            "min": 11.53868199999988,
+            "max": 18.979268000000047
+          }
+        },
+        "conversionInsideEvalMs": {
+          "check": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "semantic-preparation": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "eval": {
+          "bindingCalls": 1248,
+          "cacheHits": 0,
+          "closureApplications": 9403,
+          "conversionCalls": 3556,
+          "conversionInsideEvalCalls": 0,
+          "conversionOutsideEvalCalls": 3556,
+          "expressionCalls": 5020,
+          "hotOverflow": 0,
+          "memoEligible": 4963,
+          "memoHits": 1146,
+          "memoNonmemoizableResults": 1296,
+          "memoProbes": 4870,
+          "memoStoreDroppedAtLimit": 0,
+          "memoStores": 2370,
+          "memoUniqueMax": 107,
+          "moduleApplications": 4,
+          "moduleResultHits": 0,
+          "reconstructionsAdmitted": 3,
+          "reconstructionsDecodedErr": 0,
+          "reconstructionsDecodedOk": 3,
+          "reconstructionsFallbackFullEval": 0,
+          "runs": 7829,
+          "steps": 127398,
+          "templateHits": 0,
+          "uniqueInputs": 2902
+        },
+        "structural": {
+          "coverageCalls": 446,
+          "internHits": 190341,
+          "internMisses": 36510,
+          "ownershipCalls": 2,
+          "safetyCalls": 2,
+          "sameTypeCalls": 15577
+        },
+        "guestUnattributedMs": {
+          "count": 5,
+          "p50": 2.601454999999987,
+          "mad": 0.04074900000000525,
+          "p95": 2.799374000000057,
+          "min": 2.5198159999999916,
+          "max": 2.799374000000057
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s2.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 5,
+            "p50": 1444.7541219999998,
+            "mad": 14.659335000000283,
+            "p95": 1491.7159080000001,
+            "min": 1422.051098,
+            "max": 1491.7159080000001
+          },
+          "createMilliseconds": {
+            "count": 5,
+            "p50": 76.97245699999999,
+            "mad": 0.6535659999999837,
+            "p95": 80.26290700000001,
+            "min": 75.069788,
+            "max": 80.26290700000001
+          },
+          "wallMilliseconds": {
+            "count": 5,
+            "p50": 1601.8171069999999,
+            "mad": 11.519912999999178,
+            "p95": 1654.1659519999994,
+            "min": 1578.0338499999998,
+            "max": 1654.1659519999994
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 5,
+          "p50": 1444.7541219999998,
+          "mad": 14.659335000000283,
+          "p95": 1491.7159080000001,
+          "min": 1422.051098,
+          "max": 1491.7159080000001
+        },
+        "createMilliseconds": {
+          "count": 5,
+          "p50": 76.97245699999999,
+          "mad": 0.6535659999999837,
+          "p95": 80.26290700000001,
+          "min": 75.069788,
+          "max": 80.26290700000001
+        },
+        "wallMilliseconds": {
+          "count": 5,
+          "p50": 1601.8171069999999,
+          "mad": 11.519912999999178,
+          "p95": 1654.1659519999994,
+          "min": 1578.0338499999998,
+          "max": 1654.1659519999994
+        }
+      },
+      "telemetrySummary": {
+        "samples": 5,
+        "guestSchema": 2,
+        "guestClock": "host-imported blot.now_ms (performance.now)",
+        "guestPhaseMs": {
+          "check": {
+            "count": 5,
+            "p50": 0.1625890000000254,
+            "mad": 0.0003000000001520675,
+            "p95": 0.1829579999998714,
+            "min": 0.14626899999984744,
+            "max": 0.1829579999998714
+          },
+          "fact-materialization": {
+            "count": 5,
+            "p50": 23.156473000000005,
+            "mad": 0.13742000000002008,
+            "p95": 24.437296999999944,
+            "min": 22.920145000000048,
+            "max": 24.437296999999944
+          },
+          "semantic-preparation": {
+            "count": 5,
+            "p50": 1162.119107,
+            "mad": 12.862724000000071,
+            "p95": 1192.7857680000002,
+            "min": 1143.9416660000002,
+            "max": 1192.7857680000002
+          },
+          "target-preflight": {
+            "count": 5,
+            "p50": 120.71253999999999,
+            "mad": 3.741948999999977,
+            "p95": 129.51835699999992,
+            "min": 116.97059100000001,
+            "max": 129.51835699999992
+          }
+        },
+        "subSpanMs": {
+          "check.conversion": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.coverage": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.eval": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.other": {
+            "count": 5,
+            "p50": 0.1625890000000254,
+            "mad": 0.0003000000001520675,
+            "p95": 0.1829579999998714,
+            "min": 0.14626899999984744,
+            "max": 0.1829579999998714
+          },
+          "check.ownership": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.safety": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.conversion": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.coverage": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.eval": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.other": {
+            "count": 5,
+            "p50": 23.156473000000005,
+            "mad": 0.13742000000002008,
+            "p95": 24.437296999999944,
+            "min": 22.920145000000048,
+            "max": 24.437296999999944
+          },
+          "fact-materialization.ownership": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.safety": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "semantic-preparation.conversion": {
+            "count": 5,
+            "p50": 7.856033999997521,
+            "mad": 0.12906100000006404,
+            "p95": 8.141861999995001,
+            "min": 7.726972999997457,
+            "max": 8.141861999995001
+          },
+          "semantic-preparation.coverage": {
+            "count": 5,
+            "p50": 1.93599200000142,
+            "mad": 0.029661999997415478,
+            "p95": 1.9882490000013036,
+            "min": 1.847421999998062,
+            "max": 1.9882490000013036
+          },
+          "semantic-preparation.eval": {
+            "count": 5,
+            "p50": 416.4980269999962,
+            "mad": 3.556831000004081,
+            "p95": 420.64151699999786,
+            "min": 412.5964739999947,
+            "max": 420.64151699999786
+          },
+          "semantic-preparation.other": {
+            "count": 5,
+            "p50": 714.3264780000088,
+            "mad": 9.288423000000193,
+            "p95": 735.2133480000058,
+            "min": 697.2014070000128,
+            "max": 735.2133480000058
+          },
+          "semantic-preparation.ownership": {
+            "count": 5,
+            "p50": 15.826487000000043,
+            "mad": 0.2537190000001601,
+            "p95": 17.409748000000093,
+            "min": 15.26383999999996,
+            "max": 17.409748000000093
+          },
+          "semantic-preparation.safety": {
+            "count": 5,
+            "p50": 8.851398000000017,
+            "mad": 0.19949800000006235,
+            "p95": 9.391044000000136,
+            "min": 8.651899999999955,
+            "max": 9.391044000000136
+          },
+          "target-preflight.backend-close": {
+            "count": 5,
+            "p50": 1.0358739999999216,
+            "mad": 0.013489999999819702,
+            "p95": 1.3487829999999121,
+            "min": 1.0223840000001019,
+            "max": 1.3487829999999121
+          },
+          "target-preflight.check": {
+            "count": 5,
+            "p50": 0.18137900000010632,
+            "mad": 0.029929999999922074,
+            "p95": 0.24044800000001487,
+            "min": 0.13941899999986163,
+            "max": 0.24044800000001487
+          },
+          "target-preflight.hir-elaborate": {
+            "count": 5,
+            "p50": 106.29055399999993,
+            "mad": 2.8163130000000365,
+            "p95": 112.06636000000026,
+            "min": 103.11937200000011,
+            "max": 112.06636000000026
+          },
+          "target-preflight.other": {
+            "count": 5,
+            "p50": 0.13887900000008813,
+            "mad": 0.005040000000008149,
+            "p95": 0.17975799999976516,
+            "min": 0.13383900000007998,
+            "max": 0.17975799999976516
+          },
+          "target-preflight.re-prepare": {
+            "count": 5,
+            "p50": 13.493439999999964,
+            "mad": 0.9838940000001912,
+            "p95": 15.683007999999973,
+            "min": 12.509545999999773,
+            "max": 15.683007999999973
+          }
+        },
+        "conversionInsideEvalMs": {
+          "check": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "semantic-preparation": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "eval": {
+          "bindingCalls": 1351,
+          "cacheHits": 0,
+          "closureApplications": 26386,
+          "conversionCalls": 3826,
+          "conversionInsideEvalCalls": 0,
+          "conversionOutsideEvalCalls": 3826,
+          "expressionCalls": 5359,
+          "hotOverflow": 0,
+          "memoEligible": 13336,
+          "memoHits": 4530,
+          "memoNonmemoizableResults": 3459,
+          "memoProbes": 13189,
+          "memoStoreDroppedAtLimit": 0,
+          "memoStores": 5142,
+          "memoUniqueMax": 403,
+          "moduleApplications": 4,
+          "moduleResultHits": 0,
+          "reconstructionsAdmitted": 3,
+          "reconstructionsDecodedErr": 0,
+          "reconstructionsDecodedOk": 3,
+          "reconstructionsFallbackFullEval": 0,
+          "runs": 8298,
+          "steps": 341084,
+          "templateHits": 0,
+          "uniqueInputs": 3238
+        },
+        "structural": {
+          "coverageCalls": 476,
+          "internHits": 201263,
+          "internMisses": 39118,
+          "ownershipCalls": 2,
+          "safetyCalls": 2,
+          "sameTypeCalls": 17752
+        },
+        "guestUnattributedMs": {
+          "count": 5,
+          "p50": 2.8648330000000897,
+          "mad": 0.13168900000005124,
+          "p95": 3.0297120000000177,
+          "min": 2.7331440000000384,
+          "max": 3.0297120000000177
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/full_c4s4.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 5,
+            "p50": 2394.58279,
+            "mad": 21.964966999999888,
+            "p95": 2446.9129510000002,
+            "min": 2372.617823,
+            "max": 2446.9129510000002
+          },
+          "createMilliseconds": {
+            "count": 5,
+            "p50": 77.920511,
+            "mad": 0.5036670000000072,
+            "p95": 78.606577,
+            "min": 76.17179099999998,
+            "max": 78.606577
+          },
+          "wallMilliseconds": {
+            "count": 5,
+            "p50": 2549.9845349999996,
+            "mad": 18.987733999998454,
+            "p95": 2609.0290760000007,
+            "min": 2530.996801000001,
+            "max": 2609.0290760000007
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 5,
+          "p50": 2394.58279,
+          "mad": 21.964966999999888,
+          "p95": 2446.9129510000002,
+          "min": 2372.617823,
+          "max": 2446.9129510000002
+        },
+        "createMilliseconds": {
+          "count": 5,
+          "p50": 77.920511,
+          "mad": 0.5036670000000072,
+          "p95": 78.606577,
+          "min": 76.17179099999998,
+          "max": 78.606577
+        },
+        "wallMilliseconds": {
+          "count": 5,
+          "p50": 2549.9845349999996,
+          "mad": 18.987733999998454,
+          "p95": 2609.0290760000007,
+          "min": 2530.996801000001,
+          "max": 2609.0290760000007
+        }
+      },
+      "telemetrySummary": {
+        "samples": 5,
+        "guestSchema": 2,
+        "guestClock": "host-imported blot.now_ms (performance.now)",
+        "guestPhaseMs": {
+          "check": {
+            "count": 5,
+            "p50": 0.1758190000000468,
+            "mad": 0.007309999999961292,
+            "p95": 0.1831290000000081,
+            "min": 0.16165900000032707,
+            "max": 0.1831290000000081
+          },
+          "fact-materialization": {
+            "count": 5,
+            "p50": 32.60011799999984,
+            "mad": 0.19622899999967558,
+            "p95": 34.0307499999999,
+            "min": 32.113190999999915,
+            "max": 34.0307499999999
+          },
+          "semantic-preparation": {
+            "count": 5,
+            "p50": 2051.023794,
+            "mad": 20.06721000000016,
+            "p95": 2090.3647600000004,
+            "min": 2030.956584,
+            "max": 2090.3647600000004
+          },
+          "target-preflight": {
+            "count": 5,
+            "p50": 170.68610500000023,
+            "mad": 3.466739999999845,
+            "p95": 178.83057700000018,
+            "min": 167.176336,
+            "max": 178.83057700000018
+          }
+        },
+        "subSpanMs": {
+          "check.conversion": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.coverage": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.eval": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.other": {
+            "count": 5,
+            "p50": 0.1758190000000468,
+            "mad": 0.007309999999961292,
+            "p95": 0.1831290000000081,
+            "min": 0.16165900000032707,
+            "max": 0.1831290000000081
+          },
+          "check.ownership": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.safety": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.conversion": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.coverage": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.eval": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.other": {
+            "count": 5,
+            "p50": 32.60011799999984,
+            "mad": 0.19622899999967558,
+            "p95": 34.0307499999999,
+            "min": 32.113190999999915,
+            "max": 34.0307499999999
+          },
+          "fact-materialization.ownership": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.safety": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "semantic-preparation.conversion": {
+            "count": 5,
+            "p50": 9.46428500000016,
+            "mad": 0.05911299999957009,
+            "p95": 9.904748999990943,
+            "min": 9.40517200000059,
+            "max": 9.904748999990943
+          },
+          "semantic-preparation.coverage": {
+            "count": 5,
+            "p50": 2.085887000005073,
+            "mad": 0.06803300000166246,
+            "p95": 2.1933089999984077,
+            "min": 2.0178540000034104,
+            "max": 2.1933089999984077
+          },
+          "semantic-preparation.eval": {
+            "count": 5,
+            "p50": 1140.1339079999957,
+            "mad": 10.611703000000489,
+            "p95": 1151.6553760000106,
+            "min": 1128.329198999997,
+            "max": 1151.6553760000106
+          },
+          "semantic-preparation.other": {
+            "count": 5,
+            "p50": 882.7485030000048,
+            "mad": 15.54609800000253,
+            "p95": 904.3849780000112,
+            "min": 867.2024050000023,
+            "max": 904.3849780000112
+          },
+          "semantic-preparation.ownership": {
+            "count": 5,
+            "p50": 15.635047999999927,
+            "mad": 0.23040900000000875,
+            "p95": 16.359483999999725,
+            "min": 15.336680000000342,
+            "max": 16.359483999999725
+          },
+          "semantic-preparation.safety": {
+            "count": 5,
+            "p50": 8.75376899999992,
+            "mad": 0.0934399999997595,
+            "p95": 9.241265999999996,
+            "min": 8.643780000000163,
+            "max": 9.241265999999996
+          },
+          "target-preflight.backend-close": {
+            "count": 5,
+            "p50": 1.1144639999997707,
+            "mad": 0.028761000000031345,
+            "p95": 1.4198919999998907,
+            "min": 1.0857029999997394,
+            "max": 1.4198919999998907
+          },
+          "target-preflight.check": {
+            "count": 5,
+            "p50": 0.21569799999997485,
+            "mad": 0.01672099999996135,
+            "p95": 0.24184900000000198,
+            "min": 0.18069899999954941,
+            "max": 0.24184900000000198
+          },
+          "target-preflight.hir-elaborate": {
+            "count": 5,
+            "p50": 154.5320999999999,
+            "mad": 3.7102979999995114,
+            "p95": 161.47734900000023,
+            "min": 150.31177500000013,
+            "max": 161.47734900000023
+          },
+          "target-preflight.other": {
+            "count": 5,
+            "p50": 0.1469290000000001,
+            "mad": 0.00911900000028254,
+            "p95": 0.4452280000000428,
+            "min": 0.13762899999983347,
+            "max": 0.4452280000000428
+          },
+          "target-preflight.re-prepare": {
+            "count": 5,
+            "p50": 15.283150000000205,
+            "mad": 0.28013800000007905,
+            "p95": 15.563288000000284,
+            "min": 14.70439400000032,
+            "max": 15.563288000000284
+          }
+        },
+        "conversionInsideEvalMs": {
+          "check": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "semantic-preparation": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "eval": {
+          "bindingCalls": 1587,
+          "cacheHits": 0,
+          "closureApplications": 73234,
+          "conversionCalls": 4432,
+          "conversionInsideEvalCalls": 0,
+          "conversionOutsideEvalCalls": 4432,
+          "expressionCalls": 6045,
+          "hotOverflow": 0,
+          "memoEligible": 35488,
+          "memoHits": 13665,
+          "memoNonmemoizableResults": 9372,
+          "memoProbes": 35275,
+          "memoStoreDroppedAtLimit": 0,
+          "memoStores": 12180,
+          "memoUniqueMax": 1191,
+          "moduleApplications": 4,
+          "moduleResultHits": 0,
+          "reconstructionsAdmitted": 3,
+          "reconstructionsDecodedErr": 0,
+          "reconstructionsDecodedOk": 3,
+          "reconstructionsFallbackFullEval": 0,
+          "runs": 9274,
+          "steps": 913119,
+          "templateHits": 0,
+          "uniqueInputs": 3835
+        },
+        "structural": {
+          "coverageCalls": 542,
+          "internHits": 221279,
+          "internMisses": 44133,
+          "ownershipCalls": 2,
+          "safetyCalls": 2,
+          "sameTypeCalls": 24088
+        },
+        "guestUnattributedMs": {
+          "count": 5,
+          "p50": 3.182412000000113,
+          "mad": 0.07168899999942369,
+          "p95": 3.2876710000000458,
+          "min": 3.0578220000002148,
+          "max": 3.2876710000000458
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/sched_c4s2.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 5,
+            "p50": 917.4469179999999,
+            "mad": 9.47312399999987,
+            "p95": 933.2881459999999,
+            "min": 905.5445890000001,
+            "max": 933.2881459999999
+          },
+          "createMilliseconds": {
+            "count": 5,
+            "p50": 77.76749199999999,
+            "mad": 0.3985180000000099,
+            "p95": 79.83651900000001,
+            "min": 77.34195399999999,
+            "max": 79.83651900000001
+          },
+          "wallMilliseconds": {
+            "count": 5,
+            "p50": 1070.3299769999994,
+            "mad": 12.799836000000141,
+            "p95": 1083.1298129999996,
+            "min": 1055.324317999999,
+            "max": 1083.1298129999996
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 5,
+          "p50": 917.4469179999999,
+          "mad": 9.47312399999987,
+          "p95": 933.2881459999999,
+          "min": 905.5445890000001,
+          "max": 933.2881459999999
+        },
+        "createMilliseconds": {
+          "count": 5,
+          "p50": 77.76749199999999,
+          "mad": 0.3985180000000099,
+          "p95": 79.83651900000001,
+          "min": 77.34195399999999,
+          "max": 79.83651900000001
+        },
+        "wallMilliseconds": {
+          "count": 5,
+          "p50": 1070.3299769999994,
+          "mad": 12.799836000000141,
+          "p95": 1083.1298129999996,
+          "min": 1055.324317999999,
+          "max": 1083.1298129999996
+        }
+      },
+      "telemetrySummary": {
+        "samples": 5,
+        "guestSchema": 2,
+        "guestClock": "host-imported blot.now_ms (performance.now)",
+        "guestPhaseMs": {
+          "check": {
+            "count": 5,
+            "p50": 0.1030990000000429,
+            "mad": 0.0028290000000197324,
+            "p95": 0.10966900000005353,
+            "min": 0.10027000000002317,
+            "max": 0.10966900000005353
+          },
+          "fact-materialization": {
+            "count": 5,
+            "p50": 13.795238999999924,
+            "mad": 0.15571899999986272,
+            "p95": 14.25213599999995,
+            "min": 13.639520000000061,
+            "max": 14.25213599999995
+          },
+          "semantic-preparation": {
+            "count": 5,
+            "p50": 666.3868249999999,
+            "mad": 6.364500999999905,
+            "p95": 682.6405709999999,
+            "min": 660.022324,
+            "max": 682.6405709999999
+          },
+          "target-preflight": {
+            "count": 5,
+            "p50": 107.5410169999999,
+            "mad": 1.630420999999842,
+            "p95": 109.82236300000011,
+            "min": 105.26684,
+            "max": 109.82236300000011
+          }
+        },
+        "subSpanMs": {
+          "check.conversion": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.coverage": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.eval": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.other": {
+            "count": 5,
+            "p50": 0.1030990000000429,
+            "mad": 0.0028290000000197324,
+            "p95": 0.10966900000005353,
+            "min": 0.10027000000002317,
+            "max": 0.10966900000005353
+          },
+          "check.ownership": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.safety": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.conversion": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.coverage": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.eval": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.other": {
+            "count": 5,
+            "p50": 13.795238999999924,
+            "mad": 0.15571899999986272,
+            "p95": 14.25213599999995,
+            "min": 13.639520000000061,
+            "max": 14.25213599999995
+          },
+          "fact-materialization.ownership": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.safety": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "semantic-preparation.conversion": {
+            "count": 5,
+            "p50": 5.007595999998358,
+            "mad": 0.08485399999668175,
+            "p95": 5.147030999999771,
+            "min": 4.922742000001676,
+            "max": 5.147030999999771
+          },
+          "semantic-preparation.coverage": {
+            "count": 5,
+            "p50": 1.3396190000002264,
+            "mad": 0.00459500000019375,
+            "p95": 1.3573440000001256,
+            "min": 1.3193029999998203,
+            "max": 1.3573440000001256
+          },
+          "semantic-preparation.eval": {
+            "count": 5,
+            "p50": 246.92858699999837,
+            "mad": 0.5896579999981668,
+            "p95": 256.97887600000024,
+            "min": 246.3389290000002,
+            "max": 256.97887600000024
+          },
+          "semantic-preparation.other": {
+            "count": 5,
+            "p50": 388.4396679999997,
+            "mad": 4.532401999997887,
+            "p95": 395.43327999999957,
+            "min": 383.9072660000018,
+            "max": 395.43327999999957
+          },
+          "semantic-preparation.ownership": {
+            "count": 5,
+            "p50": 15.368048999999985,
+            "mad": 0.5570149999999785,
+            "p95": 16.662601000000052,
+            "min": 14.587763999999993,
+            "max": 16.662601000000052
+          },
+          "semantic-preparation.safety": {
+            "count": 5,
+            "p50": 8.214570999999921,
+            "mad": 0.12861999999995533,
+            "p95": 8.36912099999995,
+            "min": 8.057531999999924,
+            "max": 8.36912099999995
+          },
+          "target-preflight.backend-close": {
+            "count": 5,
+            "p50": 1.1165530000000672,
+            "mad": 0.008169000000066262,
+            "p95": 1.1612339999999222,
+            "min": 1.0894640000000209,
+            "max": 1.1612339999999222
+          },
+          "target-preflight.check": {
+            "count": 5,
+            "p50": 0.09008999999991829,
+            "mad": 0.0019209999999247884,
+            "p95": 0.11888899999996738,
+            "min": 0.06448999999997795,
+            "max": 0.11888899999996738
+          },
+          "target-preflight.hir-elaborate": {
+            "count": 5,
+            "p50": 97.737935,
+            "mad": 1.2307939999999462,
+            "p95": 100.48887799999989,
+            "min": 96.162194,
+            "max": 100.48887799999989
+          },
+          "target-preflight.other": {
+            "count": 5,
+            "p50": 0.13913800000023002,
+            "mad": 0.0015480000004117755,
+            "p95": 0.1449880000000121,
+            "min": 0.1361290000000963,
+            "max": 0.1449880000000121
+          },
+          "target-preflight.re-prepare": {
+            "count": 5,
+            "p50": 7.983623999999963,
+            "mad": 0.5626260000000229,
+            "p95": 8.546249999999986,
+            "min": 7.372246000000018,
+            "max": 8.546249999999986
+          }
+        },
+        "conversionInsideEvalMs": {
+          "check": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "semantic-preparation": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "eval": {
+          "bindingCalls": 732,
+          "cacheHits": 0,
+          "closureApplications": 15599,
+          "conversionCalls": 2388,
+          "conversionInsideEvalCalls": 0,
+          "conversionOutsideEvalCalls": 2388,
+          "expressionCalls": 3058,
+          "hotOverflow": 0,
+          "memoEligible": 7910,
+          "memoHits": 2585,
+          "memoNonmemoizableResults": 2038,
+          "memoProbes": 7785,
+          "memoStoreDroppedAtLimit": 0,
+          "memoStores": 3116,
+          "memoUniqueMax": 403,
+          "moduleApplications": 4,
+          "moduleResultHits": 0,
+          "reconstructionsAdmitted": 3,
+          "reconstructionsDecodedErr": 0,
+          "reconstructionsDecodedOk": 3,
+          "reconstructionsFallbackFullEval": 0,
+          "runs": 4948,
+          "steps": 200377,
+          "templateHits": 0,
+          "uniqueInputs": 2650
+        },
+        "structural": {
+          "coverageCalls": 267,
+          "internHits": 125092,
+          "internMisses": 22832,
+          "ownershipCalls": 2,
+          "safetyCalls": 2,
+          "sameTypeCalls": 12520
+        },
+        "guestUnattributedMs": {
+          "count": 5,
+          "p50": 2.2120769999999084,
+          "mad": 0.03944899999999052,
+          "p95": 2.4165660000001026,
+          "min": 2.1190169999999853,
+          "max": 2.4165660000001026
+        }
+      }
+    },
+    {
+      "fixture": "/home/mewhhaha/src/blot/experiments/compiler-bench/cold-semantic/scales/sched_c4s4.blot",
+      "failed": 0,
+      "runs": [
+        {
+          "run": 0,
+          "failed": 0,
+          "analyzeMilliseconds": {
+            "count": 5,
+            "p50": 1446.640323,
+            "mad": 4.528625000000147,
+            "p95": 1482.71188,
+            "min": 1432.6750359999999,
+            "max": 1482.71188
+          },
+          "createMilliseconds": {
+            "count": 5,
+            "p50": 76.979017,
+            "mad": 1.0052639999999968,
+            "p95": 79.690791,
+            "min": 75.621095,
+            "max": 79.690791
+          },
+          "wallMilliseconds": {
+            "count": 5,
+            "p50": 1604.885362000001,
+            "mad": 9.892554000001837,
+            "p95": 1633.2618340000008,
+            "min": 1585.531726000001,
+            "max": 1633.2618340000008
+          }
+        }
+      ],
+      "aggregate": {
+        "analyzeMilliseconds": {
+          "count": 5,
+          "p50": 1446.640323,
+          "mad": 4.528625000000147,
+          "p95": 1482.71188,
+          "min": 1432.6750359999999,
+          "max": 1482.71188
+        },
+        "createMilliseconds": {
+          "count": 5,
+          "p50": 76.979017,
+          "mad": 1.0052639999999968,
+          "p95": 79.690791,
+          "min": 75.621095,
+          "max": 79.690791
+        },
+        "wallMilliseconds": {
+          "count": 5,
+          "p50": 1604.885362000001,
+          "mad": 9.892554000001837,
+          "p95": 1633.2618340000008,
+          "min": 1585.531726000001,
+          "max": 1633.2618340000008
+        }
+      },
+      "telemetrySummary": {
+        "samples": 5,
+        "guestSchema": 2,
+        "guestClock": "host-imported blot.now_ms (performance.now)",
+        "guestPhaseMs": {
+          "check": {
+            "count": 5,
+            "p50": 0.1209599999999682,
+            "mad": 0.01068899999995665,
+            "p95": 0.1320189999999002,
+            "min": 0.10669899999993504,
+            "max": 0.1320189999999002
+          },
+          "fact-materialization": {
+            "count": 5,
+            "p50": 17.616757000000007,
+            "mad": 0.4452859999998964,
+            "p95": 18.062042999999903,
+            "min": 17.09017000000017,
+            "max": 18.062042999999903
+          },
+          "semantic-preparation": {
+            "count": 5,
+            "p50": 1149.585031,
+            "mad": 4.656893999999738,
+            "p95": 1180.5328100000002,
+            "min": 1140.628906,
+            "max": 1180.5328100000002
+          },
+          "target-preflight": {
+            "count": 5,
+            "p50": 147.18785400000002,
+            "mad": 1.9405990000000202,
+            "p95": 150.14706499999988,
+            "min": 145.21206500000017,
+            "max": 150.14706499999988
+          }
+        },
+        "subSpanMs": {
+          "check.conversion": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.coverage": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.eval": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.other": {
+            "count": 5,
+            "p50": 0.1209599999999682,
+            "mad": 0.01068899999995665,
+            "p95": 0.1320189999999002,
+            "min": 0.10669899999993504,
+            "max": 0.1320189999999002
+          },
+          "check.ownership": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "check.safety": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.conversion": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.coverage": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.eval": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.other": {
+            "count": 5,
+            "p50": 17.616757000000007,
+            "mad": 0.4452859999998964,
+            "p95": 18.062042999999903,
+            "min": 17.09017000000017,
+            "max": 18.062042999999903
+          },
+          "fact-materialization.ownership": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization.safety": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "semantic-preparation.conversion": {
+            "count": 5,
+            "p50": 5.876554000001562,
+            "mad": 0.11114600000087194,
+            "p95": 6.034017999999236,
+            "min": 5.696509999996692,
+            "max": 6.034017999999236
+          },
+          "semantic-preparation.coverage": {
+            "count": 5,
+            "p50": 1.4365930000004141,
+            "mad": 0.024378999999726148,
+            "p95": 1.490096999999281,
+            "min": 1.382001999999659,
+            "max": 1.490096999999281
+          },
+          "semantic-preparation.eval": {
+            "count": 5,
+            "p50": 673.7183559999896,
+            "mad": 2.0497279999897273,
+            "p95": 695.7844579999991,
+            "min": 670.7986090000018,
+            "max": 695.7844579999991
+          },
+          "semantic-preparation.other": {
+            "count": 5,
+            "p50": 444.3192530000092,
+            "mad": 5.502663000007033,
+            "p95": 452.46357700000135,
+            "min": 438.8165900000022,
+            "max": 452.46357700000135
+          },
+          "semantic-preparation.ownership": {
+            "count": 5,
+            "p50": 15.869715999999869,
+            "mad": 0.5049770000001104,
+            "p95": 16.37469299999998,
+            "min": 14.848072000000002,
+            "max": 16.37469299999998
+          },
+          "semantic-preparation.safety": {
+            "count": 5,
+            "p50": 8.481680999999924,
+            "mad": 0.08181800000011208,
+            "p95": 8.703379000000098,
+            "min": 8.321701000000019,
+            "max": 8.703379000000098
+          },
+          "target-preflight.backend-close": {
+            "count": 5,
+            "p50": 1.1284630000000107,
+            "mad": 0.013169000000289088,
+            "p95": 1.188752999999906,
+            "min": 1.1152939999997216,
+            "max": 1.188752999999906
+          },
+          "target-preflight.check": {
+            "count": 5,
+            "p50": 0.10890900000003967,
+            "mad": 0.013420999999880223,
+            "p95": 0.12852999999995518,
+            "min": 0.07957000000010339,
+            "max": 0.12852999999995518
+          },
+          "target-preflight.hir-elaborate": {
+            "count": 5,
+            "p50": 137.09142299999985,
+            "mad": 2.0267080000000988,
+            "p95": 139.11813099999995,
+            "min": 134.59014700000012,
+            "max": 139.11813099999995
+          },
+          "target-preflight.other": {
+            "count": 5,
+            "p50": 0.13652999999999338,
+            "mad": 0.002540999999837368,
+            "p95": 0.1436390000001211,
+            "min": 0.13041899999984707,
+            "max": 0.1436390000001211
+          },
+          "target-preflight.re-prepare": {
+            "count": 5,
+            "p50": 8.808258000000023,
+            "mad": 0.4675870000000941,
+            "p95": 9.619363000000021,
+            "min": 7.772774000000027,
+            "max": 9.619363000000021
+          }
+        },
+        "conversionInsideEvalMs": {
+          "check": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "fact-materialization": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "semantic-preparation": {
+            "count": 5,
+            "p50": 0,
+            "mad": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "eval": {
+          "bindingCalls": 812,
+          "cacheHits": 0,
+          "closureApplications": 43926,
+          "conversionCalls": 2598,
+          "conversionInsideEvalCalls": 0,
+          "conversionOutsideEvalCalls": 2598,
+          "expressionCalls": 3290,
+          "hotOverflow": 0,
+          "memoEligible": 21451,
+          "memoHits": 8183,
+          "memoNonmemoizableResults": 5624,
+          "memoProbes": 21237,
+          "memoStoreDroppedAtLimit": 0,
+          "memoStores": 7384,
+          "memoUniqueMax": 1191,
+          "moduleApplications": 4,
+          "moduleResultHits": 0,
+          "reconstructionsAdmitted": 3,
+          "reconstructionsDecodedErr": 0,
+          "reconstructionsDecodedOk": 3,
+          "reconstructionsFallbackFullEval": 0,
+          "runs": 5278,
+          "steps": 547763,
+          "templateHits": 0,
+          "uniqueInputs": 2858
+        },
+        "structural": {
+          "coverageCalls": 289,
+          "internHits": 132954,
+          "internMisses": 24521,
+          "ownershipCalls": 2,
+          "safetyCalls": 2,
+          "sameTypeCalls": 15344
+        },
+        "guestUnattributedMs": {
+          "count": 5,
+          "p50": 2.372045999999955,
+          "mad": 0.024649999999837746,
+          "p95": 2.468804999999975,
+          "min": 2.343716000000086,
+          "max": 2.468804999999975
+        }
+      }
+    }
+  ]
+}

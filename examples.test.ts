@@ -357,6 +357,10 @@ const REJECTIONS: Record<
     code: "BLOT_DOES_NOT_SATISFY",
     stage: "check",
   },
+  "shape_update_deferred_through_wrapper": {
+    code: "BLOT_DOES_NOT_SATISFY",
+    stage: "check",
+  },
   "reflection_not_indexed": {
     code: "BLOT_REFLECTION_NOT_INDEXED",
     stage: "check",

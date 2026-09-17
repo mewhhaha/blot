@@ -594,7 +594,8 @@ let value = "now text"
 
 ### 4.2 Declaration tags
 
-One or more compile-time descriptors may transform a `let` or `const` value:
+One or more compile-time descriptors may transform a `let` or `const`
+statement:
 
 ```blot
 @[derive(add_accessors)]
@@ -610,15 +611,32 @@ A descriptor is a compile-time shape with these members:
 {
   .name = "tool-name";
   .metadata = compile_time_value;
-  .transform = fn value => replacement;
+  .transform = fn statement => replacement;
 }
 ```
 
 `.name` must be non-empty text, `.metadata` may be any compile-time value, and
 `.transform` must be callable. Other fields are permitted. The prelude's
-`tag (name, metadata, transform)` constructs this shape. `derive transform`
-constructs one named `"derive"`, and `test` is one named `"test"` whose
-transform is `identity`.
+`tag (name, metadata, transform)` adapts a value function
+`fn value => replacement` by projecting the statement's `.value` before
+calling it. `tag_statement (name, metadata, transform)` passes the whole
+statement record instead. `derive transform` constructs a value tag named
+`"derive"`, and `test` is one named `"test"` whose function is `identity`.
+
+Every transform receives the statement record:
+
+```blot
+{
+  .kind = #Const;
+  .name = #Some "Point";
+  .value = source_value;
+}
+```
+
+`.kind` is `#Let` or `#Const`, `.name` is the bound name as `Option Text`
+(`#None` when the pattern binds no single name), and `.value` is the
+declaration value. A descriptor built without the prelude receives this record
+too; where it previously took the bare value, it now projects `.value` itself.
 
 Descriptors are evaluated in source order before the declaration value and in
 the scope preceding the declaration; they cannot refer to the name being bound.
@@ -630,10 +648,11 @@ Transforms apply from the nearest tag outward:
 let value = source
 ```
 
-binds `outer.transform (inner.transform source)`. The replacement is the value
-matched by the binding pattern and may have a different type. An adjacent
-signature header constrains that final value. A `let` transform runs in the
-binding's runtime phase and contributes its ordinary effects; a `const`
+evaluates `inner.transform` on the statement carrying `source`, then
+`outer.transform` on the statement carrying that result. The replacement is
+the value matched by the binding pattern and may have a different type. An
+adjacent signature header constrains that final value. A `let` transform runs
+in the binding's runtime phase and contributes its ordinary effects; a `const`
 transform runs at compile time. Tags are not admitted on signature headers
 because a signature binds no value.
 
@@ -3180,6 +3199,19 @@ and generative source effects must be handled before the module boundary.
 `examples/shared_effects.blot` demonstrates independently constructed interfaces
 handled by one provider.
 
+`@effect.attach_meta effect key payload` associates an arbitrary compile-time
+payload with one canonical effect identity under a namespaced text key, and
+`@effect.meta effect key` recovers it as `#Some payload` or `#None`. Either
+an effect or one of its operations identifies the effect. Unlike attached
+type namespaces, which inference drops when effects flow into rows, metadata
+rides the identity itself, so reflecting an inferred row and looking up each
+member recovers whatever the declaration stored. Attachment runs only during
+compile-time evaluation. Each `(effect, key)` pair has one owning module:
+re-attaching from the same module overwrites, while a different module
+claiming it is `BLOT_EFFECT_META_CONFLICT`. Entries vanish with their
+owner's module revision. Use qualified keys to avoid collisions between
+independent frameworks.
+
 Projecting an operation from an effect and calling it performs that operation:
 
 ```blot
@@ -3434,6 +3466,8 @@ Everything not listed here belongs in source, normally the prelude.
 | `@effect`      | create a fresh source effect from operation types                         |
 | `@effect.host` | create a fresh host effect                                                |
 | `@effect.shared` | construct a source effect from a shared text key and operation contract |
+| `@effect.attach_meta` | associate a payload with an effect identity under a namespaced key (compile time only) |
+| `@effect.meta` | recover an effect identity's payload as `#Some` or `#None` |
 | `@handle`      | discharge one effect from a nullary computation                           |
 | `@forall`      | evaluate a type function with a fresh rigid variable                      |
 | `@satisfies`   | refine an open value by a type, or prove its closed type with a predicate |

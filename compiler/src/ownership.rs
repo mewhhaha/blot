@@ -419,6 +419,44 @@ struct Analysis<'a> {
     held_borrows: Vec<Vec<Span>>,
 }
 
+/// Whether every fully applied `@handle` in the module has clause
+/// provenance, so replaying ownership over the module cannot demand facts
+/// that were never inferred. Scans the whole arena rather than only live
+/// declarations, so dead handler applications can conservatively veto a
+/// replay; skipping one keeps the last cached analysis instead of panicking.
+pub(crate) fn handle_provenance_complete(
+    module: &Module,
+    clauses: Option<&HashMap<ExpressionId, HandlerEvidence>>,
+) -> bool {
+    module
+        .arena
+        .expressions
+        .iter()
+        .enumerate()
+        .all(|(index, expression)| {
+            if !matches!(expression, Expression::Apply { .. }) {
+                return true;
+            }
+            let (callee, arguments) = application_spine(ExpressionId(index as u32), module);
+            let Expression::Intrinsic { name, .. } = &module.arena.expressions[callee.0 as usize]
+            else {
+                return true;
+            };
+            if name != "@handle" || arguments.len() != 1 {
+                return true;
+            }
+            let Expression::Tuple { elements, .. } =
+                &module.arena.expressions[arguments[0].0 as usize]
+            else {
+                return true;
+            };
+            if elements.len() != 3 {
+                return true;
+            }
+            clauses.is_some_and(|clauses| clauses.contains_key(&arguments[0]))
+        })
+}
+
 pub(crate) fn check(
     path: &str,
     module: &Module,
@@ -3816,8 +3854,64 @@ fn reuse_identity_tag(tag: &DeclarationTag, analysis: &Analysis<'_>) -> bool {
     let Some(Value::Shape(fields)) = analysis.callee_value(tag.descriptor) else {
         return false;
     };
+    if is_reuse_primitive(fields.get("transform")) {
+        return true;
+    }
+    // The prelude `tag` wrapper projects `.value` before calling the wrapped
+    // function, so `assert.reuse` reaches here as a closure shaped
+    // `fn stmt => @assert.reuse stmt.value`. That is still the identity with
+    // an assertion, whatever binding introduced it.
+    let Some(Value::Closure {
+        module,
+        parameter,
+        body,
+        environment,
+        ..
+    }) = fields.get("transform")
+    else {
+        return false;
+    };
+    let modules = analysis.context.modules.borrow();
+    let Some(loaded) = modules.get(module.as_str()) else {
+        return false;
+    };
+    let Expression::Apply {
+        function, argument, ..
+    } = &loaded.module.arena.expressions[body.0 as usize]
+    else {
+        return false;
+    };
+    let Expression::Var { name: function, .. } =
+        &loaded.module.arena.expressions[function.0 as usize]
+    else {
+        return false;
+    };
+    if !is_reuse_primitive(lookup(environment, function).as_ref()) {
+        return false;
+    }
+    let Expression::Field { target, name, .. } =
+        &loaded.module.arena.expressions[argument.0 as usize]
+    else {
+        return false;
+    };
+    if name != "value" {
+        return false;
+    }
+    let Expression::Var { name: target, .. } = &loaded.module.arena.expressions[target.0 as usize]
+    else {
+        return false;
+    };
     matches!(
-        fields.get("transform"),
+        &loaded.module.arena.patterns[parameter.0 as usize],
+        Pattern::Name { name, .. } if name == target
+    )
+}
+
+/// The untouched `@assert.reuse` primitive, which marks its function argument
+/// without changing its value.
+fn is_reuse_primitive(value: Option<&Value>) -> bool {
+    matches!(
+        value,
         Some(Value::Primitive {
             name,
             arity: 1,

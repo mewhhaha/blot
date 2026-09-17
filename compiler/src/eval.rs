@@ -522,6 +522,7 @@ pub(crate) struct LiveDeclaration {
 }
 
 pub(crate) type LiveDeclarations = Rc<Vec<LiveDeclaration>>;
+#[derive(Clone)]
 pub(crate) struct ModuleFacts<K, V> {
     modules: HashMap<String, HashMap<K, V>>,
 }
@@ -611,6 +612,16 @@ pub(crate) struct CachedEvaluatedBinding {
 struct ResidentEffectValue {
     declarations: Vec<(String, Value)>,
     attachments: Vec<(String, Value)>,
+}
+
+/// Userland payload associated with one canonical effect identity under a
+/// namespaced key. Unlike attached type namespaces (which inference drops
+/// when effects flow into rows), metadata rides the effect identity itself,
+/// so reflection over an inferred row recovers it.
+#[derive(Clone)]
+struct ResidentEffectMetadata {
+    owner: String,
+    payload: Value,
 }
 
 const OPERATOR_MEMBER_NAMES: &[&str] = &[
@@ -830,6 +841,9 @@ pub struct Context {
     pub(crate) module_cache: RefCell<Option<(String, Rc<Module>)>>,
     pub(crate) live_declarations: RefCell<LivenessCache>,
     pub(crate) evaluated_bindings: RefCell<EvaluatedBindings>,
+    /// Memoized results of pure comptime closure calls, shared by every
+    /// evaluation in one semantic request. See [`Context::clear_comptime_call_results`].
+    comptime_call_results: RefCell<HashMap<ComptimeCallKey, Value>>,
     pub(crate) captured_binding_modules: RefCell<HashSet<String>>,
     pub(crate) expression_types: RefCell<ModuleFacts<ExpressionId, Value>>,
     pub(crate) expression_type_resolvers: RefCell<HashMap<String, RuntimeTypeResolver>>,
@@ -842,12 +856,42 @@ pub struct Context {
     effect_ids: RefCell<HashMap<EffectIdentity, EffectSignatures>>,
     shared_effects: RefCell<SharedEffects>,
     effect_values: RefCell<BTreeMap<u32, ResidentEffectValue>>,
+    effect_metadata: RefCell<HashMap<(u32, String), ResidentEffectMetadata>>,
     operator_extensions: RefCell<Vec<ResidentOperatorExtension>>,
     next_type_variable: Cell<u32>,
     pub(crate) representation_holes: std::cell::OnceCell<Rc<Cell<u32>>>,
 }
 
 impl Context {
+    /// Drops every memoized comptime call result. Called at each semantic
+    /// request boundary so entries never cross a revision or request: a
+    /// re-checked module builds fresh scopes and fresh results.
+    ///
+    /// A call is cached only when the closure has a pure monomorphic
+    /// signature (no effects, no effect tail, no type variables), the
+    /// argument converts to a bounded first-order [`ComptimeArgument`]
+    /// (scalars, text, shapes, arrays, tags, sealed values; closures,
+    /// borrows, types, effects, and other identity-carrying values never
+    /// convert), the result converts as well, evaluation runs outside
+    /// residual staging (which carries per-application instance facts and
+    /// checked-type scratch), and the key records the call's evaluation
+    /// phase, since integer-range checks and comptime-only primitives make
+    /// evaluation phase-sensitive. Within a request every entry is therefore a
+    /// pure function of its key, and a hit returns exactly what
+    /// re-evaluation would have produced. Call-site expected types are not
+    /// part of the key.
+    ///
+    /// Keys hold their captured scopes weakly so entries never retain
+    /// temporary call scopes; a hit additionally requires every keyed scope
+    /// to still be allocated, so a freed scope can never satisfy a call even
+    /// if a later allocation reuses its address, and dead entries are
+    /// removed when encountered to reclaim the entry budget. At most
+    /// [`COMPTIME_CALL_RESULT_LIMIT`] entries are retained; past the limit
+    /// new results are recomputed, never evicted over live entries.
+    pub(crate) fn clear_comptime_call_results(&self) {
+        self.comptime_call_results.borrow_mut().clear();
+    }
+
     pub(crate) fn residual_cache_effect_stamp(&self) -> (u32, u64) {
         (
             self.next_effect.get(),
@@ -947,6 +991,16 @@ impl Context {
                     .cloned()
                     .collect(),
             ),
+            effect_metadata: RefCell::new(
+                self.effect_metadata
+                    .borrow()
+                    .iter()
+                    .filter(|((id, _), resident)| {
+                        !removed_effects.contains(id) && resident.owner != path
+                    })
+                    .map(|(key, resident)| (key.clone(), resident.clone()))
+                    .collect(),
+            ),
             next_type_variable: Cell::new(self.next_type_variable.get()),
             ..Self::default()
         }
@@ -982,6 +1036,17 @@ impl Context {
                 .iter()
                 .filter(|extension| extension.owner == path)
                 .cloned(),
+        );
+        self.effect_metadata
+            .borrow_mut()
+            .retain(|_, resident| resident.owner != path);
+        self.effect_metadata.borrow_mut().extend(
+            staged
+                .effect_metadata
+                .borrow()
+                .iter()
+                .filter(|(_, resident)| resident.owner == path)
+                .map(|(key, resident)| (key.clone(), resident.clone())),
         );
 
         let live_declarations = staged.live_declarations.borrow_mut().remove_module(path);
@@ -1200,6 +1265,40 @@ impl Context {
         }
     }
 
+    /// Associates `payload` with one canonical effect identity under `key`.
+    /// Re-attaching from the same module overwrites (const re-evaluation is
+    /// idempotent by construction); a different module claiming the same
+    /// `(effect, key)` reports its current owner instead.
+    pub(crate) fn attach_effect_metadata(
+        &self,
+        module: &str,
+        id: u32,
+        key: &str,
+        payload: Value,
+    ) -> Result<(), String> {
+        let mut metadata = self.effect_metadata.borrow_mut();
+        if let Some(resident) = metadata.get(&(id, key.to_owned()))
+            && resident.owner != module
+        {
+            return Err(resident.owner.clone());
+        }
+        metadata.insert(
+            (id, key.to_owned()),
+            ResidentEffectMetadata {
+                owner: module.to_owned(),
+                payload,
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn effect_metadata(&self, id: u32, key: &str) -> Option<Value> {
+        self.effect_metadata
+            .borrow()
+            .get(&(id, key.to_owned()))
+            .map(|resident| resident.payload.clone())
+    }
+
     fn register_operator_attachment(&self, module: &str, value: &Value) {
         let Some(extension) = ResidentOperatorExtension::capture(module, value) else {
             return;
@@ -1306,6 +1405,9 @@ impl Context {
     pub(crate) fn remove_effect_state(&self, paths: &HashSet<String>) {
         let mut removed = self.effect_ids_referencing(paths);
         removed.extend(self.shared_effects.borrow_mut().remove_modules(paths));
+        self.effect_metadata
+            .borrow_mut()
+            .retain(|(id, _), resident| !removed.contains(id) && !paths.contains(&resident.owner));
         self.effect_ids
             .borrow_mut()
             .retain(|identity, _| !paths.iter().any(|path| identity.references_module(path)));
@@ -1780,6 +1882,15 @@ fn effect_value_id(value: &Value) -> Option<u32> {
     }
 }
 
+/// Resolves an effect or one of its operations to the canonical effect id
+/// that metadata is keyed by.
+fn metadata_effect_id(value: &Value) -> Option<u32> {
+    match value {
+        Value::Operation { effect, .. } => metadata_effect_id(effect),
+        _ => effect_value_id(value),
+    }
+}
+
 fn contains_effect_declaration(value: &Value) -> bool {
     match value {
         Value::Effect { .. } => true,
@@ -1877,9 +1988,28 @@ enum ComptimeArgument {
 struct ComptimeClosureIdentity {
     module: Rc<String>,
     body: ExpressionId,
+    // Weak references: entries must not pin the scopes they key on, or the
+    // table would retain every temporary call scope until the request ends
+    // and pay for the cascade when the request drops it. Weakness alone
+    // cannot distinguish a live scope from a reused address, so a hit
+    // additionally requires every keyed scope to upgrade; see `is_live`.
+    // Entries whose scopes have been freed can never satisfy a call and are
+    // removed when encountered to reclaim the entry budget.
     environment: Weak<Env>,
     module_instances: Weak<ModuleInstanceScope>,
     effect_scope: Weak<EffectScope>,
+}
+
+impl ComptimeClosureIdentity {
+    /// Whether every keyed scope is still allocated. Live allocations have
+    /// unique addresses, so an address match against a live entry
+    /// identifies the original closure; a freed scope fails here even if a
+    /// later allocation reuses its address.
+    fn is_live(&self) -> bool {
+        self.environment.upgrade().is_some()
+            && self.module_instances.upgrade().is_some()
+            && self.effect_scope.upgrade().is_some()
+    }
 }
 
 impl PartialEq for ComptimeClosureIdentity {
@@ -1907,11 +2037,17 @@ impl Hash for ComptimeClosureIdentity {
 struct ComptimeCallKey {
     closure: ComptimeClosureIdentity,
     argument: ComptimeArgument,
+    // Evaluation is phase-sensitive (integer-range checks and comptime-only
+    // primitives reject in the runtime phase), so results cached under one
+    // phase must never satisfy a call in the other.
+    phase: Phase,
 }
 
 impl PartialEq for ComptimeCallKey {
     fn eq(&self, other: &Self) -> bool {
-        self.closure == other.closure && self.argument == other.argument
+        self.closure == other.closure
+            && self.argument == other.argument
+            && self.phase == other.phase
     }
 }
 
@@ -1921,6 +2057,7 @@ impl Hash for ComptimeCallKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.closure.hash(state);
         self.argument.hash(state);
+        self.phase.hash(state);
     }
 }
 
@@ -1938,7 +2075,6 @@ pub struct Runtime {
     instance_facts: Vec<Rc<crate::typecheck::ResidualInstanceFacts>>,
     result_context: Option<Value>,
     checked_arguments: Rc<RefCell<HashMap<ApplicationSite, Value>>>,
-    comptime_call_results: Rc<RefCell<HashMap<ComptimeCallKey, Value>>>,
 }
 
 struct ArrayProgress {
@@ -2007,7 +2143,6 @@ impl Runtime {
             instance_facts: Vec::new(),
             result_context: None,
             checked_arguments: Rc::new(RefCell::new(HashMap::new())),
-            comptime_call_results: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -2044,7 +2179,6 @@ impl Runtime {
             instance_facts: self.instance_facts.clone(),
             result_context: None,
             checked_arguments: self.checked_arguments.clone(),
-            comptime_call_results: self.comptime_call_results.clone(),
         }
     }
 }
@@ -2375,12 +2509,22 @@ pub struct Perform {
 }
 
 pub fn run(mut computation: Computation) -> Result<Value, Diagnostic> {
-    loop {
+    // The telemetry frame is resolved once: while no collector is active the
+    // loop below pays a single predictable branch per step and is otherwise
+    // identical to the uninstrumented drive loop.
+    let frame = crate::phase_telemetry::run_enter();
+    let mut steps = 0u64;
+    let result = loop {
         match computation {
-            Computation::Done(result) => return result,
-            Computation::Step(step) => computation = step.advance(),
+            Computation::Done(result) => break result,
+            Computation::Step(step) => {
+                if frame.active {
+                    steps += 1;
+                }
+                computation = step.advance();
+            }
             Computation::Perform { request, .. } => {
-                return Err(Diagnostic::new(
+                break Err(Diagnostic::new(
                     "BLOT_UNHANDLED_EFFECT",
                     format!(
                         "No handler for `{}.{}`.",
@@ -2390,7 +2534,9 @@ pub fn run(mut computation: Computation) -> Result<Value, Diagnostic> {
                 ));
             }
         }
-    }
+    };
+    crate::phase_telemetry::run_exit(&frame, steps);
+    result
 }
 
 pub fn evaluate_module(
@@ -3250,6 +3396,17 @@ fn evaluate_boolean_case(
                         .borrow_mut()
                         .trap_current_block(&error.message, span);
                     None
+                }
+                Err(error) if error.code == "BLOT_PANIC" => {
+                    // The consequent already trapped, so both arms diverge:
+                    // terminate the abandoned join before propagating. An
+                    // enclosing arm catches this panic and keeps staging.
+                    join_trace.borrow_mut().trap_block(
+                        branches.join,
+                        "Every residual conditional arm traps.",
+                        span,
+                    );
+                    return Computation::error(error);
                 }
                 Err(error) => return Computation::error(error),
             };
@@ -4120,6 +4277,17 @@ fn evaluate_dynamic_if(
                         .trap_current_block(&error.message, progress.span);
                     None
                 }
+                Err(error) if error.code == "BLOT_PANIC" => {
+                    // The consequent already trapped, so both arms diverge:
+                    // terminate the abandoned join before propagating. An
+                    // enclosing arm catches this panic and keeps staging.
+                    join_trace.borrow_mut().trap_block(
+                        branches.join,
+                        "Every residual conditional arm traps.",
+                        progress.span,
+                    );
+                    return Computation::error(error);
+                }
                 Err(error) => return Computation::error(error),
             };
             let alternate_end = join_trace.borrow().current_block();
@@ -4651,9 +4819,11 @@ fn apply_with_expected(
     } = call;
     match function {
         Value::ModuleClosure { module } => {
+            crate::phase_telemetry::note_module_application();
             let reusable = matches!(argument, Value::Unit)
                 && context.reusable_module_results.borrow().contains(&module);
             if reusable && let Some(value) = context.module_results.borrow().get(&module).cloned() {
+                crate::phase_telemetry::note_module_result_hit();
                 return Computation::value(value);
             }
             // A cached module result is a definition-level value. Reusing it
@@ -4698,14 +4868,19 @@ fn apply_with_expected(
                     }
                 };
                 let environment = if let Some(environment) = cached_environment {
+                    crate::phase_telemetry::note_template_hit();
                     environment
                 } else {
                     let reconstruction = match result_template.admit_reconstruction(
                         module_runtime.module_instances.len(),
                         module_runtime.effect_scope.len(),
                     ) {
-                        Ok(Some(reconstruction)) => reconstruction,
+                        Ok(Some(reconstruction)) => {
+                            crate::phase_telemetry::note_reconstruction_admitted();
+                            reconstruction
+                        }
                         Ok(None) => {
+                            crate::phase_telemetry::note_reconstruction_fallback();
                             return evaluate_module(context, module, argument, module_runtime);
                         }
                         Err(error) => {
@@ -4725,6 +4900,7 @@ fn apply_with_expected(
                         &module_runtime.effect_scope,
                     ) {
                         Ok(environment) => {
+                            crate::phase_telemetry::note_reconstruction_decoded(true);
                             context.register_operator_attachments_from_environment(
                                 &module,
                                 &environment,
@@ -4732,6 +4908,7 @@ fn apply_with_expected(
                             environment
                         }
                         Err(error) => {
+                            crate::phase_telemetry::note_reconstruction_decoded(false);
                             return Computation::error(Diagnostic::new(
                                 "BLOT_RUST_INVARIANT",
                                 format!("module result template for `{module}` failed: {error}"),
@@ -4815,6 +4992,7 @@ fn apply_with_expected(
             signature,
             reuse_assertion,
         } => {
+            crate::phase_telemetry::note_closure_application();
             let mut argument = argument;
             let mut environment = environment;
             let mut residual_compilation = None;
@@ -4988,18 +5166,38 @@ fn apply_with_expected(
                     .borrow_mut()
                     .record_checked_value(&argument, &checked_domain);
             }
+            let memo_eligible = memoized_closure.is_some();
             let memo_key = memoized_closure.and_then(|closure| {
                 Some(ComptimeCallKey {
                     closure,
                     argument: comptime_argument(&argument)?,
+                    phase: runtime.phase,
                 })
             });
-            if let Some(key) = &memo_key
-                && let Some(value) = runtime.comptime_call_results.borrow().get(key).cloned()
-            {
-                #[cfg(test)]
-                COMPTIME_CALL_CACHE_HITS.with(|hits| hits.set(hits.get() + 1));
-                return Computation::value(value);
+            crate::phase_telemetry::note_memo_probe(memo_eligible, memo_key.is_some());
+            if let Some(key) = &memo_key {
+                let (hit, dead) = {
+                    let results = context.comptime_call_results.borrow();
+                    match results.get_key_value(key) {
+                        Some((stored, value)) if stored.closure.is_live() => {
+                            (Some(value.clone()), false)
+                        }
+                        Some(_) => (None, true),
+                        None => (None, false),
+                    }
+                };
+                if dead {
+                    // The entry's scopes have been freed (its addresses may
+                    // already be reused elsewhere); it can never hit again,
+                    // so drop it eagerly to reclaim the entry budget.
+                    context.comptime_call_results.borrow_mut().remove(key);
+                }
+                if let Some(value) = hit {
+                    #[cfg(test)]
+                    COMPTIME_CALL_CACHE_HITS.with(|hits| hits.set(hits.get() + 1));
+                    crate::phase_telemetry::note_memo_hit();
+                    return Computation::value(value);
+                }
             }
             let reuse_scope = if reuse_assertion.is_some() {
                 runtime.residual.as_ref().map(|trace| {
@@ -5037,7 +5235,7 @@ fn apply_with_expected(
                         (!contains_type_variables(&result)).then_some(result)
                     });
             }
-            let comptime_call_results = closure_runtime.comptime_call_results.clone();
+            let memo_context = context.clone();
             closure_runtime.module = closure_module.clone();
             closure_runtime.module_instances = module_instances;
             Rc::make_mut(&mut closure_runtime.effect_scope).push(ClosureApplication {
@@ -5096,13 +5294,16 @@ fn apply_with_expected(
                         {
                             *nested = Some(span);
                         }
-                        if let Some(key) = memo_key
-                            && comptime_argument(&value).is_some()
-                        {
-                            let mut results = comptime_call_results.borrow_mut();
-                            if results.len() < COMPTIME_CALL_RESULT_LIMIT {
+                        if let Some(key) = memo_key {
+                            let value_memoizable = comptime_argument(&value).is_some();
+                            let mut results = memo_context.comptime_call_results.borrow_mut();
+                            let inserted =
+                                value_memoizable && results.len() < COMPTIME_CALL_RESULT_LIMIT;
+                            if inserted {
                                 results.insert(key, value.clone());
                             }
+                            crate::phase_telemetry::note_memo_store(value_memoizable, inserted);
+                            crate::phase_telemetry::note_memo_len(results.len());
                         }
                         let Some((trace, compilation)) = residual_compilation else {
                             return Computation::value(value);
@@ -5417,6 +5618,75 @@ fn run_special_or_primitive(
         };
         context.register_effect_declaration(&runtime.module, &value);
         return Computation::value(value);
+    }
+    if name == "@effect.attach_meta" {
+        if runtime.phase != Phase::Comptime {
+            return Computation::error(Diagnostic::new(
+                "BLOT_EFFECT_META_NOT_COMPTIME",
+                "`@effect.attach_meta` is available only during compile-time evaluation.",
+                span,
+            ));
+        }
+        let Some(id) = metadata_effect_id(&arguments[0]) else {
+            return Computation::error(Diagnostic::new(
+                "BLOT_TYPE",
+                "`@effect.attach_meta` takes an effect, a nonempty text key, and a payload.",
+                span,
+            ));
+        };
+        let Value::Text(key) = &arguments[1] else {
+            return Computation::error(Diagnostic::new(
+                "BLOT_TYPE",
+                "`@effect.attach_meta` takes an effect, a nonempty text key, and a payload.",
+                span,
+            ));
+        };
+        if key.is_empty() {
+            return Computation::error(Diagnostic::new(
+                "BLOT_TYPE",
+                "`@effect.attach_meta` requires a nonempty text key.",
+                span,
+            ));
+        }
+        if let Err(owner) =
+            context.attach_effect_metadata(&runtime.module, id, key, arguments[2].clone())
+        {
+            return Computation::error(Diagnostic::new(
+                "BLOT_EFFECT_META_CONFLICT",
+                format!(
+                    "`{key}` for this effect is already owned by `{owner}`; `{}` cannot claim it.",
+                    runtime.module.as_str(),
+                ),
+                span,
+            ));
+        }
+        return Computation::value(arguments[0].clone());
+    }
+    if name == "@effect.meta" {
+        let Some(id) = metadata_effect_id(&arguments[0]) else {
+            return Computation::error(Diagnostic::new(
+                "BLOT_TYPE",
+                "`@effect.meta` takes an effect and a text key.",
+                span,
+            ));
+        };
+        let Value::Text(key) = &arguments[1] else {
+            return Computation::error(Diagnostic::new(
+                "BLOT_TYPE",
+                "`@effect.meta` takes an effect and a text key.",
+                span,
+            ));
+        };
+        return Computation::value(match context.effect_metadata(id, key) {
+            Some(payload) => Value::Tag {
+                name: "Some".to_owned(),
+                payload: Some(Box::new(payload)),
+            },
+            None => Value::Tag {
+                name: "None".to_owned(),
+                payload: None,
+            },
+        });
     }
     if name == "@forall" {
         let variable = context.type_variable();

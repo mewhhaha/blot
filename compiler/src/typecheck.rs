@@ -371,6 +371,35 @@ pub(crate) struct EvaluatedClosure<'a> {
     pub(crate) checked_captures: Option<&'a BTreeMap<String, Value>>,
 }
 
+/// The application a static member call is checked against. Passed by
+/// reference so the checker's recursive frame stays small on deeply nested
+/// programs.
+struct MemberApplication<'a> {
+    path: &'a str,
+    module: &'a Module,
+    expression: ExpressionId,
+    function: ExpressionId,
+    argument: ExpressionId,
+    environment: &'a TypeEnvironment,
+    values: &'a ValueEnvironment,
+    dependencies: &'a BTreeMap<String, Type>,
+    span: Span,
+}
+
+/// The function hiding behind the prelude `tag` wrapper, with the statement
+/// argument already projected to the `.value` type it actually receives.
+struct WrapperTarget {
+    member: Value,
+    module_path: Rc<String>,
+    parameter: PatternId,
+    body: ExpressionId,
+    captures: ValueEnvironment,
+    self_name: Option<String>,
+    deferred: bool,
+    parameter_type: Type,
+    argument_value: Option<Value>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
 pub enum Scalar {
     Int(BigInt),
@@ -624,8 +653,10 @@ impl ConstraintTypeArena {
     fn intern_node(&mut self, node: ConstraintTypeNode) -> ConstraintTypeId {
         self.intern_attempts += 1;
         if let Some(id) = self.interned.get(&node) {
+            crate::phase_telemetry::note_intern(true);
             return *id;
         }
+        crate::phase_telemetry::note_intern(false);
         let id = ConstraintTypeId(self.nodes.len() as u32);
         self.nodes.push(node.clone());
         self.interned.insert(node, id);
@@ -1136,7 +1167,7 @@ struct SettleTraversal {
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CompilerWork {
+pub(crate) struct CompilerWork {
     schema: u32,
     type_nodes: u64,
     type_interns: u64,
@@ -1152,7 +1183,7 @@ struct CompilerWork {
 }
 
 #[derive(Clone, Copy, Default)]
-struct WorkSnapshot {
+pub(crate) struct WorkSnapshot {
     type_nodes: u64,
     type_interns: u64,
     constraints: u64,
@@ -2688,6 +2719,8 @@ pub struct Checker {
     level: Cell<u32>,
     phase: Cell<Phase>,
     specialization_depth: Cell<u32>,
+    speculating: Cell<u32>,
+    specialization_stack: RefCell<Vec<(String, ExpressionId)>>,
     active_closures: RefCell<Vec<(String, ExpressionId)>>,
     deferred_requirement_closures: RefCell<HashSet<(String, ExpressionId)>>,
     synthetic_calls: RefCell<HashMap<(String, u64, String, usize), SyntheticCallFact>>,
@@ -2786,6 +2819,8 @@ impl Checker {
             level: Cell::new(0),
             phase: Cell::new(Phase::Runtime),
             specialization_depth: Cell::new(0),
+            speculating: Cell::new(0),
+            specialization_stack: RefCell::new(Vec::new()),
             active_closures: RefCell::new(Vec::new()),
             deferred_requirement_closures: RefCell::new(HashSet::new()),
             synthetic_calls: RefCell::new(HashMap::new()),
@@ -2915,7 +2950,7 @@ impl Checker {
         }
     }
 
-    fn work_snapshot(&self) -> WorkSnapshot {
+    pub(crate) fn work_snapshot(&self) -> WorkSnapshot {
         let types = self.constraint_types.borrow();
         WorkSnapshot {
             type_nodes: types.nodes.len() as u64,
@@ -2931,7 +2966,7 @@ impl Checker {
         }
     }
 
-    fn work_since(&self, before: WorkSnapshot) -> CompilerWork {
+    pub(crate) fn work_since(&self, before: WorkSnapshot) -> CompilerWork {
         let after = self.work_snapshot();
         CompilerWork {
             schema: 3,
@@ -2949,6 +2984,58 @@ impl Checker {
                 - before.interface_fields_demanded,
             solver_worklist_peak: self.solver_worklist_peak.get(),
         }
+    }
+
+    /// Saturating phase-telemetry delta. A nested semantic request can reset
+    /// the arena-backed counters (`type_nodes`, `type_interns`) between two
+    /// snapshots; those clamp at zero and are named in the returned reset
+    /// list so consumers never read wrapped garbage. The `work` record keeps
+    /// using [`Self::work_since`], which never spans a reset.
+    pub(crate) fn work_delta_saturating(
+        &self,
+        before: WorkSnapshot,
+    ) -> (CompilerWork, Vec<&'static str>) {
+        let after = self.work_snapshot();
+        let mut resets = Vec::new();
+        let mut delta = |name: &'static str, before: u64, after: u64| -> u64 {
+            if after < before {
+                resets.push(name);
+                0
+            } else {
+                after - before
+            }
+        };
+        let work = CompilerWork {
+            schema: 3,
+            type_nodes: delta("typeNodes", before.type_nodes, after.type_nodes),
+            type_interns: delta("typeInterns", before.type_interns, after.type_interns),
+            constraints: delta("constraints", before.constraints, after.constraints),
+            settle_visits: delta("settleVisits", before.settle_visits, after.settle_visits),
+            freshen_visits: delta("freshenVisits", before.freshen_visits, after.freshen_visits),
+            union_visits: delta("unionVisits", before.union_visits, after.union_visits),
+            boundary_materializations: delta(
+                "boundaryMaterializations",
+                before.boundary_materializations,
+                after.boundary_materializations,
+            ),
+            capture_candidates: delta(
+                "captureCandidates",
+                before.capture_candidates,
+                after.capture_candidates,
+            ),
+            captures_bridged: delta(
+                "capturesBridged",
+                before.captures_bridged,
+                after.captures_bridged,
+            ),
+            interface_fields_demanded: delta(
+                "interfaceFieldsDemanded",
+                before.interface_fields_demanded,
+                after.interface_fields_demanded,
+            ),
+            solver_worklist_peak: self.solver_worklist_peak.get(),
+        };
+        (work, resets)
     }
 
     pub fn check(&self, path: &str) -> Result<CheckedModule, Diagnostic> {
@@ -3127,6 +3214,7 @@ impl Checker {
 
     pub fn begin_request(&self) {
         self.module_work.borrow_mut().clear();
+        self.context.clear_comptime_call_results();
         self.finish_request();
     }
 
@@ -4320,15 +4408,19 @@ impl Checker {
             .module(path)
             .cloned()
             .unwrap_or_default();
-        let ownership = crate::ownership::check(
-            path,
-            module,
-            &self.context,
-            values,
-            &closure_types,
-            &expression_types,
-            &handler_clauses,
-        );
+        let ownership = {
+            let _span =
+                crate::phase_telemetry::enter_span(crate::phase_telemetry::SubSpan::Ownership);
+            crate::ownership::check(
+                path,
+                module,
+                &self.context,
+                values,
+                &closure_types,
+                &expression_types,
+                &handler_clauses,
+            )
+        };
         let relational_parameters = closure_types
             .iter()
             .filter_map(|(body, type_)| {
@@ -4343,7 +4435,10 @@ impl Checker {
                     .map(|parameter| (*body, parameter))
             })
             .collect::<HashMap<_, _>>();
-        let safety = crate::safety::check(module, &self.context, values, &relational_parameters);
+        let safety = {
+            let _span = crate::phase_telemetry::enter_span(crate::phase_telemetry::SubSpan::Safety);
+            crate::safety::check(module, &self.context, values, &relational_parameters)
+        };
         let analyses = CachedModuleAnalyses {
             ownership: ownership.diagnostics.into_iter().next().map_or(Ok(()), Err),
             ownership_contracts: ownership.contracts,
@@ -6234,117 +6329,20 @@ impl Checker {
                         effects,
                     });
                 }
-                if let Expression::Field { target, name, .. } =
-                    &module.arena.expressions[function.0 as usize]
-                    && inferred_type_subject(module, *target).is_none()
-                    && let Ok(target_value) = self.evaluate(path, *target, values, Phase::Comptime)
-                    && (matches!(target_value, Value::Extended { .. })
-                        || name == "transform"
-                        || static_member(&target_value, name)
-                            .as_ref()
-                            .is_some_and(|val| is_operator_member_closure(&self.context, val)))
-                    && let Some(Value::Closure {
-                        module: closure_module,
-                        parameter,
-                        body,
-                        environment: closure_values,
-                        self_name,
-                        deferred,
-                        ..
-                    }) = static_member(&target_value, name)
-                {
-                    let argument_type =
-                        self.infer(path, module, argument, environment, values, dependencies)?;
-                    let is_resolve_op = static_member(&target_value, name)
-                        .as_ref()
-                        .is_some_and(|val| is_operator_member_closure(&self.context, val));
-                    let parameter_type = Some(argument_type.type_.clone());
-                    let argument_value =
-                        self.evaluate(path, argument, values, Phase::Comptime).ok();
-                    let attached_signature = static_member(&target_value, name)
-                        .as_ref()
-                        .filter(|_| !is_resolve_op)
-                        .and_then(|member| self.bridge_closed_attached_signature(member));
-                    let specialize_reflection = self
-                        .context
-                        .modules
-                        .borrow()
-                        .get(closure_module.as_ref())
-                        .is_some_and(|loaded| {
-                            expression_contains_computed_field(&loaded.module, body)
-                        });
-                    let retained_signature =
-                        attached_signature.clone().filter(|_| specialize_reflection);
-                    let function_type = if let Some(signature) =
-                        attached_signature.filter(|_| !specialize_reflection)
-                    {
-                        signature
-                    } else {
-                        self.infer_evaluated_closure(
-                            path,
-                            module,
-                            EvaluatedClosure {
-                                argument_value: argument_value.as_ref(),
-                                checked_captures: None,
-                                module_path: &closure_module,
-                                parameter,
-                                body,
-                                captures: &closure_values,
-                                self_name: self_name.as_deref(),
-                                deferred,
-                            },
-                            environment,
-                            dependencies,
-                            parameter_type,
-                        )?
-                    };
-                    let result = self.fresh();
-                    let performed = self.fresh();
-                    let deferred = self.deferred_call(&function_type);
-                    if let Some(signature) = retained_signature {
-                        self.constrain(
-                            signature,
-                            Type::Function {
-                                deferred,
-                                parameter: Rc::new(argument_type.type_.clone()),
-                                effects: Rc::new(performed.clone()),
-                                result: Rc::new(result.clone()),
-                            },
-                            span,
-                        )?;
-                    }
-                    self.constrain(
-                        function_type,
-                        Type::Function {
-                            deferred,
-                            parameter: Rc::new(argument_type.type_),
-                            effects: Rc::new(performed.clone()),
-                            result: Rc::new(result.clone()),
-                        },
+                if let Some(inferred) =
+                    self.infer_static_member_application(&MemberApplication {
+                        path,
+                        module,
+                        expression: expression_id,
+                        function,
+                        argument,
+                        environment,
+                        values,
+                        dependencies,
                         span,
-                    )?;
-                    let result = if argument_value.is_some()
-                        && self
-                            .context
-                            .modules
-                            .borrow()
-                            .get(closure_module.as_ref())
-                            .is_some_and(|loaded| {
-                                expression_contains_computed_field(&loaded.module, body)
-                            })
-                        && let Ok(value) =
-                            self.evaluate(path, expression_id, values, Phase::Comptime)
-                        && let Some(exact) = self.bridge(&value)
-                    {
-                        self.constrain(exact.clone(), result, span)?;
-                        exact
-                    } else {
-                        result
-                    };
-                    return Ok(Inferred {
-                        type_: result,
-                        effects: self.join_effects(argument_type.effects, performed)?,
-                    });
+                    })?
+                {
+                    return Ok(inferred);
                 }
                 if matches!(&module.arena.expressions[function.0 as usize],
                     Expression::Intrinsic { name, .. } if name == "@shape.names")
@@ -6421,6 +6419,13 @@ impl Checker {
                         return Err(Diagnostic::new(
                             "BLOT_INCLUDE_NOT_COMPTIME",
                             "`@include` is available only during compile-time evaluation.",
+                            span,
+                        ));
+                    }
+                    if name == "@effect.attach_meta" {
+                        return Err(Diagnostic::new(
+                            "BLOT_EFFECT_META_NOT_COMPTIME",
+                            "`@effect.attach_meta` is available only during compile-time evaluation.",
                             span,
                         ));
                     }
@@ -6810,6 +6815,37 @@ impl Checker {
                         })
                 });
                 let mut selected_effects = None;
+                if self.specialization_depth.get() > 0
+                    && !synthetic_expression
+                    && requires_specialization
+                    && let Some(Value::Closure {
+                        module: closure_module,
+                        parameter,
+                        body,
+                        environment: closure_values,
+                        self_name,
+                        deferred,
+                        ..
+                    }) = evaluated_function.as_ref()
+                    && self_name.is_none()
+                    && !self.specialization_active(closure_module, *body)
+                {
+                    self.validate_nested_specialization(
+                        path,
+                        module,
+                        closure_module,
+                        *parameter,
+                        *body,
+                        closure_values,
+                        self_name.as_deref(),
+                        *deferred,
+                        environment,
+                        dependencies,
+                        &argument_type,
+                        argument_expression,
+                        values,
+                    )?;
+                }
                 let selected_result = if self.specialization_depth.get() == 0
                     && !synthetic_expression
                     && (unsettled_result || requires_specialization)
@@ -7389,7 +7425,13 @@ impl Checker {
                         &target_evidence_before_patterns,
                     )
                     .unwrap_or_else(|| settled_target.clone());
-                    if !patterns_cover(module, &arms, &coverage_target) {
+                    let patterns_cover_target = {
+                        let _span = crate::phase_telemetry::enter_span(
+                            crate::phase_telemetry::SubSpan::Coverage,
+                        );
+                        patterns_cover(module, &arms, &coverage_target)
+                    };
+                    if !patterns_cover_target {
                         let multi_case_coverage_tuple = matches!(
                             &coverage_target,
                             Type::Record(fields)
@@ -7834,6 +7876,282 @@ impl Checker {
         Ok(())
     }
 
+    /// Infers `target.member (argument)` through the member closure itself,
+    /// nailing its parameter to the argument type. Returns None when the
+    /// application is not a static member call, so checking falls through to
+    /// the general application path. Outlined from inference: this arm's
+    /// bindings must not ride the checker's recursive frame.
+    fn infer_static_member_application(
+        &self,
+        application: &MemberApplication<'_>,
+    ) -> Result<Option<Inferred>, Diagnostic> {
+        let path = application.path;
+        let module = application.module;
+        let expression_id = application.expression;
+        let function = application.function;
+        let argument = application.argument;
+        let environment = application.environment;
+        let values = application.values;
+        let dependencies = application.dependencies;
+        let span = application.span;
+        let Expression::Field { target, name, .. } = &module.arena.expressions[function.0 as usize]
+        else {
+            return Ok(None);
+        };
+        if inferred_type_subject(module, *target).is_some() {
+            return Ok(None);
+        }
+        let Ok(target_value) = self.evaluate(path, *target, values, Phase::Comptime) else {
+            return Ok(None);
+        };
+        if !(matches!(target_value, Value::Extended { .. })
+            || name == "transform"
+            || static_member(&target_value, name)
+                .as_ref()
+                .is_some_and(|val| is_operator_member_closure(&self.context, val)))
+        {
+            return Ok(None);
+        }
+        let Some(Value::Closure {
+            module: closure_module,
+            parameter,
+            body,
+            environment: closure_values,
+            self_name,
+            deferred,
+            ..
+        }) = static_member(&target_value, name)
+        else {
+            return Ok(None);
+        };
+
+        let argument_type =
+            self.infer(path, module, argument, environment, values, dependencies)?;
+        let argument_value = self.evaluate(path, argument, values, Phase::Comptime).ok();
+        let wrapper_target = self.value_wrapper_target(
+            &target_value,
+            name,
+            &argument_type.type_,
+            argument_value.as_ref(),
+            span,
+        )?;
+        let attached_signature = match wrapper_target.as_ref() {
+            Some(target) => {
+                let is_resolve_op = is_operator_member_closure(&self.context, &target.member);
+                (!is_resolve_op)
+                    .then_some(&target.member)
+                    .and_then(|member| self.bridge_closed_attached_signature(member))
+            }
+            None => {
+                let is_resolve_op = static_member(&target_value, name)
+                    .as_ref()
+                    .is_some_and(|val| is_operator_member_closure(&self.context, val));
+                static_member(&target_value, name)
+                    .as_ref()
+                    .filter(|_| !is_resolve_op)
+                    .and_then(|member| self.bridge_closed_attached_signature(member))
+            }
+        };
+        let (
+            closure_module,
+            parameter,
+            body,
+            closure_values,
+            self_name,
+            deferred,
+            call_parameter_type,
+            argument_value,
+        ) = match wrapper_target {
+            Some(target) => (
+                target.module_path,
+                target.parameter,
+                target.body,
+                target.captures,
+                target.self_name,
+                target.deferred,
+                target.parameter_type,
+                target.argument_value,
+            ),
+            None => (
+                closure_module,
+                parameter,
+                body,
+                closure_values,
+                self_name,
+                deferred,
+                argument_type.type_.clone(),
+                argument_value,
+            ),
+        };
+        let specialize_reflection = self
+            .context
+            .modules
+            .borrow()
+            .get(closure_module.as_ref())
+            .is_some_and(|loaded| expression_contains_computed_field(&loaded.module, body));
+        let retained_signature = attached_signature.clone().filter(|_| specialize_reflection);
+        let function_type =
+            if let Some(signature) = attached_signature.filter(|_| !specialize_reflection) {
+                signature
+            } else {
+                self.infer_evaluated_closure(
+                    path,
+                    module,
+                    EvaluatedClosure {
+                        argument_value: argument_value.as_ref(),
+                        checked_captures: None,
+                        module_path: &closure_module,
+                        parameter,
+                        body,
+                        captures: &closure_values,
+                        self_name: self_name.as_deref(),
+                        deferred,
+                    },
+                    environment,
+                    dependencies,
+                    Some(call_parameter_type.clone()),
+                )?
+            };
+        let result = self.fresh();
+        let performed = self.fresh();
+        let deferred = self.deferred_call(&function_type);
+        if let Some(signature) = retained_signature {
+            self.constrain(
+                signature,
+                Type::Function {
+                    deferred,
+                    parameter: Rc::new(call_parameter_type.clone()),
+                    effects: Rc::new(performed.clone()),
+                    result: Rc::new(result.clone()),
+                },
+                span,
+            )?;
+        }
+        self.constrain(
+            function_type,
+            Type::Function {
+                deferred,
+                parameter: Rc::new(call_parameter_type.clone()),
+                effects: Rc::new(performed.clone()),
+                result: Rc::new(result.clone()),
+            },
+            span,
+        )?;
+        let result = if argument_value.is_some()
+            && self
+                .context
+                .modules
+                .borrow()
+                .get(closure_module.as_ref())
+                .is_some_and(|loaded| expression_contains_computed_field(&loaded.module, body))
+            && let Ok(value) = self.evaluate(path, expression_id, values, Phase::Comptime)
+            && let Some(exact) = self.bridge(&value)
+        {
+            self.constrain(exact.clone(), result, span)?;
+            exact
+        } else {
+            result
+        };
+        Ok(Some(Inferred {
+            type_: result,
+            effects: self.join_effects(argument_type.effects, performed)?,
+        }))
+    }
+
+    /// Sees through the prelude `tag` wrapper `fn stmt => f stmt.value` to the
+    /// wrapped function, nailing its parameter to the statement's `.value`
+    /// type. Signature headers keep constraining the final transformed value
+    /// only if checking reaches past the wrapper. Anything that is not a
+    /// single wrapper around a closure falls back to the general path.
+    fn value_wrapper_target(
+        &self,
+        target: &Value,
+        member: &str,
+        argument_type: &Type,
+        argument_value: Option<&Value>,
+        span: Span,
+    ) -> Result<Option<WrapperTarget>, Diagnostic> {
+        let Some(Value::Closure {
+            module: closure_module,
+            parameter,
+            body,
+            environment: captures,
+            ..
+        }) = static_member(target, member)
+        else {
+            return Ok(None);
+        };
+        let inner = {
+            let modules = self.context.modules.borrow();
+            let Some(loaded) = modules.get(closure_module.as_str()) else {
+                return Ok(None);
+            };
+            let Some(function) = wrapper_projection(&loaded.module, parameter, body) else {
+                return Ok(None);
+            };
+            let Some(inner) = lookup(&captures, &function) else {
+                return Ok(None);
+            };
+            inner
+        };
+        let (
+            inner_module,
+            inner_parameter,
+            inner_body,
+            inner_captures,
+            inner_self_name,
+            inner_deferred,
+        ) = match &inner {
+            Value::Closure {
+                module,
+                parameter,
+                body,
+                environment,
+                self_name,
+                deferred,
+                ..
+            } => (
+                module.clone(),
+                *parameter,
+                *body,
+                environment.clone(),
+                self_name.clone(),
+                *deferred,
+            ),
+            _ => return Ok(None),
+        };
+        let nested = {
+            let modules = self.context.modules.borrow();
+            modules.get(inner_module.as_str()).is_some_and(|loaded| {
+                wrapper_projection(&loaded.module, inner_parameter, inner_body).is_some()
+            })
+        };
+        if nested {
+            return Ok(None);
+        }
+        let projected = self.fresh();
+        self.constrain(
+            argument_type.clone(),
+            Type::Record(vec![("value".to_owned(), projected.clone())].into()),
+            span,
+        )?;
+        let projected_value = argument_value.and_then(|value| match value {
+            Value::Shape(fields) => fields.get("value").cloned(),
+            _ => None,
+        });
+        Ok(Some(WrapperTarget {
+            member: inner,
+            module_path: inner_module,
+            parameter: inner_parameter,
+            body: inner_body,
+            captures: inner_captures,
+            self_name: inner_self_name,
+            deferred: inner_deferred,
+            parameter_type: projected,
+            argument_value: projected_value,
+        }))
+    }
+
     fn infer_evaluated_closure(
         &self,
         path: &str,
@@ -7978,6 +8296,9 @@ impl Checker {
             let previous_specialization_depth = self.specialization_depth.get();
             self.specialization_depth
                 .set(previous_specialization_depth + 1);
+            self.specialization_stack
+                .borrow_mut()
+                .push((closure_module.to_owned(), body));
             self.active_closures
                 .borrow_mut()
                 .push((closure_module.to_owned(), body));
@@ -7990,6 +8311,7 @@ impl Checker {
                 dependencies,
             );
             self.active_closures.borrow_mut().pop();
+            self.specialization_stack.borrow_mut().pop();
             self.specialization_depth.set(previous_specialization_depth);
             let inferred = inferred?;
             let function = Type::Function {
@@ -8095,8 +8417,11 @@ impl Checker {
     ) -> Result<Inferred, Diagnostic> {
         match requirement {
             Requirement::Type(expected) => {
-                self.constrain(subject.type_.clone(), expected, span)?;
-                Ok(subject)
+                self.constrain(subject.type_.clone(), expected.clone(), span)?;
+                Ok(Inferred {
+                    type_: refine_subject_to_expected(&subject.type_, &expected),
+                    effects: subject.effects,
+                })
             }
             Requirement::Predicate(predicate) => {
                 let mut settled = self.settle(subject.type_.clone(), true);
@@ -8107,8 +8432,11 @@ impl Checker {
                     settled = self.settle(subject.type_.clone(), true);
                 }
                 if contains_bottom(&settled) && self.active_closure_contains_computed_field() {
-                    self.defer_current_closure();
+                    self.defer_closure_stack();
                     return Ok(subject);
+                }
+                if contains_singleton_range(&settled) {
+                    settled = self.settle_predicate_subject(&subject.type_);
                 }
                 let reified = self.reify_runtime_type(&settled).ok_or_else(|| {
                     Diagnostic::new(
@@ -8152,6 +8480,119 @@ impl Checker {
             self.deferred_requirement_closures
                 .borrow_mut()
                 .insert(closure.clone());
+        }
+    }
+
+    fn defer_closure_stack(&self) {
+        let active = self.active_closures.borrow();
+        if active.is_empty() {
+            return;
+        }
+        let mut deferred = self.deferred_requirement_closures.borrow_mut();
+        for closure in active.iter() {
+            deferred.insert(closure.clone());
+        }
+    }
+
+    fn specialization_active(&self, module: &str, body: ExpressionId) -> bool {
+        self.specialization_stack
+            .borrow()
+            .contains(&(module.to_owned(), body))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_nested_specialization(
+        &self,
+        path: &str,
+        module: &Module,
+        closure_module: &str,
+        parameter: PatternId,
+        body: ExpressionId,
+        captures: &ValueEnvironment,
+        self_name: Option<&str>,
+        deferred: bool,
+        environment: &TypeEnvironment,
+        dependencies: &BTreeMap<String, Type>,
+        argument_type: &Type,
+        argument_expression: ExpressionId,
+        values: &ValueEnvironment,
+    ) -> Result<(), Diagnostic> {
+        let variables = self.variables.borrow().clone();
+        let next_skolem = self.next_skolem.get();
+        let member_constraints = self.member_constraints.borrow().clone();
+        let numeric_literals = self.numeric_literals.borrow().clone();
+        let empty_array_elements = self.empty_array_elements.borrow().clone();
+        let incomplete_evaluations = self.incomplete_evaluations.borrow().clone();
+        let closure_types = self.closure_types.borrow().clone();
+        let signed_closure_types = self.signed_closure_types.borrow().clone();
+        let analysis_expression_types = self.analysis_expression_types.borrow().clone();
+        let expression_types = self.expression_types.borrow().clone();
+        let editor_holes = self.editor_holes.borrow().clone();
+        let handler_clauses = self.handler_clauses.borrow().clone();
+        let deferred_requirement_closures = self.deferred_requirement_closures.borrow().clone();
+        let synthetic_calls = self.synthetic_calls.borrow().clone();
+        let readability = self.readability.borrow().clone();
+        let conflicting_readability = self.conflicting_readability.borrow().clone();
+        let structural_readability_candidates =
+            self.structural_readability_candidates.borrow().clone();
+        let stable_shadow_candidates = self.stable_shadow_candidates.borrow().clone();
+        let direct_effect_candidates = self.direct_effect_candidates.borrow().clone();
+        let open_usage_candidates = self.open_usage_candidates.borrow().clone();
+        let argument_value = self
+            .evaluate(path, argument_expression, values, Phase::Comptime)
+            .ok();
+        // The probe must not evict cached module analyses or replay ownership:
+        // its facts are fragmentary and rolled back below, so a replay would
+        // run on incomplete state and poison the cache it recomputes.
+        self.speculating.set(self.speculating.get() + 1);
+        let result = self.infer_evaluated_closure(
+            path,
+            module,
+            EvaluatedClosure {
+                argument_value: argument_value.as_ref(),
+                checked_captures: None,
+                module_path: closure_module,
+                parameter,
+                body,
+                captures,
+                self_name,
+                deferred,
+            },
+            environment,
+            dependencies,
+            Some(argument_type.clone()),
+        );
+        self.speculating.set(self.speculating.get() - 1);
+        debug_assert!(self.bound_insertions.borrow().is_empty());
+        *self.variables.borrow_mut() = variables;
+        self.next_skolem.set(next_skolem);
+        *self.member_constraints.borrow_mut() = member_constraints;
+        *self.numeric_literals.borrow_mut() = numeric_literals;
+        *self.empty_array_elements.borrow_mut() = empty_array_elements;
+        *self.incomplete_evaluations.borrow_mut() = incomplete_evaluations;
+        *self.closure_types.borrow_mut() = closure_types;
+        *self.signed_closure_types.borrow_mut() = signed_closure_types;
+        *self.analysis_expression_types.borrow_mut() = analysis_expression_types;
+        *self.expression_types.borrow_mut() = expression_types;
+        *self.editor_holes.borrow_mut() = editor_holes;
+        *self.handler_clauses.borrow_mut() = handler_clauses;
+        *self.deferred_requirement_closures.borrow_mut() = deferred_requirement_closures;
+        *self.synthetic_calls.borrow_mut() = synthetic_calls;
+        *self.readability.borrow_mut() = readability;
+        *self.conflicting_readability.borrow_mut() = conflicting_readability;
+        *self.structural_readability_candidates.borrow_mut() = structural_readability_candidates;
+        *self.stable_shadow_candidates.borrow_mut() = stable_shadow_candidates;
+        *self.direct_effect_candidates.borrow_mut() = direct_effect_candidates;
+        *self.open_usage_candidates.borrow_mut() = open_usage_candidates;
+        self.settled_variables.borrow_mut().clear();
+        self.residual_variables.borrow_mut().clear();
+        self.residual_analyses.borrow_mut().clear();
+        self.residual_prefixes.borrow_mut().clear();
+        self.member_reachability.borrow_mut().clear();
+        match result {
+            Ok(_) => Ok(()),
+            Err(diagnostic) if diagnostic.code == "BLOT_DOES_NOT_SATISFY" => Err(diagnostic),
+            Err(_) => Ok(()),
         }
     }
 
@@ -8310,7 +8751,18 @@ impl Checker {
             argument,
             crate::ownership::HandlerEvidence::Checked(known_clauses),
         );
-        if changed && self.module_analyses.borrow_mut().remove(path).is_some() {
+        // A replay walks the whole module, so it needs provenance for every
+        // handler in it, not just the one inferred above. Skipping keeps the
+        // last cached analysis; replaying over fragmentary facts panics.
+        let provenance_complete = crate::ownership::handle_provenance_complete(
+            module,
+            self.handler_clauses.borrow().module(path),
+        );
+        if changed
+            && self.speculating.get() == 0
+            && provenance_complete
+            && self.module_analyses.borrow_mut().remove(path).is_some()
+        {
             // A previously checked generic module now has concrete handler
             // contracts. Replay ownership before its importer can use them.
             let analyses = self.cached_analyses(path, module, values);
@@ -11230,6 +11682,14 @@ impl Checker {
         // These certificates belong to this compile-time application, not to
         // every future instantiation of the source closure.
         let saved = self.publish_evaluation_expression_types(path, &operator_arguments);
+        if crate::phase_telemetry::is_active() {
+            crate::phase_telemetry::note_eval_expression_call(
+                path,
+                expression.0,
+                phase_tag(phase),
+                environment,
+            );
+        }
         let evaluated = run(evaluate_expression(
             self.context.clone(),
             Rc::new(path.to_owned()),
@@ -11260,6 +11720,15 @@ impl Checker {
         }
         let environment_identity = Rc::as_ptr(environment) as usize;
         let key = (pattern, expression, phase, environment_identity);
+        if crate::phase_telemetry::is_active() {
+            crate::phase_telemetry::note_eval_binding_call(
+                path,
+                pattern.0,
+                expression.0,
+                phase_tag(phase),
+                environment,
+            );
+        }
         let cached = {
             let evaluated_bindings = self.context.evaluated_bindings.borrow();
             evaluated_bindings.get(path).and_then(|bindings| {
@@ -11276,6 +11745,7 @@ impl Checker {
             })
         };
         if let Some(value) = cached {
+            crate::phase_telemetry::note_eval_cache_hit();
             return Ok(value);
         }
         let saved = self.publish_evaluation_expression_types(path, &operator_arguments);
@@ -11479,6 +11949,7 @@ impl Checker {
     }
 
     fn bridge(&self, value: &Value) -> Option<Type> {
+        let _span = crate::phase_telemetry::enter_span(crate::phase_telemetry::SubSpan::Conversion);
         value_bridge::bridge(self, value)
     }
 
@@ -11987,6 +12458,398 @@ fn contains_bottom(type_: &Type) -> bool {
         | Type::Effects(_)
         | Type::Opaque(_)
         | Type::Top => false,
+    }
+}
+
+fn contains_singleton_range(type_: &Type) -> bool {
+    match type_ {
+        Type::Qualified { requirements, body } => {
+            contains_singleton_range(body)
+                || requirements.iter().any(|requirement| {
+                    contains_singleton_range(&requirement.subject)
+                        || contains_singleton_range(&requirement.member)
+                })
+        }
+        Type::Range {
+            low: Some(low),
+            high: Some(high),
+            ..
+        } => low == high,
+        Type::Forall { body, .. } => contains_singleton_range(body),
+        Type::Function {
+            parameter,
+            effects,
+            result,
+            ..
+        } => {
+            contains_singleton_range(parameter)
+                || contains_singleton_range(effects)
+                || contains_singleton_range(result)
+        }
+        Type::Record(fields) | Type::Variant { cases: fields, .. } => fields
+            .iter()
+            .any(|(_, field)| contains_singleton_range(field)),
+        Type::RecordUpdate { base, fields } => {
+            contains_singleton_range(base)
+                || fields
+                    .iter()
+                    .any(|(_, field)| contains_singleton_range(field))
+        }
+        Type::Array(element)
+        | Type::Region(element)
+        | Type::Scratch(element)
+        | Type::Resource {
+            payload: element, ..
+        } => contains_singleton_range(element),
+        Type::OpenEffects { tail, .. } => contains_singleton_range(tail),
+        Type::Union(members) => members.iter().any(contains_singleton_range),
+        Type::Variable(_)
+        | Type::Rigid(_)
+        | Type::Range { .. }
+        | Type::Unit
+        | Type::Effects(_)
+        | Type::Opaque(_)
+        | Type::Top
+        | Type::Bottom => false,
+    }
+}
+
+fn upper_proves_unbounded_domain(upper: &Type, domain: Domain) -> bool {
+    matches!(
+        upper,
+        Type::Range {
+            domain: upper_domain,
+            low: None,
+            high: None,
+        } if *upper_domain == domain
+    )
+}
+
+impl Checker {
+    fn settle_predicate_subject(&self, type_: &Type) -> Type {
+        match type_ {
+            Type::Variable(id) => {
+                let positive = self.settle(Type::Variable(*id), true);
+                if !contains_singleton_range(&positive) {
+                    return positive;
+                }
+                let upper = self.settle(Type::Variable(*id), false);
+                widen_inferred_singletons(&positive, &upper)
+            }
+            Type::Qualified { requirements, body } => Type::Qualified {
+                requirements: requirements
+                    .iter()
+                    .map(|requirement| MemberRequirement {
+                        name: requirement.name.clone(),
+                        subject: self.settle_predicate_subject(&requirement.subject),
+                        member: self.settle_predicate_subject(&requirement.member),
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+                body: Rc::new(self.settle_predicate_subject(body)),
+            },
+            Type::Forall { variables, body } => Type::Forall {
+                variables: variables.clone(),
+                body: Rc::new(self.settle_predicate_subject(body)),
+            },
+            Type::Function {
+                deferred,
+                parameter,
+                effects,
+                result,
+            } => Type::Function {
+                deferred: *deferred,
+                parameter: Rc::new(self.settle_predicate_subject(parameter)),
+                effects: Rc::new(self.settle_predicate_subject(effects)),
+                result: Rc::new(self.settle_predicate_subject(result)),
+            },
+            Type::Record(fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(name, field)| (name.clone(), self.settle_predicate_subject(field)))
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+            Type::Variant { cases, open } => Type::Variant {
+                cases: cases
+                    .iter()
+                    .map(|(name, field)| (name.clone(), self.settle_predicate_subject(field)))
+                    .collect::<Vec<_>>()
+                    .into(),
+                open: *open,
+            },
+            Type::RecordUpdate { base, fields } => Type::RecordUpdate {
+                base: Rc::new(self.settle_predicate_subject(base)),
+                fields: fields
+                    .iter()
+                    .map(|(name, field)| (name.clone(), self.settle_predicate_subject(field)))
+                    .collect::<Vec<_>>()
+                    .into(),
+            },
+            Type::Array(element) => Type::Array(Rc::new(self.settle_predicate_subject(element))),
+            Type::Region(element) => Type::Region(Rc::new(self.settle_predicate_subject(element))),
+            Type::Scratch(element) => {
+                Type::Scratch(Rc::new(self.settle_predicate_subject(element)))
+            }
+            Type::Resource { family, payload } => Type::Resource {
+                family: family.clone(),
+                payload: Rc::new(self.settle_predicate_subject(payload)),
+            },
+            Type::Union(members) => Type::Union(
+                members
+                    .iter()
+                    .map(|member| self.settle_predicate_subject(member))
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+            Type::OpenEffects { labels, tail } => Type::OpenEffects {
+                labels: labels.clone(),
+                tail: Rc::new(self.settle_predicate_subject(tail)),
+            },
+            _ => type_.clone(),
+        }
+    }
+}
+
+fn widen_inferred_singletons(lower: &Type, upper: &Type) -> Type {
+    match lower {
+        Type::Range {
+            domain,
+            low: Some(low),
+            high: Some(high),
+        } if low == high && upper_proves_unbounded_domain(upper, *domain) => Type::Range {
+            domain: *domain,
+            low: None,
+            high: None,
+        },
+        Type::Record(fields) => match upper {
+            Type::Record(upper_fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(name, field)| {
+                        (
+                            name.clone(),
+                            match upper_fields.get(name) {
+                                Some(upper_field) => widen_inferred_singletons(field, upper_field),
+                                None => field.clone(),
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+            _ => lower.clone(),
+        },
+        Type::Variant { cases, open } => match upper {
+            Type::Variant {
+                cases: upper_cases, ..
+            } => Type::Variant {
+                cases: cases
+                    .iter()
+                    .map(|(name, field)| {
+                        (
+                            name.clone(),
+                            match upper_cases.get(name) {
+                                Some(upper_field) => widen_inferred_singletons(field, upper_field),
+                                None => field.clone(),
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+                open: *open,
+            },
+            _ => lower.clone(),
+        },
+        Type::RecordUpdate { base, fields } => match upper {
+            Type::RecordUpdate {
+                base: upper_base,
+                fields: upper_fields,
+            } => Type::RecordUpdate {
+                base: Rc::new(widen_inferred_singletons(base, upper_base)),
+                fields: fields
+                    .iter()
+                    .map(|(name, field)| {
+                        (
+                            name.clone(),
+                            match upper_fields.get(name) {
+                                Some(upper_field) => widen_inferred_singletons(field, upper_field),
+                                None => field.clone(),
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            },
+            _ => lower.clone(),
+        },
+        Type::Array(element) => match upper {
+            Type::Array(upper_element) => {
+                Type::Array(Rc::new(widen_inferred_singletons(element, upper_element)))
+            }
+            _ => lower.clone(),
+        },
+        Type::Region(element) => match upper {
+            Type::Region(upper_element) => {
+                Type::Region(Rc::new(widen_inferred_singletons(element, upper_element)))
+            }
+            _ => lower.clone(),
+        },
+        Type::Scratch(element) => match upper {
+            Type::Scratch(upper_element) => {
+                Type::Scratch(Rc::new(widen_inferred_singletons(element, upper_element)))
+            }
+            _ => lower.clone(),
+        },
+        Type::Resource { family, payload } => match upper {
+            Type::Resource {
+                family: upper_family,
+                payload: upper_payload,
+            } if family == upper_family => Type::Resource {
+                family: family.clone(),
+                payload: Rc::new(widen_inferred_singletons(payload, upper_payload)),
+            },
+            _ => lower.clone(),
+        },
+        Type::Function {
+            deferred,
+            parameter,
+            effects,
+            result,
+        } => match upper {
+            Type::Function {
+                parameter: upper_parameter,
+                effects: upper_effects,
+                result: upper_result,
+                ..
+            } => Type::Function {
+                deferred: *deferred,
+                parameter: Rc::new(widen_inferred_singletons(parameter, upper_parameter)),
+                effects: Rc::new(widen_inferred_singletons(effects, upper_effects)),
+                result: Rc::new(widen_inferred_singletons(result, upper_result)),
+            },
+            _ => lower.clone(),
+        },
+        Type::Union(members) => Type::Union(
+            members
+                .iter()
+                .map(|member| widen_inferred_singletons(member, upper))
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        Type::Qualified { requirements, body } => match upper {
+            Type::Qualified {
+                body: upper_body, ..
+            } => Type::Qualified {
+                requirements: requirements.clone(),
+                body: Rc::new(widen_inferred_singletons(body, upper_body)),
+            },
+            _ => lower.clone(),
+        },
+        Type::Forall { variables, body } => match upper {
+            Type::Forall {
+                body: upper_body, ..
+            } => Type::Forall {
+                variables: variables.clone(),
+                body: Rc::new(widen_inferred_singletons(body, upper_body)),
+            },
+            _ => lower.clone(),
+        },
+        Type::OpenEffects { labels, tail } => match upper {
+            Type::OpenEffects {
+                tail: upper_tail, ..
+            } => Type::OpenEffects {
+                labels: labels.clone(),
+                tail: Rc::new(widen_inferred_singletons(tail, upper_tail)),
+            },
+            _ => lower.clone(),
+        },
+        Type::Variable(_)
+        | Type::Rigid(_)
+        | Type::Range { .. }
+        | Type::Unit
+        | Type::Effects(_)
+        | Type::Opaque(_)
+        | Type::Top
+        | Type::Bottom => lower.clone(),
+    }
+}
+
+fn refine_subject_to_expected(subject: &Type, expected: &Type) -> Type {
+    match (subject, expected) {
+        (Type::Record(fields), Type::Record(expected_fields)) => Type::Record(
+            fields
+                .iter()
+                .map(|(name, field)| {
+                    (
+                        name.clone(),
+                        match expected_fields.get(name) {
+                            Some(expected_field) => {
+                                refine_subject_to_expected(field, expected_field)
+                            }
+                            None => field.clone(),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        (
+            Type::Variant { cases, open },
+            Type::Variant {
+                cases: expected_cases,
+                ..
+            },
+        ) => Type::Variant {
+            cases: cases
+                .iter()
+                .map(|(name, field)| {
+                    (
+                        name.clone(),
+                        match expected_cases.get(name) {
+                            Some(expected_field) => {
+                                refine_subject_to_expected(field, expected_field)
+                            }
+                            None => field.clone(),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into(),
+            open: *open,
+        },
+        (Type::Array(element), Type::Array(expected_element)) => Type::Array(Rc::new(
+            refine_subject_to_expected(element, expected_element),
+        )),
+        (Type::Region(element), Type::Region(expected_element)) => Type::Region(Rc::new(
+            refine_subject_to_expected(element, expected_element),
+        )),
+        (Type::Scratch(element), Type::Scratch(expected_element)) => Type::Scratch(Rc::new(
+            refine_subject_to_expected(element, expected_element),
+        )),
+        (
+            Type::Resource { family, payload },
+            Type::Resource {
+                family: expected_family,
+                payload: expected_payload,
+            },
+        ) if family == expected_family => Type::Resource {
+            family: family.clone(),
+            payload: Rc::new(refine_subject_to_expected(payload, expected_payload)),
+        },
+        (
+            Type::Range {
+                domain: Domain::Text,
+                low: Some(low),
+                high: Some(high),
+            },
+            Type::Range {
+                domain: Domain::Text,
+                low: None,
+                high: None,
+            },
+        ) if low == high => expected.clone(),
+        _ => subject.clone(),
     }
 }
 
@@ -12803,6 +13666,24 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         }
         "@fail" | "@panic" => curried(vec![text], Type::Bottom),
         "@effect.shared" => curried(vec![text, checker.fresh()], checker.fresh()),
+        "@effect.attach_meta" => {
+            let effect = checker.fresh();
+            curried(vec![effect.clone(), text, checker.fresh()], effect)
+        }
+        "@effect.meta" => {
+            let payload = checker.fresh();
+            curried(
+                vec![checker.fresh(), text],
+                Type::Variant {
+                    cases: vec![
+                        ("Some".to_owned(), payload),
+                        ("None".to_owned(), Type::Unit),
+                    ]
+                    .into(),
+                    open: false,
+                },
+            )
+        }
         "@effect" | "@effect.host" | "@forall" | "@import" => {
             curried(vec![checker.fresh()], checker.fresh())
         }
@@ -14328,6 +15209,40 @@ fn is_operator_member_closure(context: &Context, closure: &Value) -> bool {
     inferred_type_subject(&loaded.module, *target).is_some()
 }
 
+/// Matches the prelude `tag` wrapper `fn param => function param.value`
+/// against a closure body, returning the wrapped function name. Structural
+/// AST only: any closure with this shape behaves as the value adapter no
+/// matter which binding introduced it.
+fn wrapper_projection(module: &Module, parameter: PatternId, body: ExpressionId) -> Option<String> {
+    let Expression::Apply {
+        function, argument, ..
+    } = &module.arena.expressions[body.0 as usize]
+    else {
+        return None;
+    };
+    let Expression::Field { target, name, .. } = &module.arena.expressions[argument.0 as usize]
+    else {
+        return None;
+    };
+    if name != "value" {
+        return None;
+    }
+    let Expression::Var { name: target, .. } = &module.arena.expressions[target.0 as usize] else {
+        return None;
+    };
+    let Pattern::Name { name: bound, .. } = &module.arena.patterns[parameter.0 as usize] else {
+        return None;
+    };
+    if target != bound {
+        return None;
+    }
+    let Expression::Var { name: function, .. } = &module.arena.expressions[function.0 as usize]
+    else {
+        return None;
+    };
+    Some(function.clone())
+}
+
 fn validate_declaration_tag(value: &Value, span: Span) -> Result<String, Diagnostic> {
     let Value::Shape(fields) = value else {
         return Err(Diagnostic::new(
@@ -15051,7 +15966,16 @@ fn upper_within(left: &Option<Scalar>, right: &Option<Scalar>) -> bool {
 }
 
 fn same_type(left: &Type, right: &Type) -> bool {
+    crate::phase_telemetry::note_same_type();
     same_type_with_rigids(left, right, &mut Vec::new())
+}
+
+/// Stable phase discriminant for telemetry input fingerprints.
+fn phase_tag(phase: Phase) -> u8 {
+    match phase {
+        Phase::Comptime => 0,
+        Phase::Runtime => 1,
+    }
 }
 
 fn same_type_with_rigids(

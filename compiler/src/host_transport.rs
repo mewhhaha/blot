@@ -124,13 +124,24 @@ pub fn check_module(session: &CompilerSession, module_id: u32) -> Result<Vec<u8>
     Ok(encoder.finish())
 }
 
+/// Opt-in bit of the analyze fact mask: attach coarse `phaseTelemetry`
+/// (per-phase solver-counter deltas) to the analysis response. All other
+/// mask bits remain reserved and ignored. The host sends this bit only when
+/// the caller explicitly enables phase telemetry.
+pub const ANALYZE_TELEMETRY_FACT_BIT: u32 = 1 << 31;
+
 pub fn analyze_module(
     session: &CompilerSession,
     module_id: u32,
-    _requested_fact_mask: u32,
+    requested_fact_mask: u32,
 ) -> Result<Vec<u8>, String> {
     let path = session.registered_path(module_id)?;
-    serde_json::to_vec(&session.analyze_module(path))
+    let analysis = if requested_fact_mask & ANALYZE_TELEMETRY_FACT_BIT != 0 {
+        session.analyze_module_traced(path)
+    } else {
+        session.analyze_module(path)
+    };
+    serde_json::to_vec(&analysis)
         .map_err(|error| format!("compiler analysis encoding failed: {error}"))
 }
 

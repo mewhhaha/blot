@@ -214,6 +214,8 @@
     "BLOT_DYNAMIC_HOST_RESULT",
     "BLOT_DYNAMIC_SHAPE_FIELD",
     "BLOT_EFFECT_HANDLER_OWNERSHIP",
+    "BLOT_EFFECT_META_CONFLICT",
+    "BLOT_EFFECT_META_NOT_COMPTIME",
     "BLOT_EFFECT_OWNERSHIP_CONTRACT",
     "BLOT_EFFECT_RESUME_OWNERSHIP",
     "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIGNATURE",
@@ -284,6 +286,7 @@
     "BLOT_LINT_NESTED_CASE_CHAIN",
     "BLOT_LINT_NESTED_IF_CHAIN",
     "BLOT_LINT_NOOP_REBINDING",
+    "BLOT_LINT_NO_SUCH_RULE",
     "BLOT_LINT_OPEN_SHADOW",
     "BLOT_LINT_OPERATOR_SPELLING",
     "BLOT_LINT_PARAMETER_DESTRUCTURING",
@@ -304,6 +307,7 @@
     "BLOT_LINT_TERMINAL_VALUE_FORWARDING",
     "BLOT_LINT_TEST_CHOSEN_NAME",
     "BLOT_LINT_TEST_SURFACE_COVERAGE",
+    "BLOT_LINT_TEST_UNKNOWN",
     "BLOT_LINT_UNNECESSARY_REC",
     "BLOT_LINT_UNREACHABLE_CASE_ARM",
     "BLOT_LINT_UNUSED_BINDING",
@@ -404,7 +408,10 @@
     "@branch.unlikely",
     "@continuation.cancel",
     "@effect",
+    "@effect.attach_meta",
     "@effect.host",
+    "@effect.meta",
+    "@effect.shared",
     "@f32",
     "@f32.add",
     "@f32.cmp",
@@ -655,6 +662,7 @@
     "compose",
     "flip",
     "tag",
+    "tag_statement",
     "derive",
     "test",
     "assert",
@@ -780,7 +788,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 18237
+      "lines": 19161
     },
     {
       "path": "compiler/src/hir.rs",
@@ -788,23 +796,23 @@
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 12327
+      "lines": 13054
     },
     {
       "path": "compiler/src/backend.rs",
       "lines": 8199
     },
     {
-      "path": "compiler/src/ownership.rs",
-      "lines": 7466
+      "path": "compiler/src/eval.rs",
+      "lines": 7797
     },
     {
-      "path": "compiler/src/eval.rs",
-      "lines": 7438
+      "path": "compiler/src/ownership.rs",
+      "lines": 7560
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 5051
+      "lines": 5123
     },
     {
       "path": "compiler/src/frontend_plan.rs",
@@ -820,23 +828,23 @@
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3571
+      "lines": 3580
     },
     {
       "path": "compiler/src/primitives.rs",
-      "lines": 2498
+      "lines": 2499
     },
     {
       "path": "compiler/src/value.rs",
       "lines": 2486
     },
     {
-      "path": "compiler/src/qcore.rs",
-      "lines": 2303
+      "path": "src/language_service.ts",
+      "lines": 2434
     },
     {
-      "path": "src/development_runtime.ts",
-      "lines": 2168
+      "path": "src/tooling/format/print.ts",
+      "lines": 2408
     }
   ]
 }

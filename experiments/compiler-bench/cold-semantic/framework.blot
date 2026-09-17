@@ -1,0 +1,393 @@
+open import "blot:prelude"
+
+// Abstract application builder for the cold-semantic-analysis reproducer.
+//
+// This module adapts the ECS case-study idioms (application records, system
+// definitions, schedule planning) and the retained-state-loop idioms (generic
+// `for_*` specialization over a row type, `@type.union_of` checkpoints) into
+// a dependency-free forcing sink. No graphics, fetches, effects, host calls,
+// or external checkouts: every cost below is checking, compile-time
+// evaluation, target preflight, staging, or backend closure over local data.
+
+// --- App: record pipelines over plugin/component/system descriptors ---------
+const App = {
+  .new = fn () => {
+    .plugins = freeze [];
+    .components = freeze [];
+    .systems = freeze [];
+  };
+  .add_plugin = fn (app, plugin) => {
+    ...app;
+    .plugins = freeze (@array.push (Array.copy app.plugins) plugin);
+  };
+  .add_component = fn (app, descriptor) => {
+    ...app;
+    .components = freeze (@array.push (Array.copy app.components) descriptor);
+  };
+  .add_system = fn (app, descriptor) => {
+    ...app;
+    .systems = freeze (@array.push (Array.copy app.systems) descriptor);
+  };
+}
+
+// --- Build: build-like forcing primitive ------------------------------------
+// Assemble one world row shape plus its seed row from the app descriptors.
+// The `tag` literal gives each build a distinct `.which` singleton type so
+// repeated builds produce distinct row types instead of shared identities.
+const Build = {
+  .row = fn (app, tag) => do:
+    if Array.length app.components == 0:
+      return @fail "cold-semantic build requires at least one component"
+
+    let shape = { .which = @type.of tag; }
+    let seed = { .which = tag; }
+    let names = freeze []
+    for descriptor in Iter.items app.components:
+      const name = descriptor.name
+      if @shape.has shape name:
+        return @fail ("cold-semantic build repeats component: " <> name)
+
+      shape := { ...shape; .[name] = descriptor.Type; }
+      seed := { ...seed; .[name] = descriptor.seed; }
+      names := freeze (@array.push (Array.copy names) name)
+
+    for descriptor in Iter.items app.components:
+      if not (type_equal (@shape.get shape descriptor.name, descriptor.Type)):
+        return @fail ("cold-semantic build type differs: " <> descriptor.name)
+
+    for spec in Iter.items app.systems:
+      if not (@shape.has shape spec.read):
+        return @fail ("cold-semantic build unknown read: " <> spec.read)
+
+      if not (@shape.has shape spec.write):
+        return @fail ("cold-semantic build unknown write: " <> spec.write)
+
+      if not (type_equal (@shape.get shape spec.read, spec.read_type)):
+        return @fail ("cold-semantic build read type differs: " <> spec.name)
+
+      if not (type_equal (@shape.get shape spec.write, spec.write_type)):
+        return @fail ("cold-semantic build write type differs: " <> spec.name)
+
+    return { .Row = shape; .seed; .names; .tag; }
+}
+
+// --- Systems: per-system definition over one row type -----------------------
+// Adapted from case-studies/ecs/systems.blot + components.blot: a per-field
+// component namespace, access validation, picked read/write views, a checked
+// work closure, and a stepped row update. The component namespace is load
+// bearing: dropping it changes checking of `define` applications below.
+const cs_component = fn (name, T) => do:
+  const Read = @effect { .get = Unit -> T; }
+  return {
+    .Type = T;
+    .name = name;
+    .Read = Read;
+    .get = Read.get;
+    .supply = fn value => { .get = fn ((), ?resume) => resume (@satisfies value T); };
+    .replace = fn (row, value) => { ...row; .[name] = @satisfies value T; };
+  }
+
+const cs_components = fn schema => do:
+  let components = Unit
+  for name in Iter.items (@shape.names schema):
+    components := @type.attach components name (cs_component (name, @shape.get schema name))
+
+  return components
+
+const Systems = fn Row => do:
+  const schema = case @type.reflect Row of
+    #Shape fields => fields
+    _ => @fail "cold-semantic systems require a record type"
+  return {
+    .components = cs_components schema;
+    .define = fn (access, work) => do:
+      for component in Iter.items (Array.append access.reads access.writes):
+        const name = component.name
+        if not (@shape.has schema name):
+          return @fail ("unknown system component: " <> name)
+
+        if not (type_equal (@shape.get schema name, component.Type)):
+          return @fail ("system component type differs: " <> name)
+
+      const Read =
+        Reflect.pick (
+          schema,
+          map (access.reads, fn component => component.name)
+        )
+      const Write =
+        Reflect.pick (
+          schema,
+          map (access.writes, fn component => component.name)
+        )
+      const reads = freeze (@shape.names Read)
+      const writes = freeze (@shape.names Write)
+      const Work = Read -> Write
+      const Step = Row -> Row
+      const Apply = (Row, Write) -> Row
+      let checked = @satisfies work Work
+      let checked =
+        @satisfies checked (fn Function => case @type.reflect Function of
+          #Arrow arrow => case @type.reflect arrow.codomain of
+            #Shape fields => every (
+              @shape.names fields,
+              fn name => @shape.has Write name
+            )
+
+            _ => False
+
+          _ => False
+        )
+      let execute :: Work
+      let execute = fn selected => checked selected
+      let apply :: Apply
+      let apply = fn (row, patch) => row
+      for name in Iter.items writes:
+        let previous = apply
+        let replace :: Apply
+        let replace =
+          fn (row, patch) => { ...previous (row, patch); .[name] = @shape.get patch name; }
+        apply := replace
+
+      let step :: Step
+      let step = fn row => do:
+        let patch = execute (Reflect.pick (row, reads))
+        return apply (row, patch)
+      return { .reads; .writes; .step = @satisfies step Step; }
+    ;
+  }
+
+// --- Plan: schedule-like forcing primitive ----------------------------------
+// Adapted from case-studies/ecs/planning.blot: dependency graphs, barrier
+// nodes, compatibility batching, and compiled row traversals.
+const Access = { .reads = [Text]; .writes = [Text]; }
+const Edge = { .before = Text; .after = Text; }
+const Graph = { .nodes = [Text]; .edges = [Edge]; .barriers = [Text]; }
+const Batch = #Systems [Text] | #Barrier Text
+const Report = { .batches = [Batch]; .order = [Text]; .passes = [[Text]]; }
+const Conflict = { .write_read = [Text]; .read_write = [Text]; .write_write = [Text]; }
+
+const plan_contains :: ([Text], Text) -> Bool
+const plan_contains = fn (&names, name) => any ((&names), fn candidate => candidate == name)
+const plan_union_names :: ([Text], [Text]) -> [Text]
+const plan_union_names = fn (left, right) => do:
+  let combined = Array.copy left
+  for name in Iter.items right:
+    if not (plan_contains ((&combined), name)):
+      combined := @array.push combined name
+
+  return freeze combined
+
+const plan_group :: [Text] -> Graph
+const plan_group = fn names => { .nodes = plan_union_names ([], names); .edges = freeze []; .barriers = freeze []; }
+const plan_barrier :: Text -> Graph
+const plan_barrier = fn name => { .nodes = freeze [name]; .edges = freeze []; .barriers = freeze [name]; }
+const plan_before :: (Text, Text) -> Graph
+const plan_before = fn (first, second) => {
+  .nodes = plan_union_names ([first], [second]);
+  .edges = freeze [{ .before = first; .after = second; }];
+  .barriers = freeze [];
+}
+
+const plan_merge :: (Graph, Graph) -> Graph
+const plan_merge = fn (left, right) => do:
+  for name in Iter.items left.nodes:
+    let left_barrier = plan_contains (left.barriers, name)
+    let right_barrier = plan_contains (right.barriers, name)
+    let different = left_barrier && not right_barrier || right_barrier && not left_barrier
+    if plan_contains (right.nodes, name) && different:
+      return @fail ("schedule identity is both a system and a barrier: " <> name)
+
+  let edges = Array.copy left.edges
+  for edge in Iter.items right.edges:
+    if not (any ((&edges), fn existing => existing.before == edge.before && existing.after == edge.after)):
+      edges := @array.push edges edge
+
+  return {
+    .nodes = plan_union_names (left.nodes, right.nodes);
+    .edges = freeze edges;
+    .barriers = plan_union_names (left.barriers, right.barriers);
+  }
+
+// A dependency orders row work. A barrier node additionally ends a traversal.
+const plan_then :: (Graph, Graph) -> Graph
+const plan_then = fn (left, right) => do:
+  let combined = plan_merge (left, right)
+  let edges = Array.copy combined.edges
+  for first in Iter.items left.nodes:
+    for second in Iter.items right.nodes:
+      if not (any ((&edges), fn existing => existing.before == first && existing.after == second)):
+        edges := @array.push edges { .before = first; .after = second; }
+
+  return { ...combined; .edges = freeze edges; }
+
+const plan_conflicts :: (Access, Access) -> Conflict
+const plan_conflicts = fn (left, right) => {
+  .write_read = freeze (filter (left.writes, fn name => plan_contains (right.reads, name)));
+  .read_write = freeze (filter (left.reads, fn name => plan_contains (right.writes, name)));
+  .write_write = freeze (filter (left.writes, fn name => plan_contains (right.writes, name)));
+}
+
+const plan_compatible :: (Access, Access) -> Bool
+const plan_compatible = fn (left, right) => do:
+  let overlap = plan_conflicts (left, right)
+  return Array.length overlap.write_read + Array.length overlap.read_write + Array.length overlap.write_write == 0
+
+const plan_analyze = fn (registry, graph) => do:
+  let graph = @satisfies graph Graph
+  const nodes :: [Text]
+  const nodes = plan_union_names ([], graph.nodes)
+  for name in Iter.items nodes:
+    if plan_contains (graph.barriers, name):
+      if @shape.has registry name:
+        return @fail ("schedule barrier has a system definition: " <> name)
+    else:
+      if not (@shape.has registry name):
+        return @fail ("unknown scheduled system: " <> name)
+
+  for name in Iter.items graph.barriers:
+    if not (plan_contains (nodes, name)):
+      return @fail ("barrier is absent from the schedule: " <> name)
+
+  for edge in Iter.items graph.edges:
+    if not (plan_contains (nodes, edge.before)):
+      return @fail ("dependency source is absent from the schedule: " <> edge.before)
+
+    if not (plan_contains (nodes, edge.after)):
+      return @fail ("dependency target is absent from the schedule: " <> edge.after)
+
+  let pending = nodes
+  let finished :: [Text]
+  let finished = freeze []
+  let batches :: [Batch]
+  let batches = freeze []
+  let order :: [Text]
+  let order = freeze []
+  let passes :: [[Text]]
+  let passes = freeze []
+  let current :: [Text]
+  let current = freeze []
+  for Iter.range (0, Array.length nodes):
+    if Array.length pending == 0:
+      break
+
+    let ready :: [Text]
+    let ready = freeze (filter (pending, fn name => every (graph.edges, fn edge => edge.after != name || plan_contains (finished, edge.before))))
+    if Array.length ready == 0:
+      return @fail ("schedule contains a dependency cycle at: " <> Array.expect_get (pending, 0))
+
+    let selected :: [Text]
+    let selected = []
+    for name in Iter.items ready:
+      if plan_contains (graph.barriers, name):
+        if Array.length (&selected) == 0:
+          selected := @array.push selected name
+      else:
+        if every ((&selected), fn previous => not (plan_contains (graph.barriers, previous)) && plan_compatible (@shape.get registry previous, @shape.get registry name)):
+          selected := @array.push selected name
+
+    let chosen :: [Text]
+    let chosen = freeze selected
+    if plan_contains (graph.barriers, Array.expect_get (chosen, 0)):
+      batches := freeze (@array.push (Array.copy batches) (#Barrier (Array.expect_get (chosen, 0))))
+      if Array.length current > 0:
+        passes := freeze (@array.push (Array.copy passes) current)
+        current := freeze []
+    else:
+      batches := freeze (@array.push (Array.copy batches) (#Systems chosen))
+      current := plan_union_names (current, chosen)
+      order := plan_union_names (order, chosen)
+
+    finished := plan_union_names (finished, chosen)
+    pending := freeze (filter (pending, fn name => not (plan_contains (chosen, name))))
+
+  if Array.length current > 0:
+    passes := freeze (@array.push (Array.copy passes) current)
+
+  return @satisfies { .batches; .order; .passes; } Report
+
+const plan_compile = fn (Row, registry, graph) => do:
+  const plan = plan_analyze (registry, graph)
+  let each = @satisfies identity ([Row] -> [Row])
+  for names in Iter.items (@satisfies plan.passes [[Text]]):
+    let step = @satisfies identity (Row -> Row)
+    for name in Iter.items names:
+      let previous = step
+      let next = @satisfies (@shape.get registry name).step (Row -> Row)
+      step := fn row => next (previous row)
+
+    let previous = each
+    let run = step
+    each := fn rows => map (previous rows, run)
+
+  return { ...plan; .each = @satisfies each ([Row] -> [Row]); }
+
+const Plan = {
+  .Access; .Edge; .Graph; .Batch; .Report; .Conflict;
+  .group = plan_group;
+  .barrier = plan_barrier;
+  .before = plan_before;
+  .contains = plan_contains;
+  .union_names = plan_union_names;
+  .merge = plan_merge;
+  .then = plan_then;
+  .conflicts = plan_conflicts;
+  .compatible = plan_compatible;
+  .analyze = plan_analyze;
+  .compile = plan_compile;
+}
+
+// --- Schedule: direct row-schedule composition ------------------------------
+// Adapted from case-studies/ecs/ecs.blot. Only pure functions of one row
+// enter a fused schedule. The arrow also requires every stage to preserve
+// the world's complete component shape.
+const Schedule = fn Row => do:
+  const System = Row -> Row
+  return {
+    .empty = @satisfies identity System;
+    .merge = fn (left, right) => do:
+      let first = @satisfies left System
+      let second = @satisfies right System
+      return @satisfies (fn row => second (first row)) System
+    ;
+    .each = fn system => do:
+      let step = @satisfies system System
+      return @satisfies (fn rows => map (rows, step)) ([Row] -> [Row])
+    ;
+  }
+
+// --- Force: union sink plus Loop.run-like application -----------------------
+// Adapted from examples/lib/retained_state_loop.blot: a generic `for_*`
+// specialized per row type, nested `run` closures capturing a game record,
+// and `@type.union_of` checkpoints. Pure: no host effects, so the export
+// stays a finite first-order function with a supported target answer.
+const Force = {
+  .unite = fn rows => do:
+    const world = @type.union_of rows
+    const options = Reflect.members world
+    for option in Iter.items options:
+      const fields = case @type.reflect option of
+        #Shape shape => shape
+        _ => @fail "cold-semantic world members must be record shapes"
+      if not (@shape.has fields "which"):
+        return @fail "cold-semantic world member is missing its tag field"
+
+    return world
+  ;
+  .for_world = fn Row => do:
+    const Checkpoint =
+      @type.union_of [{ .current = Row; .tick = Int; }]
+    const Game =
+      { .initial = Unit -> Row; .update = (Row, Int) -> Row; .render = Row -> Int; }
+    const run =
+      fn (game :: Game) => fn (count :: Int) -> Int => do:
+        let current = game.initial ()
+        let total = 0
+        for index in Iter.range (0, count):
+          current := game.update (current, index)
+          total := total + game.render current
+
+        return total
+    return { .run; .Checkpoint; }
+}
+
+return { .App; .Build; .Systems; .Plan; .Schedule; .Force; }

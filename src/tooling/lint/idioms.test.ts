@@ -159,6 +159,11 @@ const fixtures = [
     "before":
       "let fallback = fn () => @int.div 1 0\nlet unwrap :: Option Int -> Int\nlet unwrap = fn option => case option of\n  #None => fallback ()\n  #Some value => value\nreturn unwrap (Some 7)\n",
   },
+  {
+    "name": "unused-pure-binding",
+    "code": "BLOT_LINT_UNUSED_BINDING",
+    "before": "let unused = 41\nreturn 1\n",
+  },
 ];
 
 Deno.test("idiom actions preserve checked interfaces and evaluation", async (test) => {
@@ -364,6 +369,24 @@ for candidate in Iter.items [Some 1, None]:
     continue
   found := candidate
 return found
+`,
+    },
+    {
+      code: "BLOT_LINT_UNUSED_BINDING",
+      source: `const Fault = @effect { .op = Unit -> Unit; }
+const _owner = @effect.attach_meta Fault "probe.key" { .tag = "x"; }
+const back = case @effect.meta Fault "probe.key" of
+  #Some found => found.tag
+  #None => "NONE"
+return back
+`,
+    },
+    {
+      code: "BLOT_LINT_UNUSED_BINDING",
+      source: `let f = fn ~lazy => do:
+  let forced = lazy
+  return 1
+return f 2
 `,
     },
   ];

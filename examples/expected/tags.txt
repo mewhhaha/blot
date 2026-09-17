@@ -1,1 +1,1 @@
-{ .ordered = 7; .label = "enriched"; .factorial = 120; }
+{ .ordered = 7; .label = "enriched"; .factorial = 120; .observed_const = { .kind = #Const; .name = #Some "observed_const"; .value = 41; }; .observed_let = { .kind = #Let; .name = #Some "observed_let"; .value = 42; }; .observed_name = #None; .observed_pair = (1, 2); }

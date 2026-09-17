@@ -152,17 +152,22 @@ known empty array creates a fresh reusable Store even when the staged argument
 was not already a runtime value; a borrowed or shared runtime Store retains its
 persistent update policy.
 
-Within one staging execution, a successful closure call may reuse a prior result
+Within one semantic request, a successful closure call may reuse a prior result
 only when its settled arrow is monomorphic and has a closed empty effect row,
 the call is not residual, and both argument and result are closed first-order
 values. The key contains the closure's exact creation environment,
-module-instance stack, effect scope, body identity, and a structural argument
-value. Functions, effects, operations, capabilities, Regions, Scratch values,
-continuations, residual values, open effects, and type variables are not cache
-keys or cached results. Failures are not cached. The bounded cache is local to
-that execution and therefore cannot outlive a revision or substitute one module
-occurrence for another. This changes evaluation work only; the exported runtime
-body retains the source algorithm.
+module-instance stack, effect scope, body identity, a structural argument
+value, and the evaluation phase; the scopes are held weakly so entries never
+retain temporary call scopes, and a hit additionally requires every keyed
+scope to still be allocated, so a freed scope can never satisfy a call even
+if a later allocation reuses its address. Functions, effects, operations,
+capabilities,
+Regions, Scratch values, continuations, residual values, open effects, and type
+variables are not cache keys or cached results. Failures are not cached. The
+bounded cache is shared by every evaluation in the request and cleared at each
+request boundary; it therefore cannot outlive a revision or substitute one
+module occurrence for another. This changes evaluation work only; the exported
+runtime body retains the source algorithm.
 
 A returned source closure receives the closed result signature recorded at its
 call site in preference to an unspecialized codomain. A source codomain is
