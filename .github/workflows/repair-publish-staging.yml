@@ -1,0 +1,144 @@
+name: Repair publish staging
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/repair-publish-staging.yml
+
+permissions:
+  contents: read
+
+jobs:
+  reviewed-candidates:
+    if: github.repository == 'mewhhaha/blot' && github.event.pull_request.head.repo.full_name == 'mewhhaha/blot' && github.event.pull_request.head.ref == 'repair/pr143-compiler-workbench-20260915'
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Stage exact reviewed final runner trees
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Blot PR repair'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          foundation = '02134f36514b9185cbe514b9a33dd0e2c482e768'
+          candidates = [
+              (143, '281720756731d7a5c67e754c2e2e9703c94aed7f', '66511c3a556522971c527891052fb3b45a766143'),
+              (144, '18e909cf87b69769b69017d4705cbd7343bbf9a1', '88ee523951496865560084cbde53fe132971277c'),
+              (145, '4b01744116c384a540f6424ef8831a77c1fff6cb', 'aabdb4dde8bdb5819943e9af60aa2ffe628d29dc'),
+              (146, '7d7cf3b337f3c809d50ddbd166c718ca130e5708', 'cebca488470e9301dc744ea8818750adfa15806f'),
+              (147, '6807b647f97deaadcb783b1400fd2284f5f71202', '7aa01d516737ad68b751190a7c0af8a425aef16f'),
+              (148, '9aff82e34748048f99a61801816a2b8c1040e499', 'b6d5c3769a575c534679af8f17d14eef114871bb'),
+              (149, 'a15d5fd48ad918d330f11240dd5622cc49700e60', '19b6086d5718bb65b45ed74eecccafca4c6ffb71'),
+              (151, 'c4a596f96c7390ba25c8cc5834756427f012c4c2', '46af759a716033975eb9b38844633fd457a224bf'),
+              (152, '66767276408fdb9d087af25c37338ecafa3ac982', '3d493471e6a69a4490c24c6d8758cbbf06a64191'),
+              (153, 'bf9c2233cf51cf85e41edc0c704929e8636b0ed6', '451b8eb68b72886c4ebf2be608568f229bdc616e'),
+              (154, '006c3b5e1f2c3c2e8fcace06154db31df5b4356e', '6859b1f94440b6930fe329f7f4bd6e7ed13220a2'),
+              (155, '1fac7f80b0833f7f8b3d69f1924f55785a4a4106', '97e459204eb1280e97a649e38320b03487bf6454'),
+              (156, 'd4f67237a19f25540bf4bfc2e1934e4647410039', 'eec267115a6f95b108223dcac94f86dc2600c09b'),
+              (157, 'b786c13781cf36f7e6b32c5f7d59fe0eb14aad43', 'db2a26c4c1fb94ec114c66c52dfb02d23865eab1'),
+              (158, '783d5457f50e04f73e1aee859333f7a94405542b', 'ad5bc2fddddeed08a41c5983933acf15ee6835f4'),
+              (159, '482830fe3be938a99ef8f26d5a8437c8cfdeafc8', 'bd09dc04b63842750349b455ccfc125e3943e8f9'),
+              (160, 'c8aa280b01c98b2653d10fb75bd6253333906c04', '2b95ae0ade4c71e776747be9d27a5e044997d17c'),
+              (162, '478681b4de8741070c6fa681df67a13f7f6fa735', 'fcf32a98a1fb87b45c3865c50f9167e05d8cdd40'),
+              (163, 'dacc5952f43412a69a736ce186de1f3c92728892', '970cb51073d000f061b3467cd371e60e8c39893f'),
+              (164, '0ad7c71873a0fb096aca16e3f1a16af352aee9ec', 'f44814393ad5a50d4980893aa7adb04ee591f084'),
+          ]
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'last-audit'
+          out.mkdir(exist_ok=True)
+          published = []
+          def run(*args):
+              subprocess.run(args, check=True)
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          run('git', 'update-ref', 'refs/heads/last-audit/pr-161', foundation)
+          for number, old, expected in candidates:
+              run('git', 'checkout', '--detach', old)
+              run('git', 'merge', '--no-commit', '--no-ff', foundation)
+              tree = git('write-tree')
+              if tree != expected:
+                  raise RuntimeError(f'PR {number}: {tree} differs from the reviewed tree {expected}')
+              if git('diff', '--cached', '--name-only', old).splitlines() != ['scripts/node_regression_tests.mjs']:
+                  raise RuntimeError(f'PR {number}: unexpected paths')
+              run('git', 'diff', '--cached', '--check')
+              run('git', 'commit', '-m', 'fix: execute the real coordinator concurrency proof in its native runtime')
+              head = git('rev-parse', 'HEAD')
+              run('git', 'merge-base', '--is-ancestor', old, head)
+              branch = f'repair/final-sweep-20260916/pr-{number}'
+              run('git', 'push', 'origin', f'HEAD:refs/heads/{branch}')
+              run('git', 'update-ref', f'refs/heads/last-audit/pr-{number}', head)
+              published.append({'number': number, 'old': old, 'head': head, 'tree': tree, 'candidate_branch': branch})
+              (out / 'candidates.json').write_text(json.dumps(published, indent=2) + '\n')
+          run('git', 'bundle', 'create', str(out / 'candidates.bundle'), 'refs/heads/last-audit/pr-161', *[f'refs/heads/last-audit/pr-{p["number"]}' for p in published])
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: last-audit-candidates-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/last-audit/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Record final-head checks after explicit branch promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import concurrent.futures, datetime, gzip, json, os, pathlib, subprocess, time
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'last-audit'
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'last-status'
+          out.mkdir(exist_ok=True)
+          candidates = json.loads((root / 'candidates.json').read_text())
+          expected = {p['number']: p['head'] for p in candidates}
+          expected[161] = '02134f36514b9185cbe514b9a33dd0e2c482e768'
+          names = ['CI source snapshot', 'Abstraction contracts', 'Rust/Wasm compiler CI']
+          def api(endpoint):
+              return json.loads(subprocess.check_output(['gh', 'api', endpoint]))
+          def inspect(number):
+              pr = api('repos/mewhhaha/blot/pulls/' + str(number))
+              runs = api('repos/mewhhaha/blot/actions/runs?head_sha=' + pr['head']['sha'] + '&per_page=20')['workflow_runs']
+              selected = {}
+              for r in runs:
+                  if r['name'] in names and r['event'] == 'pull_request' and r['name'] not in selected:
+                      selected[r['name']] = {k: r.get(k) for k in ['id', 'name', 'status', 'conclusion', 'head_sha', 'html_url']}
+              return {'number': number, 'expected_head': expected[number], 'head': pr['head']['sha'], 'title': pr['title'], 'url': pr['html_url'], 'state': pr['state'], 'draft': pr['draft'], 'merged': pr['merged'], 'mergeable': pr['mergeable'], 'runs': selected}
+          deadline = time.monotonic() + 900
+          while True:
+              with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                  statuses = list(pool.map(inspect, expected))
+              payload = {'observed_at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'prs': statuses}
+              (out / 'statuses.json').write_text(json.dumps(payload, indent=2) + '\n')
+              complete = all(p['head'] == p['expected_head'] and len(p['runs']) == 3 and all(r['status'] == 'completed' for r in p['runs'].values()) for p in statuses)
+              if complete or time.monotonic() >= deadline:
+                  break
+              time.sleep(30)
+          for p in statuses:
+              for run in p['runs'].values():
+                  jobs = api('repos/mewhhaha/blot/actions/runs/' + str(run['id']) + '/jobs?per_page=100')
+                  (out / f'pr-{p["number"]}-jobs-{run["id"]}.json').write_text(json.dumps(jobs, indent=2) + '\n')
+                  for job in jobs['jobs']:
+                      if job['conclusion'] == 'failure':
+                          try:
+                              raw = subprocess.check_output(['gh', 'api', '--allow-escape-sequences', 'repos/mewhhaha/blot/actions/jobs/' + str(job['id']) + '/logs'], stderr=subprocess.PIPE)
+                              (out / f'pr-{p["number"]}-failure-{job["id"]}.log.gz').write_bytes(gzip.compress(raw))
+                          except subprocess.CalledProcessError:
+                              pass
+          (out / 'main.json').write_text(json.dumps(api('repos/mewhhaha/blot/git/ref/heads/main'), indent=2) + '\n')
+          print(json.dumps(payload, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: last-audit-status-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/last-status/
+          if-no-files-found: warn
+          retention-days: 7
