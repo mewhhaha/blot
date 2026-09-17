@@ -1,4 +1,5 @@
 use super::*;
+use crate::value::TypeValue;
 
 fn interval(low: Option<i64>, high: Option<i64>) -> Interval {
     Interval {
@@ -100,8 +101,8 @@ fn nested_union_bases_are_normalized_once_and_shared_leaves_are_deduplicated() {
 #[test]
 fn base_ranges_are_sorted_coalesced_and_empty_ranges_removed() {
     let range = |low: i64, high: i64| Value::Range {
-        low: Box::new(Value::Int(low.into())),
-        high: Box::new(Value::Int(high.into())),
+        low: TypeValue::new(Value::Int(low.into())),
+        high: TypeValue::new(Value::Int(high.into())),
         domain: Some(Domain::Int),
     };
     let base = Value::Union(vec![range(5, 8), range(4, 1), range(0, 2), range(3, 4)].into());

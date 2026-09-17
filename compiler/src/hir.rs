@@ -1,3 +1,4 @@
+use crate::value::TypeValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
@@ -1406,18 +1407,18 @@ impl ResidualTrace {
                 payload: Box::new(self.runtime_type_value(*payload_type, seen)?),
             },
             RuntimeType::Integer32 | RuntimeType::SignedInteger64 => Value::Range {
-                low: Box::new(Value::Int(i64::MIN.into())),
-                high: Box::new(Value::Int(i64::MAX.into())),
+                low: TypeValue::new(Value::Int(i64::MIN.into())),
+                high: TypeValue::new(Value::Int(i64::MAX.into())),
                 domain: Some(crate::value::Domain::Int),
             },
             RuntimeType::Float32 => Value::Range {
-                low: Box::new(Value::Unbounded),
-                high: Box::new(Value::Unbounded),
+                low: TypeValue::new(Value::Unbounded),
+                high: TypeValue::new(Value::Unbounded),
                 domain: Some(crate::value::Domain::Float32),
             },
             RuntimeType::Float64 => Value::Range {
-                low: Box::new(Value::Unbounded),
-                high: Box::new(Value::Unbounded),
+                low: TypeValue::new(Value::Unbounded),
+                high: TypeValue::new(Value::Unbounded),
                 domain: Some(crate::value::Domain::Float),
             },
             RuntimeType::Boolean => Value::Union(
@@ -1434,8 +1435,8 @@ impl ResidualTrace {
                 .into(),
             ),
             RuntimeType::Text => Value::Range {
-                low: Box::new(Value::Unbounded),
-                high: Box::new(Value::Unbounded),
+                low: TypeValue::new(Value::Unbounded),
+                high: TypeValue::new(Value::Unbounded),
                 domain: Some(crate::value::Domain::Text),
             },
             RuntimeType::Store { element_type } => {
@@ -9516,7 +9517,9 @@ fn refine_runtime_carrier(carrier: Value, checked: &Value) -> Value {
                 domain: Some(crate::value::Domain::Int),
             },
         ) => {
-            let (Value::Int(minimum), Value::Int(maximum)) = (*carrier_low, *carrier_high) else {
+            let (Value::Int(minimum), Value::Int(maximum)) =
+                (carrier_low.into_owned(), carrier_high.into_owned())
+            else {
                 unreachable!("a runtime integer carrier has finite bounds");
             };
             let low = match low.as_ref() {
@@ -9530,8 +9533,8 @@ fn refine_runtime_carrier(carrier: Value, checked: &Value) -> Value {
                 _ => unreachable!("an integer range has integer bounds"),
             };
             Value::Range {
-                low: Box::new(Value::Int(low)),
-                high: Box::new(Value::Int(high)),
+                low: TypeValue::new(Value::Int(low)),
+                high: TypeValue::new(Value::Int(high)),
                 domain: Some(crate::value::Domain::Int),
             }
         }
@@ -13123,8 +13126,8 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
             name.clone(),
             Value::Arrow {
                 deferred: false,
-                domain: Box::new(type_value(parameter)),
-                codomain: Box::new(type_value(result)),
+                domain: TypeValue::new(type_value(parameter)),
+                codomain: TypeValue::new(type_value(result)),
                 effects: Vec::new(),
                 effect_tail: None,
             },
@@ -13185,8 +13188,8 @@ fn type_value(type_: &Type) -> Value {
                 Domain::Float32 => crate::value::Domain::Float32,
             };
             Value::Range {
-                low: Box::new(bound(low)),
-                high: Box::new(bound(high)),
+                low: TypeValue::new(bound(low)),
+                high: TypeValue::new(bound(high)),
                 domain: Some(domain),
             }
         }
@@ -13195,8 +13198,8 @@ fn type_value(type_: &Type) -> Value {
             parameter, result, ..
         } => Value::Arrow {
             deferred: false,
-            domain: Box::new(type_value(parameter)),
-            codomain: Box::new(type_value(result)),
+            domain: TypeValue::new(type_value(parameter)),
+            codomain: TypeValue::new(type_value(result)),
             effects: Vec::new(),
             effect_tail: None,
         },

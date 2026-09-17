@@ -1,3 +1,7 @@
+#[path = "type_value.rs"]
+mod type_value;
+pub use type_value::TypeValue;
+
 #[path = "value_graph.rs"]
 mod graph;
 
@@ -1183,8 +1187,8 @@ pub enum Value {
         applied: Vec<Value>,
     },
     Range {
-        low: Box<Value>,
-        high: Box<Value>,
+        low: TypeValue,
+        high: TypeValue,
         domain: Option<Domain>,
     },
     Union(UnionMembers),
@@ -1193,8 +1197,8 @@ pub enum Value {
         /// Whether the callee, rather than the caller, decides if the argument
         /// is evaluated.
         deferred: bool,
-        domain: Box<Value>,
-        codomain: Box<Value>,
+        domain: TypeValue,
+        codomain: TypeValue,
         effects: Vec<Value>,
         /// Signature-local rest of an open effect row, bound by `@forall`.
         effect_tail: Option<u32>,
@@ -1438,6 +1442,9 @@ pub fn substitute_type_variable(
     variable: u32,
     replacement: &Value,
 ) -> Option<Value> {
+    if !contains_type_variables(value) {
+        return Some(value.clone());
+    }
     let substitute = |value: &Value| substitute_type_variable(value, variable, replacement);
     Some(match value {
         Value::TypeVariable(id) if *id == variable => replacement.clone(),
@@ -1474,8 +1481,8 @@ pub fn substitute_type_variable(
             },
         },
         Value::Range { low, high, domain } => Value::Range {
-            low: Box::new(substitute(low)?),
-            high: Box::new(substitute(high)?),
+            low: TypeValue::new(substitute(low)?),
+            high: TypeValue::new(substitute(high)?),
             domain: *domain,
         },
         Value::Union(members) => Value::Union(
@@ -1492,8 +1499,8 @@ pub fn substitute_type_variable(
             effects,
             effect_tail,
         } => {
-            let domain = Box::new(substitute(domain)?);
-            let codomain = Box::new(substitute(codomain)?);
+            let domain = TypeValue::new(substitute(domain)?);
+            let codomain = TypeValue::new(substitute(codomain)?);
             let mut effects = effects.iter().map(substitute).collect::<Option<Vec<_>>>()?;
             if *effect_tail != Some(variable) {
                 Value::Arrow {
@@ -1585,9 +1592,7 @@ fn collect_type_variables(value: &Value, variables: &mut BTreeSet<u32>) {
 }
 
 pub(crate) fn contains_type_variables(value: &Value) -> bool {
-    let mut variables = BTreeSet::new();
-    collect_type_variables(value, &mut variables);
-    !variables.is_empty()
+    TypeValue::contains_variables(value)
 }
 
 pub(crate) use graph::contains_free_type_variables;
@@ -2064,8 +2069,8 @@ mod type_value_tests {
             variable,
             body: Box::new(Value::Arrow {
                 deferred: false,
-                domain: Box::new(Value::TypeVariable(variable)),
-                codomain: Box::new(Value::TypeVariable(variable)),
+                domain: TypeValue::new(Value::TypeVariable(variable)),
+                codomain: TypeValue::new(Value::TypeVariable(variable)),
                 effects: Vec::new(),
                 effect_tail: None,
             }),
@@ -2127,8 +2132,8 @@ mod type_value_tests {
             &mut closure,
             &Value::Arrow {
                 deferred: false,
-                domain: Box::new(Value::Unbounded),
-                codomain: Box::new(Value::Unbounded),
+                domain: TypeValue::new(Value::Unbounded),
+                codomain: TypeValue::new(Value::Unbounded),
                 effects: Vec::new(),
                 effect_tail: None,
             },
@@ -2201,8 +2206,8 @@ mod type_value_tests {
             &instantiated,
             &Value::Arrow {
                 deferred: false,
-                domain: Box::new(Value::OpaqueType("T".into())),
-                codomain: Box::new(Value::OpaqueType("T".into())),
+                domain: TypeValue::new(Value::OpaqueType("T".into())),
+                codomain: TypeValue::new(Value::OpaqueType("T".into())),
                 effects: Vec::new(),
                 effect_tail: None,
             }
@@ -2211,8 +2216,8 @@ mod type_value_tests {
 
     #[test]
     fn range_equality_normalizes_an_implicit_integer_domain() {
-        let low = Box::new(Value::Int(0.into()));
-        let high = Box::new(Value::Int(10.into()));
+        let low = TypeValue::new(Value::Int(0.into()));
+        let high = TypeValue::new(Value::Int(10.into()));
         assert!(equal(
             &Value::Range {
                 low: low.clone(),
@@ -2231,8 +2236,8 @@ mod type_value_tests {
     fn effect_row_instantiation_closes_only_with_effects() {
         let body = Value::Arrow {
             deferred: false,
-            domain: Box::new(Value::Unit),
-            codomain: Box::new(Value::Unit),
+            domain: TypeValue::new(Value::Unit),
+            codomain: TypeValue::new(Value::Unit),
             effects: Vec::new(),
             effect_tail: Some(7),
         };
@@ -2248,8 +2253,8 @@ mod type_value_tests {
                 .expect("an effect closes an effect-row tail"),
             &Value::Arrow {
                 deferred: false,
-                domain: Box::new(Value::Unit),
-                codomain: Box::new(Value::Unit),
+                domain: TypeValue::new(Value::Unit),
+                codomain: TypeValue::new(Value::Unit),
                 effects: vec![effect],
                 effect_tail: None,
             }
@@ -2460,16 +2465,16 @@ mod show_tests {
         );
         assert_eq!(
             show(&Value::Range {
-                low: Box::new(Value::Int(1.into())),
-                high: Box::new(Value::Int(1.into())),
+                low: TypeValue::new(Value::Int(1.into())),
+                high: TypeValue::new(Value::Int(1.into())),
                 domain: Some(Domain::Int),
             }),
             "1"
         );
         assert_eq!(
             show(&Value::Range {
-                low: Box::new(Value::Unbounded),
-                high: Box::new(Value::Unbounded),
+                low: TypeValue::new(Value::Unbounded),
+                high: TypeValue::new(Value::Unbounded),
                 domain: Some(Domain::Text),
             }),
             "Text"

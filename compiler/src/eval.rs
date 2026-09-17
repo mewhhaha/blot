@@ -1,3 +1,8 @@
+pub(crate) use crate::type_instantiation::{
+    record_signature_substitutions, signature_body, substitute_signature,
+};
+#[cfg(test)]
+use crate::value::TypeValue;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -5113,9 +5118,13 @@ fn apply_with_expected(
                     .filter(|type_| !crate::value::contains_type_variables(type_))
                     .or(actual_type.as_ref())
                     .unwrap_or(&argument);
-                record_signature_substitutions(&scope, domain, signature_argument);
+                if domain.has_variables() {
+                    record_signature_substitutions(&scope, domain, signature_argument);
+                }
                 if let Some(expected_result) = &expected_result {
-                    record_signature_substitutions(&scope, codomain, expected_result);
+                    if codomain.has_variables() {
+                        record_signature_substitutions(&scope, codomain, expected_result);
+                    }
                     if !contains_type_variables(expected_result)
                         && let Some(checked_body) =
                             runtime.expression_type(&context, &closure_module, body)
@@ -6567,338 +6576,6 @@ fn specialize_deferred_scratch(
     }
 }
 
-fn signature_body(mut signature: &Value) -> &Value {
-    while let Value::Forall { body, .. } = signature {
-        signature = body;
-    }
-    signature
-}
-
-pub(crate) fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
-    fn substitution(environment: &Environment, variable: u32) -> Option<Value> {
-        let mut scope = Some(environment.clone());
-        while let Some(current) = scope {
-            if let Some(value) = current.type_substitutions.borrow().get(&variable) {
-                return Some(value.clone());
-            }
-            scope = current.parent.borrow().clone();
-        }
-        None
-    }
-
-    match signature {
-        Value::Effect { id, .. } => {
-            let mut scope = Some(environment.clone());
-            while let Some(current) = scope {
-                if let Some(value) = current.effect_substitutions.borrow().get(id) {
-                    return value.clone();
-                }
-                scope = current.parent.borrow().clone();
-            }
-            signature.clone()
-        }
-        Value::TypeVariable(variable) => {
-            substitution(environment, *variable).unwrap_or_else(|| signature.clone())
-        }
-        Value::Shape(fields) => Value::Shape(
-            fields
-                .iter()
-                .map(|(name, value)| (name.clone(), substitute_signature(value, environment)))
-                .collect(),
-        ),
-        Value::Array(elements) => Value::Array(
-            elements
-                .iter()
-                .map(|value| substitute_signature(value, environment))
-                .collect(),
-        ),
-        Value::ScratchType(element) => {
-            Value::ScratchType(Box::new(substitute_signature(element, environment)))
-        }
-        Value::ResourceType { family, payload } => Value::ResourceType {
-            family: family.clone(),
-            payload: Box::new(substitute_signature(payload, environment)),
-        },
-        Value::EmptyArray { element } => Value::EmptyArray {
-            element: Box::new(substitute_signature(element, environment)),
-        },
-        Value::Union(members) => {
-            members
-                .iter()
-                .fold(Value::Union(Default::default()), |union, member| {
-                    crate::primitives::union(union, substitute_signature(member, environment))
-                })
-        }
-        Value::Tag { name, payload } => Value::Tag {
-            name: name.clone(),
-            payload: payload
-                .as_deref()
-                .map(|value| Box::new(substitute_signature(value, environment))),
-        },
-        Value::Range { low, high, domain } => Value::Range {
-            low: Box::new(substitute_signature(low, environment)),
-            high: Box::new(substitute_signature(high, environment)),
-            domain: *domain,
-        },
-        Value::Arrow {
-            deferred,
-            domain,
-            codomain,
-            effects,
-            effect_tail,
-        } => Value::Arrow {
-            deferred: *deferred,
-            domain: Box::new(substitute_signature(domain, environment)),
-            codomain: Box::new(substitute_signature(codomain, environment)),
-            effects: effects
-                .iter()
-                .map(|effect| substitute_signature(effect, environment))
-                .collect(),
-            effect_tail: *effect_tail,
-        },
-        Value::Forall { variable, body } => Value::Forall {
-            variable: *variable,
-            body: Box::new(substitute_signature(body, environment)),
-        },
-        Value::Extended { inner, members } => Value::Extended {
-            inner: Box::new(substitute_signature(inner, environment)),
-            members: members
-                .iter()
-                .map(|(name, value)| (name.clone(), substitute_signature(value, environment)))
-                .collect(),
-        },
-        Value::Sealed { name, inner } => Value::Sealed {
-            name: name.clone(),
-            inner: Box::new(substitute_signature(inner, environment)),
-        },
-        _ => signature.clone(),
-    }
-}
-
-pub(crate) fn record_signature_substitutions(
-    environment: &Environment,
-    expected: &Value,
-    actual: &Value,
-) {
-    fn value_signature(value: &Value) -> Option<Value> {
-        match value {
-            Value::Closure {
-                signature: Some(signature),
-                ..
-            } => Some((**signature).clone()),
-            Value::Int(_) => crate::primitives::constant("@type.int"),
-            Value::Float(_) => crate::primitives::constant("@type.float"),
-            Value::Float32(_) => crate::primitives::constant("@type.float32"),
-            Value::Text(_) => Some(Value::Range {
-                low: Box::new(Value::Unbounded),
-                high: Box::new(Value::Unbounded),
-                domain: Some(ValueDomain::Text),
-            }),
-            Value::Unit => Some(Value::Unit),
-            Value::Range { .. }
-            | Value::Arrow { .. }
-            | Value::RegionType(_)
-            | Value::ScratchType(_)
-            | Value::ResourceType { .. }
-            | Value::TypeVariable(_) => Some(value.clone()),
-            Value::Shape(fields) => Some(Value::Shape(
-                fields
-                    .iter()
-                    .map(|(name, value)| Some((name.clone(), value_signature(value)?)))
-                    .collect::<Option<OrderedFields>>()?,
-            )),
-            Value::Array(elements) => {
-                if elements.is_empty() {
-                    return None;
-                }
-                let mut element_type = Value::Union(Default::default());
-                for element in elements {
-                    element_type =
-                        crate::primitives::union(element_type, value_signature(element)?);
-                }
-                Some(Value::Array(vec![element_type].into()))
-            }
-            Value::EmptyArray { element } => Some(Value::Array(vec![(**element).clone()].into())),
-            Value::Union(members) => Some(Value::Union(
-                members
-                    .iter()
-                    .map(value_signature)
-                    .collect::<Option<Vec<_>>>()?
-                    .into(),
-            )),
-            Value::Tag { name, payload } => Some(Value::Tag {
-                name: name.clone(),
-                payload: match payload.as_deref() {
-                    Some(payload) => Some(Box::new(value_signature(payload)?)),
-                    None => None,
-                },
-            }),
-            Value::Extended { inner, .. } | Value::Sealed { inner, .. } => value_signature(inner),
-            _ => None,
-        }
-    }
-
-    fn record_types(environment: &Environment, expected: &Value, actual: &Value) {
-        let expected = signature_body(expected);
-        let actual = signature_body(actual);
-        match (expected, actual) {
-            (Value::TypeVariable(variable), actual) => {
-                environment
-                    .type_substitutions
-                    .borrow_mut()
-                    .entry(*variable)
-                    .or_insert_with(|| actual.clone());
-            }
-            (Value::Shape(expected), Value::Shape(actual)) => {
-                for (name, expected) in expected {
-                    if let Some(actual) = actual.get(name) {
-                        record_types(environment, expected, actual);
-                    }
-                }
-            }
-            (Value::Union(expected), actual) => {
-                for expected in expected {
-                    record_types(environment, expected, actual);
-                }
-            }
-            (expected @ Value::Tag { .. }, Value::Union(actual)) => {
-                for actual in actual {
-                    record_types(environment, expected, actual);
-                }
-            }
-            (
-                Value::Tag {
-                    name: expected_name,
-                    payload: Some(expected),
-                },
-                Value::Tag {
-                    name: actual_name,
-                    payload: Some(actual),
-                },
-            ) if expected_name == actual_name => {
-                record_types(environment, expected, actual);
-            }
-            (Value::Array(expected), Value::Array(actual)) => {
-                if let Some(expected) = expected.first() {
-                    for actual in actual {
-                        record_types(environment, expected, actual);
-                    }
-                }
-            }
-            (Value::Array(expected), Value::EmptyArray { element }) => {
-                if let Some(expected) = expected.first() {
-                    record_types(environment, expected, element);
-                }
-            }
-            (
-                Value::ResourceType {
-                    family: expected_family,
-                    payload: expected,
-                },
-                Value::ResourceType {
-                    family: actual_family,
-                    payload: actual,
-                },
-            ) if expected_family == actual_family => {
-                record_types(environment, expected, actual);
-            }
-            (
-                Value::Arrow {
-                    domain: expected_domain,
-                    codomain: expected_codomain,
-                    ..
-                },
-                Value::Arrow {
-                    domain: actual_domain,
-                    codomain: actual_codomain,
-                    ..
-                },
-            ) => {
-                record_types(environment, expected_domain, actual_domain);
-                record_types(environment, expected_codomain, actual_codomain);
-            }
-            _ => {}
-        }
-    }
-
-    match (signature_body(expected), signature_body(actual)) {
-        (Value::Shape(expected), Value::Shape(actual)) => {
-            for (name, expected) in expected {
-                if let Some(actual) = actual.get(name) {
-                    record_signature_substitutions(environment, expected, actual);
-                }
-            }
-        }
-        (Value::Union(expected), actual) => {
-            for expected in expected {
-                record_signature_substitutions(environment, expected, actual);
-            }
-        }
-        (expected @ Value::Tag { .. }, Value::Union(actual)) => {
-            for actual in actual {
-                record_signature_substitutions(environment, expected, actual);
-            }
-        }
-        (
-            Value::Tag {
-                name: expected_name,
-                payload: Some(expected),
-            },
-            Value::Tag {
-                name: actual_name,
-                payload: Some(actual),
-            },
-        ) if expected_name == actual_name => {
-            record_signature_substitutions(environment, expected, actual);
-        }
-        (Value::Array(expected), Value::Array(actual)) => {
-            if let Some(expected) = expected.first()
-                && let Some(Value::Array(types)) = value_signature(&Value::Array(actual.clone()))
-            {
-                record_types(environment, expected, &types[0]);
-            }
-        }
-        (Value::Array(expected), Value::EmptyArray { element }) => {
-            if let Some(expected) = expected.first() {
-                record_signature_substitutions(environment, expected, element);
-            }
-        }
-        (
-            Value::ResourceType {
-                family: expected_family,
-                payload: expected,
-            },
-            Value::ResourceType {
-                family: actual_family,
-                payload: actual,
-            },
-        ) if expected_family == actual_family => {
-            record_types(environment, expected, actual);
-        }
-        (expected @ Value::Arrow { .. }, Value::Closure { .. })
-        | (expected @ Value::TypeVariable(_), Value::Closure { .. }) => {
-            if let Some(actual) = value_signature(actual) {
-                record_types(environment, expected, &actual);
-            }
-        }
-        (expected @ Value::Arrow { .. }, actual @ Value::Arrow { .. })
-            if !crate::value::contains_free_type_variables(actual) =>
-        {
-            record_types(environment, expected, actual);
-        }
-        (Value::TypeVariable(variable), actual) => {
-            if let Some(actual) = value_signature(actual) {
-                environment
-                    .type_substitutions
-                    .borrow_mut()
-                    .entry(*variable)
-                    .or_insert(actual);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn admits_omission(value: &Value) -> bool {
     let mut pending = vec![value];
     while let Some(value) = pending.pop() {
@@ -7522,8 +7199,8 @@ mod tests {
                     variable,
                     body: Box::new(Value::Arrow {
                         deferred: false,
-                        domain: Box::new(Value::TypeVariable(variable)),
-                        codomain: Box::new(Value::TypeVariable(variable)),
+                        domain: TypeValue::new(Value::TypeVariable(variable)),
+                        codomain: TypeValue::new(Value::TypeVariable(variable)),
                         effects: Vec::new(),
                         effect_tail: None,
                     }),
@@ -7534,8 +7211,8 @@ mod tests {
             "map".to_owned(),
             Value::Arrow {
                 deferred: false,
-                domain: Box::new(Value::Unit),
-                codomain: Box::new(Value::Unit),
+                domain: TypeValue::new(Value::Unit),
+                codomain: TypeValue::new(Value::Unit),
                 effects: Vec::new(),
                 effect_tail: None,
             },

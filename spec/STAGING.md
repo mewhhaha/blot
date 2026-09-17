@@ -156,18 +156,36 @@ Within one semantic request, a successful closure call may reuse a prior result
 only when its settled arrow is monomorphic and has a closed empty effect row,
 the call is not residual, and both argument and result are closed first-order
 values. The key contains the closure's exact creation environment,
-module-instance stack, effect scope, body identity, a structural argument
-value, and the evaluation phase; the scopes are held weakly so entries never
-retain temporary call scopes, and a hit additionally requires every keyed
-scope to still be allocated, so a freed scope can never satisfy a call even
-if a later allocation reuses its address. Functions, effects, operations,
-capabilities,
+module-instance stack, effect scope, body identity, a structural argument value,
+and the evaluation phase; the scopes are held weakly so entries never retain
+temporary call scopes, and a hit additionally requires every keyed scope to
+still be allocated, so a freed scope can never satisfy a call even if a later
+allocation reuses its address. Functions, effects, operations, capabilities,
 Regions, Scratch values, continuations, residual values, open effects, and type
 variables are not cache keys or cached results. Failures are not cached. The
 bounded cache is shared by every evaluation in the request and cleared at each
 request boundary; it therefore cannot outlive a revision or substitute one
 module occurrence for another. This changes evaluation work only; the exported
 runtime body retains the source algorithm.
+
+Function and range edges in first-class type values may share immutable storage.
+Such sharing is not semantic equality, quantifier identity, or permission to
+reuse a compile-time call result. Mutation must detach an aliased edge and
+invalidate its dependency summaries before exposing mutable access. Summaries
+must account separately for type variables, effect-identity substitution and
+union normalization; absence of type variables alone does not discharge the
+latter two obligations. Summary traversal uses an explicit worklist rather than
+recursion proportional to type depth.
+
+Call-boundary signature instantiation records substitutions, not a second
+compatibility judgment. A settled signature component with no variables to bind
+must not reconstruct the actual argument's type. An unsettled component retains
+its ordinary binding rules, including heterogeneous array-element joins and
+first-binding behavior. A previously bound variable retains its recorded value.
+These shortcuts cannot bypass source checking or predicate obligations. Closed
+subgraphs may be reused during substitution, but environment-specific
+substitution results must not be reused across independent calls or later
+changes to lexical substitution environments.
 
 A returned source closure receives the closed result signature recorded at its
 call site in preference to an unspecialized codomain. A source codomain is
@@ -192,8 +210,8 @@ semantic identity.
 
 ### 5.1 Ordinary effects
 
-Source effects created by `@effect` are generative. Evaluating a declaration allocates
-under:
+Source effects created by `@effect` are generative. Evaluating a declaration
+allocates under:
 
 ```text
 (module instance, declaration node, compile-time scope, signature)

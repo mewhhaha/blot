@@ -2,6 +2,7 @@
 //!
 //! Accepted predicates are normalized into the existing range/union value
 //! domain. Nothing from this module crosses the Runtime HIR boundary.
+use crate::value::TypeValue;
 
 use std::cmp::Ordering as SortOrdering;
 use std::collections::{BTreeSet, HashSet};
@@ -558,8 +559,8 @@ fn interval_value(intervals: Vec<Interval>) -> Value {
             Value::Int(low)
         } else {
             Value::Range {
-                low: Box::new(Value::Int(low)),
-                high: Box::new(Value::Int(high)),
+                low: TypeValue::new(Value::Int(low)),
+                high: TypeValue::new(Value::Int(high)),
                 domain: Some(Domain::Int),
             }
         }
