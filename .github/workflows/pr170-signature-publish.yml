@@ -1,0 +1,78 @@
+name: Publish validated signature increment
+
+on:
+  push:
+    branches: ['workbench/pr170-signature-publish-20260917']
+    paths: ['.delivery/pr170-signature/**', '.github/workflows/pr170-signature-publish.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Decode and verify the tested patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          encoded = pathlib.Path('.delivery/pr170-signature/patch.b64').read_bytes()
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '5772a2228e83a980a17c09d9224fd2828365e894db6f8b8e744894952e3f8e27'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'signature.patch').write_bytes(patch)
+          PY
+      - name: Apply to the exact published PR head and verify source identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=b1b3ccb5c409bff091bcb8cebf990f87cb97487d
+          git fetch --no-tags origin "$base"
+          git checkout --detach "$base"
+          git config user.name 'OpenAI'
+          git config user.email 'noreply@openai.com'
+          git am "$RUNNER_TEMP/signature.patch"
+          git diff --check "$base" HEAD
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+            'compiler/src/eval.rs': '0c12ece6b11547399db2f652fd1026b6cf34c0a5',
+            'compiler/src/type_instantiation.rs': '5e01563211de43545dd50bd68b1c36caaeb7e263',
+            'compiler/src/type_value.rs': 'a482968cb4f140a96ed97fb1d176c68ac3198d2e',
+            'spec/STAGING.md': '318904a177253d49cb2ec62d26b5b32a613161b7',
+          }
+          changed = subprocess.check_output(['git', 'diff', '--name-only', 'b1b3ccb5c409bff091bcb8cebf990f87cb97487d', 'HEAD'], text=True).splitlines()
+          assert set(changed) == set(expected), changed
+          for path, sha in expected.items():
+            actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+            assert actual == sha, (path, actual, sha)
+          print('All four changed files match the locally tested source.')
+          PY
+      - name: Publish isolated candidate without force or PR/main writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/workbench/pr170-signature-candidate-20260917
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Capture formatting repair for separate inspection, without publishing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt
+          git diff --stat
+          git diff --binary > "$RUNNER_TEMP/pr170-formatting.patch"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pr170-formatting-repair
+          path: ${{ runner.temp }}/pr170-formatting.patch
+          if-no-files-found: error
+          retention-days: 3
