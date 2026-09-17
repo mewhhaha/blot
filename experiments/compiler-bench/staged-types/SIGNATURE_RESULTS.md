@@ -7,12 +7,12 @@ present this increment as a measured speed fix.
 
 ## Source and measurement boundary
 
-Measured on September 17, 2026. The baseline is the previously published
-PR implementation `b1b3ccb5c409bff091bcb8cebf990f87cb97487d`, which already includes
-demand-driven expression evidence. The candidate is
-`b56a70e2a8c21da0e2ba6636cf340833d7065c81`. This is not a comparison against main
-or against the original persistent-type experiment. Earlier absolute timings
-were collected on another host and must not be compared with this batch.
+Measured on September 17, 2026. The baseline is the previously published PR
+implementation `b1b3ccb5c409bff091bcb8cebf990f87cb97487d`, which already
+includes demand-driven expression evidence. The candidate is
+`b56a70e2a8c21da0e2ba6636cf340833d7065c81`. This is not a comparison against
+main or against the original persistent-type experiment. Earlier absolute
+timings were collected on another host and must not be compared with this batch.
 
 Both artifacts were rebuilt locally with pinned Rust 1.97.1, the same bare Cargo
 release profile, and unchanged compiler dependencies. The profile uses size
@@ -21,9 +21,9 @@ Cargo artifacts are not the normal distribution build, whose script adds linker
 and path-remapping flags. Compiler sources in the published increment were
 verified against the tested file hashes before a non-forced branch update.
 
-Host: Node v22.16.0, Linux x64, AMD EPYC 9V74 80-Core Processor. This is a shared
-container, not a dedicated performance machine. No other local compiler builds
-or test suites ran during the timing batches.
+Host: Node v22.16.0, Linux x64, AMD EPYC 9V74 80-Core Processor. This is a
+shared container, not a dedicated performance machine. No other local compiler
+builds or test suites ran during the timing batches.
 
 There are forty fresh-process observations: five per artifact, fixture, and
 telemetry setting. Artifact order alternates by iteration. Telemetry-off was run
@@ -32,11 +32,11 @@ new compiler session and uses the same tracked prelude snapshot. The unchanged
 comparison driver rejects differences in inputs, principal types, effects,
 interface keys, and target preflight.
 
-The timer includes semantic analysis, fact materialization, and target preflight.
-It excludes compiler Wasm instantiation, snapshot installation, source setup,
-final executable emission, and executable runtime. These are not end-to-end CLI
-compilation measurements. Raw samples, including phase telemetry when enabled,
-are retained in `signature-off.jsonl` and `signature-on.jsonl`.
+The timer includes semantic analysis, fact materialization, and target
+preflight. It excludes compiler Wasm instantiation, snapshot installation,
+source setup, final executable emission, and executable runtime. These are not
+end-to-end CLI compilation measurements. Raw samples, including phase telemetry
+when enabled, are retained in `signature-off.jsonl` and `signature-on.jsonl`.
 
 ## Results
 
@@ -63,10 +63,10 @@ between versions: full still performs 2,237,600 trampoline transitions and
 332,118 closure applications; prefix performs 38,202 transitions and 5,282
 closure applications. This increment does not reduce source-level staged work.
 
-Not every solver counter is identical. Full semantic preparation reports
-443,664 versus 443,730 settle visits and 54,060 versus 54,102 union visits.
-Prefix reports 228,794 versus 228,940 settle visits and 26,486 versus 26,544
-union visits. These differences are retained rather than omitted from the data.
+Not every solver counter is identical. Full semantic preparation reports 443,664
+versus 443,730 settle visits and 54,060 versus 54,102 union visits. Prefix
+reports 228,794 versus 228,940 settle visits and 26,486 versus 26,544 union
+visits. These differences are retained rather than omitted from the data.
 
 Allocated Wasm linear memory at analysis completion is 40,370,176 bytes in both
 prefix versions. Full increases from 117,374,976 to 117,440,512 bytes, one Wasm
@@ -87,10 +87,10 @@ changes. This is not broader memoization, a new subtype relation, or permission
 to share fresh effects or closure results.
 
 Function and range roots combine cached immutable edge summaries without
-allocating another traversal worklist. A missing summary still uses bounded-stack
-traversal. Copy-on-write mutation invalidates cached summaries before exposing
-mutable data. Effect-row tails and union-normalization obligations remain part
-of the summary.
+allocating another traversal worklist. A missing summary still uses
+bounded-stack traversal. Copy-on-write mutation invalidates cached summaries
+before exposing mutable data. Effect-row tails and union-normalization
+obligations remain part of the summary.
 
 ## Validation
 
@@ -102,10 +102,10 @@ allocation-free warmed root queries, effect-tail flags, and copy-on-write
 invalidation. The existing deep-graph bounded-stack regression also passes.
 
 Rust formatting, Wasm-target Clippy with warnings denied, and release-Wasm
-compilation pass. All 37 locally registered abstraction suites complete:
-177 tests pass, with no failures, cancellations, or skips. Those suites run the
-new compiler artifact, whose manifest matches its bytes and compiler-input
-identity; no older compiler or TypeScript semantic fallback is substituted.
+compilation pass. All 37 locally registered abstraction suites complete: 177
+tests pass, with no failures, cancellations, or skips. Those suites run the new
+compiler artifact, whose manifest matches its bytes and compiler-input identity;
+no older compiler or TypeScript semantic fallback is substituted.
 
 The nine new tests establish specific operation-count and semantic properties,
 not an end-to-end speed guarantee. The remaining dominant repeated execution of
@@ -137,13 +137,15 @@ full SHA-256
   8ec9d28a1c8c6b9bd4a345881e91a0c2c6b55f147f5e535d217459289d324054
 ```
 
-Baseline artifact size: 7,276,617 bytes. Candidate: 7,276,762 bytes. Both use the
-unchanged comparison driver from the published demanded-evaluation increment.
+Baseline artifact size: 7,276,617 bytes. Candidate: 7,276,762 bytes. Both use
+the unchanged comparison driver from the published demanded-evaluation
+increment.
 
 ## Reproduction
 
 Build both source revisions with the pinned toolchain and identical profile,
-retain their compiler Wasm files separately, and run from the candidate checkout:
+retain their compiler Wasm files separately, and run from the candidate
+checkout:
 
 ```sh
 for telemetry in off on; do

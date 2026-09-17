@@ -20,9 +20,10 @@ Candidate source: `44f607e37f2e29468be858c13c3e02ff807981b7`.
 The candidate Rust sources were byte-compared with the PR's CI source snapshot.
 There were no compiler-source mismatches. Later result-documentation changes do
 not change the compiler. Both artifacts use the pinned Rust 1.97.1 toolchain and
-the same bare Cargo release configuration: `opt-level = "s"`, fat LTO, one codegen
-unit, panic abort, and stripping. These are not byte-identical to the distributed
-artifact produced by the repository's build script, which adds linker flags.
+the same bare Cargo release configuration: `opt-level = "s"`, fat LTO, one
+codegen unit, panic abort, and stripping. These are not byte-identical to the
+distributed artifact produced by the repository's build script, which adds
+linker flags.
 
 Host: Node v22.16.0, Linux x64, Intel Xeon Platinum 8573C.
 
@@ -47,8 +48,8 @@ The measured analysis boundary includes semantic preparation, fact
 materialization, and target preflight. It excludes Wasm instantiation, snapshot
 installation, source registration, final executable emission, and executable
 runtime. Phase telemetry was enabled for both artifacts; this batch has no
-telemetry-off control and does not establish uninstrumented CLI performance.
-See `README.md` and `compare.mjs` for the exact driver and reproduction command.
+telemetry-off control and does not establish uninstrumented CLI performance. See
+`README.md` and `compare.mjs` for the exact driver and reproduction command.
 
 ## Results
 
@@ -77,9 +78,10 @@ full-fixture settle visits are 443,731 versus 443,666. Do not describe all work
 counters as identical.
 
 All twenty runs return `{ .run = Int -> Int }`, no effects, and supported target
-preflight. The final Wasm linear-memory size is 40,763,392 versus 40,370,176 bytes
-for prefix, and 118,423,552 versus 117,440,512 bytes for full. This is allocated
-linear memory at the end of analysis, not process RSS or peak live heap usage.
+preflight. The final Wasm linear-memory size is 40,763,392 versus 40,370,176
+bytes for prefix, and 118,423,552 versus 117,440,512 bytes for full. This is
+allocated linear memory at the end of analysis, not process RSS or peak live
+heap usage.
 
 ## Interpretation
 
@@ -91,11 +93,11 @@ alone have not solved that problem; this result does not justify discarding the
 subtype solver or weakening correctness checks.
 
 A subsequent speed-oriented design needs to reduce repeated staged execution
-itself, or materially reduce its per-step cost. Any reuse of staged type builders
-must carry sound environment/evidence dependencies and preserve fresh effect,
-region, and quantifier identities. This PR deliberately does not treat a lossy
-fingerprint, a shared pointer, or an apparently pure closure as proof of reusable
-semantic results.
+itself, or materially reduce its per-step cost. Any reuse of staged type
+builders must carry sound environment/evidence dependencies and preserve fresh
+effect, region, and quantifier identities. This PR deliberately does not treat a
+lossy fingerprint, a shared pointer, or an apparently pure closure as proof of
+reusable semantic results.
 
 ## Validation
 
@@ -106,8 +108,8 @@ regressions cover copy-on-write isolation, summary invalidation, bounded summary
 traversal, union normalization, effect substitution, quantifier shadowing,
 independent generic calls, and zero/one-visit argument-reflection cost gates.
 
-On implementation commit `44f607e37f2e29468be858c13c3e02ff807981b7`, GitHub Actions
-`Type-system validation` (run 35214377351) and `Abstraction contracts` (run
-35214377350) passed. Repository-wide CI (run 35214377565) remains blocked by
-pre-existing Deno formatting failures in unrelated files. Those files were not
-mass-reformatted or excluded to hide the failure.
+On implementation commit `44f607e37f2e29468be858c13c3e02ff807981b7`, GitHub
+Actions `Type-system validation` (run 35214377351) and `Abstraction contracts`
+(run 35214377350) passed. Repository-wide CI (run 35214377565) remains blocked
+by pre-existing Deno formatting failures in unrelated files. Those files were
+not mass-reformatted or excluded to hide the failure.
