@@ -11,186 +11,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 80032f3fbae62a2f2b40151998d2dbcf5778d617
+          ref: f5cafbf3ff12928f85c309fbe9623ace783b2a0a
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: denoland/setup-deno@v2
         with:
-          toolchain: 1.97.1
-          components: rustfmt
-      - name: Apply only reviewed compiler identity changes
+          deno-version: v2.9.7
+      - name: Apply canonical documentation formatting without semantic changes
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('compiler/src/residual_identity.rs')
-          s = p.read_text().replace('    Value, lookup, lookup_signature,', '    TypeValue, Value, lookup, lookup_signature,')
-          s = s.replace('Part::Fields', 'Part::Chunk').replace('    Fields(Rc<[Part]>),', '    Chunk(Rc<[Part]>),')
-          s = s.replace('    parts: Vec<Part>,\n}', '''    parts: Vec<Part>,
-              type_edges: HashMap<*const Value, (Rc<[Part]>, TypeValue)>,
-              signatures: HashMap<*const Value, (Rc<[Part]>, Rc<Value>)>,
-              #[cfg(test)]
-              value_visits: usize,
-          }''')
-          s = s.replace('            parts: Vec::new(),\n', '''            parts: Vec::new(),
-                      type_edges: HashMap::new(),
-                      signatures: HashMap::new(),
-                      #[cfg(test)]
-                      value_visits: 0,
-          ''')
-          marker = '    fn runtime(&mut self, value: &RuntimeValue) -> Result<bool, Diagnostic> {'
-          addition = '''    // These nodes are immutable during one Builder traversal. Keeping their
-              // owners alive prevents address reuse and makes subsequent writes detach.
-              // Do not carry this memo between requests: closure environments can change.
-              fn type_edge(&mut self, edge: &TypeValue) -> Result<bool, Diagnostic> {
-                  let identity = edge.as_ref() as *const Value;
-                  if let Some((parts, _)) = self.type_edges.get(&identity) {
-                      self.parts.push(Part::Chunk(parts.clone()));
-                      return Ok(true);
-                  }
-                  let outer = std::mem::take(&mut self.parts);
-                  let closures = self.closures.len();
-                  let supported = self.value(edge)?;
-                  let parts: Rc<[Part]> = std::mem::replace(&mut self.parts, outer).into();
-                  if supported && closures == self.closures.len() {
-                      self.type_edges.insert(identity, (parts.clone(), edge.clone()));
-                  }
-                  self.parts.push(Part::Chunk(parts));
-                  Ok(supported)
-              }
-
-              fn signature(&mut self, signature: Option<&Rc<Value>>) -> Result<bool, Diagnostic> {
-                  self.number(u64::from(signature.is_some()));
-                  let Some(signature) = signature else {
-                      return Ok(true);
-                  };
-                  let identity = Rc::as_ptr(signature);
-                  if let Some((parts, _)) = self.signatures.get(&identity) {
-                      self.parts.push(Part::Chunk(parts.clone()));
-                      return Ok(true);
-                  }
-                  let outer = std::mem::take(&mut self.parts);
-                  let closures = self.closures.len();
-                  let supported = self.value(signature)?;
-                  let parts: Rc<[Part]> = std::mem::replace(&mut self.parts, outer).into();
-                  if supported && closures == self.closures.len() {
-                      self.signatures.insert(identity, (parts.clone(), signature.clone()));
-                  }
-                  self.parts.push(Part::Chunk(parts));
-                  Ok(supported)
-              }
-
-          '''
-          assert marker in s
-          s = s.replace(marker, addition + marker)
-          s = s.replace('    fn value(&mut self, value: &Value) -> Result<bool, Diagnostic> {\n', '''    fn value(&mut self, value: &Value) -> Result<bool, Diagnostic> {
-                  #[cfg(test)]
-                  {
-                      self.value_visits += 1;
-                  }
-          ''')
-          s = s.replace('return Ok(self.value(low)? && self.value(high)?);', 'return Ok(self.type_edge(low)? && self.type_edge(high)?);')
-          s = s.replace('return Ok(self.value(domain)?\n                    && self.value(codomain)?', 'return Ok(self.type_edge(domain)?\n                    && self.type_edge(codomain)?')
-          s = s.replace('if !self.optional_value(signature.as_deref())? {', 'if !self.signature(signature.as_ref())? {')
-          s = s.replace('unreachable!("record evidence is flattened before encoding")', 'unreachable!("shared evidence is flattened before encoding")')
-          marker = '    #[test]\n    fn runtime_renaming_preserves_slots_not_caller_numbers()'
-          tests = '''    fn arrow(domain: TypeValue, codomain: TypeValue) -> Value {
-                  Value::Arrow {
-                      deferred: false,
-                      domain,
-                      codomain,
-                      effects: Vec::new(),
-                      effect_tail: None,
-                  }
-              }
-
-              #[test]
-              fn shared_type_evidence_visits_graph_nodes_not_expanded_paths() {
-                  let context = Rc::new(Context::default());
-                  let mut edge = TypeValue::new(Value::OpaqueType("Int".into()));
-                  for _ in 0..24 {
-                      edge = TypeValue::new(arrow(edge.clone(), edge));
-                  }
-                  let mut builder = Builder::new(&context, &[]);
-                  assert!(builder.value(&edge).unwrap());
-                  assert!(builder.value_visits <= 26, "{} visits", builder.value_visits);
-                  assert_eq!(builder.type_edges.len(), 24);
-                  let first = ResidualEnvironmentKey(builder.parts.into());
-                  assert!(first == key(&edge, &[]).unwrap());
-              }
-
-              #[test]
-              fn type_evidence_ignores_sharing_but_preserves_mutations_and_variables() {
-                  let leaf = || TypeValue::new(Value::TypeVariable(7));
-                  let shared = leaf();
-                  assert!(key(&arrow(shared.clone(), shared), &[]) == key(&arrow(leaf(), leaf()), &[]));
-                  let first = TypeValue::new(Value::TypeVariable(7));
-                  let mut changed = first.clone();
-                  *changed = Value::TypeVariable(8);
-                  assert!(key(&arrow(first.clone(), first.clone()), &[]) != key(&arrow(first, changed), &[]));
-              }
-
-              #[test]
-              fn signature_evidence_reuses_immutable_roots_and_retains_owners() {
-                  let context = Rc::new(Context::default());
-                  let signature = Rc::new(arrow(
-                      TypeValue::new(Value::OpaqueType("Int".into())),
-                      TypeValue::new(Value::OpaqueType("Text".into())),
-                  ));
-                  let mut builder = Builder::new(&context, &[]);
-                  assert!(builder.signature(Some(&signature)).unwrap());
-                  let visits = builder.value_visits;
-                  for _ in 0..32 {
-                      assert!(builder.signature(Some(&signature)).unwrap());
-                  }
-                  assert_eq!(builder.value_visits, visits);
-                  assert_eq!(Rc::strong_count(&signature), 2);
-                  let mut changed = signature.clone();
-                  *Rc::make_mut(&mut changed) = Value::Unit;
-                  assert!(builder.signature(Some(&changed)).unwrap());
-                  assert!(builder.value_visits > visits);
-                  drop(builder);
-                  assert_eq!(Rc::strong_count(&signature), 1);
-              }
-
-          '''
-          assert marker in s
-          s = s.replace(marker, tests + marker)
-          p.write_text(s)
-          p = Path('spec/STAGING.md')
-          s = p.read_text()
-          a = '''Immutable record evidence uses shared chunks once all contained closure
-          references are stable. The encoder retains record storage while indexing its
-          identity, and copy-on-write changes produce distinct evidence. Key comparison
-          ignores allocation sharing and memoizes compared chunk pairs; portable encoding
-          retains the original structural sequence. Completed keys share immutable storage
-          when cloned, so repeated captures and key cloning do not duplicate record trees.'''
-          b = '''Immutable records, persistent function/range type edges, and attached closure
-          signatures use shared evidence chunks once all contained closure references are
-          stable. The encoder retains each indexed storage owner for its own lifetime:
-          addresses detect repeated storage, never establish semantic equality, and
-          copy-on-write changes produce distinct evidence. These memos are local to one
-          identity construction; they do not cache mutable closure environments across
-          applications or revisions. In particular, creating a new closure definition
-          while encoding a chunk prevents memoizing that first-visit definition as a later
-          reference.
-
-          Key comparison ignores allocation sharing and memoizes compared chunk pairs;
-          portable encoding retains the original structural sequence. Completed keys
-          share immutable storage when cloned. Constructing identity for a shared immutable
-          function/range type graph visits its stored edges, rather than expanding every
-          root-to-leaf path. This does not change source value equality, quantifier or
-          effect identity, runtime capture slots, or eligibility for residual sharing.'''
-          assert a in s
-          p.write_text(s.replace(a, b))
-          PY
-          cargo fmt --manifest-path compiler/Cargo.toml
+          test "$(git hash-object compiler/src/residual_identity.rs)" = 78c2d5ae148c270801e4b1a14dfcf791f2dc0a55
+          deno fmt spec/STAGING.md experiments/compiler-bench/complete-compilation/README.md
+          test "$(git hash-object spec/STAGING.md)" = 7bf7df3cf93fc72ff0c795354fe4a7415b0bd285
           git diff --check
-          git add compiler/src/residual_identity.rs spec/STAGING.md
+          git add spec/STAGING.md experiments/compiler-bench/complete-compilation/README.md
           git config user.name OpenAI
           git config user.email noreply@openai.com
-          git commit -m 'perf: preserve shared type graphs in residual identity evidence'
-          git merge-base --is-ancestor 80032f3fbae62a2f2b40151998d2dbcf5778d617 HEAD
-          git push origin HEAD:refs/heads/workbench/compile-pathology-v1-candidate-20260917
+          git commit -m 'style: apply canonical formatting to compilation investigation'
+          git diff --exit-code f5cafbf3ff12928f85c309fbe9623ace783b2a0a HEAD -- compiler src generated .github
+          git push origin HEAD:refs/heads/workbench/compile-pathology-v1-formatted-20260917
           git rev-parse HEAD >> "$GITHUB_STEP_SUMMARY"
-          git rev-parse HEAD^{tree} >> "$GITHUB_STEP_SUMMARY"
