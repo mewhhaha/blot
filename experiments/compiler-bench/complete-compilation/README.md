@@ -46,7 +46,7 @@ relocated workspaces. It is not an atomic filesystem snapshot: all sources must
 stay unchanged throughout the sample. `--output=/local/prefix` writes the Wasm
 and ABI for private inspection and additionally requires write permission.
 
-## This increment
+## First increment: syntax and capture demand
 
 `closure_free_names` used to rescan an immutable closure body whenever capture
 planning, residual identity, signature checking, or environment replacement
@@ -74,15 +74,37 @@ substitutions, skipped capture traversal, and the recursive/host-callback
 staging boundaries. Existing abstraction, ownership, effect, and
 cache-invalidation suites remain required.
 
-## Earlier exploration and remaining work
+## Second increment: traversal-local shared evidence
 
-Initial stacks identified transitive capture identity construction on the slow
-path. The first investigation note proposed graph-preserving type/signature
-chunks. That separate experiment is **not part of this increment**: this change
-avoids unnecessary traversals and syntax recomputation first. Residual evidence
-still has opportunities for graph-aware construction and comparison.
+Residual keys now retain immutable function/range edges and attached signature
+roots as shared structural chunks within one builder traversal. Owners stay
+alive until the traversal ends. New closure definitions are not reusable chunks;
+only reference-stable evidence is shared. Independent allocations still compare
+by structure, and portable encoding sees the same flattened evidence sequence.
+
+Inherited type/effect substitutions are materialized once for a demanded frame
+and shared with its unchanged empty-frame descendants. A nearer binding still
+shadows its ancestor. A deep path with a binding at every frame must not retain
+a complete map at every prefix: one request constructs one combined map. None of
+these snapshots survives into a later key construction, so later environment,
+parent, signature, and substitution changes remain observable.
+
+Eight focused native tests cover type-DAG growth, repeated signature ownership,
+copy-on-write mutation, empty ancestry, a 1,024-frame nonempty substitution
+chain, nearest shadowing and subsequent mutations, first closure definitions,
+and exact flattened portable identity. Existing capture, revision, effect,
+ownership, and abstraction suites remain required.
+
+See [SHARING_RESULTS.md](SHARING_RESULTS.md) for the three-artifact comparison
+of main, the first published increment, and the graph-sharing increment. Its
+observations are a separate batch from [RESULTS.md](RESULTS.md); the report does
+not multiply percentages from different batches.
+
+## Remaining work
 
 The target remains millisecond compilation of an actual changed program. A
 reduced synthetic test, a warm artifact-cache hit, or faster semantic analysis
-alone does not meet that target. See [RESULTS.md](RESULTS.md) for the complete
-paired observations and their limitations.
+alone does not meet that target. Identity construction still examines transitive
+closure captures, and the syntax cache does not eliminate their changing value
+and substitution evidence. Source checking and later runtime preparation remain
+separate costs.

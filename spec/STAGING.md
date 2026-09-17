@@ -734,3 +734,25 @@ members have a shared runtime representation under the existing representation
 join. In particular, integer singleton bounds and `Int` share the signed-i64
 carrier. This does not authorize an untagged integer/float union, invent a tag,
 or change any canonical ABI layout.
+
+### Traversal-local residual evidence sharing
+
+Residual identity construction retains immutable function/range edges and
+attached signature roots as owned structural chunks. Repeated chunks do not
+replace exact value evidence with pointer equality: comparison checks their
+contents, and portable identity encoding observes the same flattened sequence.
+Chunks containing new closure definitions are not reused until their closure
+references are stable. Owners remain alive for the traversal so storage
+addresses cannot be recycled.
+
+Collecting inherited type and effect substitutions may share immutable snapshots
+of a lexical frame's ancestry within one synchronous identity traversal. A
+nearer binding shadows its ancestor. Such a traversal executes no source code
+and cannot mutate environment bindings or substitutions. No frame snapshot
+survives into a later key construction: later value, signature, substitution,
+and parent changes must be observed again. Runtime capture slots and ownership
+meanings remain exact.
+
+Only demanded substitution maps and their unchanged empty-frame suffixes are
+retained. A single request through a chain of nonempty frames must not
+materialize and retain a complete map for every prefix of that chain.
