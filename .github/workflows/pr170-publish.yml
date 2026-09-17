@@ -1,0 +1,67 @@
+name: Publish validated PR 170 patch
+
+on:
+  push:
+    branches: ['workbench/pr170-publish-20260917']
+    paths: ['.delivery/pr170/**', '.github/workflows/pr170-publish.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Decode and verify previously validated mail patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          parts = pathlib.Path('.delivery/pr170')
+          encoded = b''.join((parts / f'part{i}').read_bytes() for i in range(3))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '5a915970273a6210b7f11e79a2caa445d616a9a0d09dfe451c22e293bf8bcc3e'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'pr170.patch').write_bytes(patch)
+          PY
+      - name: Apply only to exact recorded PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=46f5067c46a8a74c10a32379db3e3d22ea75737a
+          git fetch --no-tags origin "$base"
+          git checkout --detach "$base"
+          git config user.name 'OpenAI'
+          git config user.email 'noreply@openai.com'
+          git am "$RUNNER_TEMP/pr170.patch"
+          git diff --check "$base" HEAD
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+            'compiler/src/eval.rs': 'b64482c93de550ac540eea937d231f3fbc27cf0a',
+            'experiments/compiler-bench/staged-types/DEMAND_RESULTS.md': 'a984a42f3630f41b86e2d606c4f0a5c92d02fb66',
+            'experiments/compiler-bench/staged-types/README.md': '2888c8a255a6262c03c8b60f97a99b0eb0f96a6b',
+            'experiments/compiler-bench/staged-types/compare.mjs': '140cc143035ebc2892de731fbcaf14732462b856',
+            'experiments/compiler-bench/staged-types/demand-off.jsonl': 'eadea3cac28b742f0dd6a8d3b220673c0d306f7c',
+            'experiments/compiler-bench/staged-types/demand-on.jsonl': '7b32421d8486a467de3a88c00dc053c3f15b2736',
+            'spec/STAGING.md': 'c4738b64188514e4a8cef5b2df59e78a1582b7df',
+          }
+          changed = subprocess.check_output(['git', 'diff', '--name-only', '46f5067c46a8a74c10a32379db3e3d22ea75737a', 'HEAD'], text=True).splitlines()
+          assert set(changed) == set(expected), changed
+          for path, sha in expected.items():
+            actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+            assert actual == sha, (path, actual, sha)
+          print('Every published file matches the validated patch.')
+          PY
+      - name: Publish isolated candidate without force or main-branch writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/workbench/pr170-demand-published-20260917
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+          echo 'The GitHub connector will fast-forward PR 170 only after this candidate is verified. No delivery files are in that candidate.' >> "$GITHUB_STEP_SUMMARY"
