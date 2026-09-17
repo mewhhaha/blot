@@ -31,7 +31,11 @@ for (const argument of process.argv.slice(2)) {
   }
   options.set(match[1], match[2]);
 }
-const preludeMode = options.get("prelude") ?? "snapshot";
+function option(name, fallback) {
+  if (options.has(name)) return options.get(name);
+  return fallback;
+}
+const preludeMode = option("prelude", "snapshot");
 assert(
   ["snapshot", "source"].includes(preludeMode),
   "--prelude is snapshot or source",
@@ -221,7 +225,7 @@ async function sample(wasmPath, fixture) {
 if (options.has("sample")) {
   console.log(
     JSON.stringify(
-      await sample(options.get("sample"), options.get("fixture") ?? "full"),
+      await sample(options.get("sample"), option("fixture", "full")),
     ),
   );
 } else {
@@ -229,7 +233,7 @@ if (options.has("sample")) {
     options.has("baseline") && options.has("candidate"),
     "Provide --baseline and --candidate compiler Wasm files",
   );
-  const count = Number(options.get("samples") ?? "5");
+  const count = Number(option("samples", "5"));
   assert(
     Number.isSafeInteger(count) && count > 0,
     "--samples must be a positive integer",
