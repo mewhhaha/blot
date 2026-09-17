@@ -136,8 +136,9 @@ node experiments/compiler-bench/staged-types/compare.mjs \
 
 Regression coverage distinguishes genuinely needed numeric and residual type
 facts from unused concrete-expression facts. Immediate diagnostic origins and
-spans, deterministic expression fuel, and allocation-free concrete leaves are
-asserted directly; the ordinary compiler suites remain the semantic authority.
+spans, deterministic expression fuel, and concrete leaves without an added
+trampoline step are asserted directly; the ordinary compiler suites remain the
+semantic authority.
 
 The telemetry `eval.steps` counter counts trampoline drive-loop transitions,
 not source-expression evaluations. Removing administrative callbacks lowers
@@ -145,3 +146,8 @@ that counter without reducing the number of source-level closure calls. Report
 both counters and wall time; a transition reduction is not evidence that a
 source algorithm has become asymptotically cheaper. Expression fuel is charged
 inside `evaluate_expression` independently of those transitions.
+
+Measured follow-up results and reproduction details are in `DEMAND_RESULTS.md`.
+The complete fresh-process samples are retained in `demand-off.jsonl` and
+`demand-on.jsonl`. Those results compare this increment with PR #170; they do not
+replace the earlier comparison against `main` recorded in `RESULTS.md`.
