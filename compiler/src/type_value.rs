@@ -10,6 +10,11 @@ use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
+#[cfg(test)]
+thread_local! {
+    static SUMMARY_WORKLISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 const VARIABLES: u8 = 1;
 const EFFECTS: u8 = 2;
 // Signature substitution also flattens/deduplicates unions and collapses a
@@ -123,6 +128,40 @@ fn summarize(value: &Value, populate_edges: bool) -> u8 {
         | Value::Extended { .. } => {}
         _ => return 0,
     }
+    // Function/range roots are frequent signature queries. Their persistent
+    // edges already carry the complete dependency summary: combine those flags
+    // without allocating a worklist and visited set for the root. When building
+    // a missing edge summary, never recursively initialize another missing one;
+    // the fallback below remains bounded-stack for arbitrarily deep graphs.
+    let edge_summary = |edge: &TypeValue| {
+        if populate_edges {
+            Some(edge.summary())
+        } else {
+            edge.0.summary.get().copied()
+        }
+    };
+    let parts = match value {
+        Value::Range { low, high, .. } => Some((low, high, 0)),
+        Value::Arrow {
+            domain,
+            codomain,
+            effects,
+            effect_tail,
+            ..
+        } if effects.is_empty() => {
+            let flags = if effect_tail.is_some() { VARIABLES } else { 0 };
+            Some((domain, codomain, flags))
+        }
+        _ => None,
+    };
+    if let Some((left, right, flags)) = parts
+        && let Some(left) = edge_summary(left)
+        && let Some(right) = edge_summary(right)
+    {
+        return flags | left | right;
+    }
+    #[cfg(test)]
+    SUMMARY_WORKLISTS.with(|count| count.set(count.get() + 1));
     let mut summary = 0;
     let mut pending = vec![value];
     let mut seen = HashSet::new();
@@ -209,6 +248,72 @@ fn summarize(value: &Value, populate_edges: bool) -> u8 {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn cached_function_and_range_roots_do_not_allocate_summary_worklists() {
+        let range = crate::primitives::constant("@type.int").unwrap();
+        let arrow = Value::Arrow {
+            deferred: false,
+            domain: TypeValue::new(range.clone()),
+            codomain: TypeValue::new(range.clone()),
+            effects: Vec::new(),
+            effect_tail: None,
+        };
+        for value in [&range, &arrow] {
+            assert!(!TypeValue::needs_substitution(value));
+        }
+        SUMMARY_WORKLISTS.with(|count| count.set(0));
+        for _ in 0..10_000 {
+            assert!(!TypeValue::needs_substitution(&range));
+            assert!(!TypeValue::needs_substitution(&arrow));
+            assert!(!TypeValue::contains_variables(&arrow));
+        }
+        SUMMARY_WORKLISTS.with(|count| assert_eq!(count.get(), 0));
+    }
+
+    #[test]
+    fn summary_root_fast_path_keeps_effect_tails_and_union_flags() {
+        let mut arrow = Value::Arrow {
+            deferred: false,
+            domain: TypeValue::new(Value::Unit),
+            codomain: TypeValue::new(Value::Unit),
+            effects: Vec::new(),
+            effect_tail: Some(7),
+        };
+        assert_eq!(summarize(&arrow, true), VARIABLES);
+        let Value::Arrow {
+            domain,
+            effect_tail,
+            ..
+        } = &mut arrow
+        else {
+            panic!("arrow")
+        };
+        *effect_tail = None;
+        **domain = Value::Union(vec![Value::Unit].into());
+        assert_eq!(summarize(&arrow, true), NORMALIZATION);
+        assert!(!TypeValue::contains_variables(&arrow));
+        assert!(TypeValue::needs_substitution(&arrow));
+    }
+
+    #[test]
+    fn summary_root_fast_path_observes_copy_on_write_edge_mutation() {
+        let original = Value::Arrow {
+            deferred: false,
+            domain: TypeValue::new(Value::Unit),
+            codomain: TypeValue::new(Value::Unit),
+            effects: Vec::new(),
+            effect_tail: None,
+        };
+        assert_eq!(summarize(&original, true), 0);
+        let mut changed = original.clone();
+        let Value::Arrow { domain, .. } = &mut changed else {
+            panic!("arrow")
+        };
+        **domain = Value::TypeVariable(42);
+        assert_eq!(summarize(&changed, true), VARIABLES);
+        assert_eq!(summarize(&original, true), 0);
+    }
 
     #[test]
     fn cloning_and_substitution_reuse_closed_type_edges() {

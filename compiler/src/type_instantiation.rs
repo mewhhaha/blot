@@ -19,6 +19,28 @@ pub(crate) fn signature_body(mut signature: &Value) -> &Value {
     signature
 }
 
+/// Select the highest-priority evidence before doing any fallback work. An
+/// environment-independent signature can retain its shared root; open variables,
+/// effect identities and unions still go through call-local substitution.
+pub(crate) fn resolve_call_signature(
+    attached: Option<std::rc::Rc<Value>>,
+    environment: &Environment,
+    recursive: impl FnOnce() -> Option<Value>,
+    inferred: impl FnOnce() -> Option<Value>,
+) -> Option<std::rc::Rc<Value>> {
+    let signature = attached
+        .or_else(|| recursive().map(std::rc::Rc::new))
+        .or_else(|| inferred().map(std::rc::Rc::new))?;
+    if TypeValue::needs_substitution(&signature) {
+        Some(std::rc::Rc::new(substitute_signature(
+            &signature,
+            environment,
+        )))
+    } else {
+        Some(signature)
+    }
+}
+
 pub(crate) fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
     if !TypeValue::needs_substitution(signature) {
         return signature.clone();
@@ -404,6 +426,128 @@ mod tests {
             operation_ownership: BTreeMap::new(),
             host: false,
         }
+    }
+
+    #[test]
+    fn attached_closed_call_signature_is_reused_without_forcing_fallbacks() {
+        let attached = std::rc::Rc::new(Value::Arrow {
+            deferred: false,
+            domain: TypeValue::new(int_type()),
+            codomain: TypeValue::new(int_type()),
+            effects: Vec::new(),
+            effect_tail: None,
+        });
+        let result = resolve_call_signature(
+            Some(attached.clone()),
+            &child_env(None),
+            || panic!("an attached signature precedes recursive lookup"),
+            || panic!("an attached signature precedes inferred lookup"),
+        )
+        .unwrap();
+        assert!(std::rc::Rc::ptr_eq(&attached, &result));
+    }
+
+    #[test]
+    fn recursive_call_signature_precedes_inferred_signature() {
+        let result = resolve_call_signature(
+            None,
+            &child_env(None),
+            || Some(int_type()),
+            || panic!("a recursive signature precedes inferred lookup"),
+        )
+        .unwrap();
+        assert!(equal(&result, &int_type()));
+    }
+
+    #[test]
+    fn missing_call_signatures_force_each_fallback_once_and_do_not_cache_absence() {
+        let calls = std::cell::Cell::new(0);
+        for inferred in [None, Some(Value::Unit)] {
+            let expected = inferred.is_some();
+            let result = resolve_call_signature(
+                None,
+                &child_env(None),
+                || {
+                    calls.set(calls.get() + 1);
+                    None
+                },
+                || {
+                    calls.set(calls.get() + 1);
+                    inferred
+                },
+            );
+            assert_eq!(result.is_some(), expected);
+        }
+        assert_eq!(calls.get(), 4);
+    }
+
+    #[test]
+    fn call_signatures_specialize_again_after_environment_changes() {
+        let environment = child_env(None);
+        let signature = std::rc::Rc::new(Value::TypeVariable(7));
+        for expected in [int_type(), Value::Unit] {
+            environment
+                .type_substitutions
+                .borrow_mut()
+                .insert(7, expected.clone());
+            let result =
+                resolve_call_signature(Some(signature.clone()), &environment, || None, || None)
+                    .unwrap();
+            assert!(equal(&result, &expected));
+            assert!(!std::rc::Rc::ptr_eq(&signature, &result));
+        }
+        assert!(matches!(signature.as_ref(), Value::TypeVariable(7)));
+    }
+
+    #[test]
+    fn shared_call_signatures_keep_effect_identity_substitution() {
+        let environment = child_env(None);
+        let signature = std::rc::Rc::new(Value::Arrow {
+            deferred: false,
+            domain: TypeValue::new(Value::Unit),
+            codomain: TypeValue::new(Value::Unit),
+            effects: vec![effect(1)],
+            effect_tail: None,
+        });
+        for id in [2, 3] {
+            environment
+                .effect_substitutions
+                .borrow_mut()
+                .insert(1, effect(id));
+            let result =
+                resolve_call_signature(Some(signature.clone()), &environment, || None, || None)
+                    .unwrap();
+            let Value::Arrow { effects, .. } = result.as_ref() else {
+                panic!("arrow")
+            };
+            assert!(matches!(effects[0], Value::Effect { id: actual, .. } if actual == id));
+        }
+        let Value::Arrow { effects, .. } = signature.as_ref() else {
+            panic!("arrow")
+        };
+        assert!(matches!(effects[0], Value::Effect { id: 1, .. }));
+    }
+
+    #[test]
+    fn shared_call_signatures_keep_union_normalization() {
+        let signature = std::rc::Rc::new(Value::Arrow {
+            deferred: false,
+            domain: TypeValue::new(Value::Union(vec![Value::Unit, Value::Unit].into())),
+            codomain: TypeValue::new(Value::Unit),
+            effects: Vec::new(),
+            effect_tail: None,
+        });
+        let result =
+            resolve_call_signature(Some(signature.clone()), &child_env(None), || None, || None)
+                .unwrap();
+        let Value::Arrow { domain, .. } = result.as_ref() else {
+            panic!("arrow")
+        };
+        assert!(matches!(domain.as_ref(), Value::Unit));
+        let Value::Arrow { domain, .. } = signature.as_ref() else {
+            panic!("arrow")
+        };
+        assert!(matches!(domain.as_ref(), Value::Union(members) if members.len() == 2));
     }
 
     #[test]

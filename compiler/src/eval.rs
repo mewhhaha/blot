@@ -1,5 +1,5 @@
 pub(crate) use crate::type_instantiation::{
-    record_signature_substitutions, signature_body, substitute_signature,
+    record_signature_substitutions, resolve_call_signature, signature_body, substitute_signature,
 };
 #[cfg(test)]
 use crate::value::TypeValue;
@@ -5018,16 +5018,16 @@ fn apply_with_expected(
             let mut environment = environment;
             let mut residual_compilation = None;
             let mut instance_facts = None;
-            let recursive_signature = self_name
-                .as_deref()
-                .and_then(|name| lookup_signature(&environment, name));
-            let inferred_signature =
-                runtime.closure_signature(&context, closure_module.as_str(), body);
-            let signature = signature
-                .or_else(|| recursive_signature.map(Rc::new))
-                .or_else(|| inferred_signature.map(Rc::new));
-            let mut signature =
-                signature.map(|signature| Rc::new(substitute_signature(&signature, &environment)));
+            let mut signature = resolve_call_signature(
+                signature,
+                &environment,
+                || {
+                    self_name
+                        .as_deref()
+                        .and_then(|name| lookup_signature(&environment, name))
+                },
+                || runtime.closure_signature(&context, closure_module.as_str(), body),
+            );
 
             let memoized_closure = (runtime.residual.is_none()
                 && memoizable_comptime_signature(signature.as_deref()))

@@ -186,7 +186,10 @@ invalidate its dependency summaries before exposing mutable access. Summaries
 must account separately for type variables, effect-identity substitution and
 union normalization; absence of type variables alone does not discharge the
 latter two obligations. Summary traversal uses an explicit worklist rather than
-recursion proportional to type depth.
+recursion proportional to type depth. A function or range root may combine its
+cached immutable edge summaries without allocating another traversal worklist.
+Computing a missing summary must still use bounded-stack traversal, and the root
+shortcut must retain effect-row tails and union-normalization flags.
 
 Call-boundary signature instantiation records substitutions, not a second
 compatibility judgment. A settled signature component with no variables to bind
@@ -197,6 +200,15 @@ These shortcuts cannot bypass source checking or predicate obligations. Closed
 subgraphs may be reused during substitution, but environment-specific
 substitution results must not be reused across independent calls or later
 changes to lexical substitution environments.
+
+Closure calls select signature evidence in this order: the attached signature,
+then the recursive lexical signature, then inferred closure evidence. Lower
+priority resolvers are demanded only when higher priority evidence is absent;
+absence itself is not cached by this selection. A selected signature with no
+variable, effect-identity or normalization dependencies may reuse its immutable
+root. Every dependent signature is substituted in the current call environment,
+including after that environment changes. Neither root sharing nor a skipped
+fallback is evidence of source compatibility or permission to memoize the call.
 
 A returned source closure receives the closed result signature recorded at its
 call site in preference to an unspecialized codomain. A source codomain is
