@@ -18,29 +18,24 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Format the three files reported by CI on the exact PR head
+      - name: Format the two Markdown files reported by current CI
         shell: bash
         run: |
           set -euo pipefail
           base=5f6457b759a2faf888978c1fb89420d7b6e7f055
           git fetch --no-tags origin "$base"
           git checkout --detach "$base"
-          deno fmt LANGUAGE.md spec/STAGING.md src/node/type_value_lattice_contract.test.ts
+          deno fmt LANGUAGE.md spec/STAGING.md
           python3 - <<'PY'
-          import pathlib, re, subprocess
+          import pathlib, subprocess
           base = '5f6457b759a2faf888978c1fb89420d7b6e7f055'
-          expected = {'LANGUAGE.md', 'spec/STAGING.md', 'src/node/type_value_lattice_contract.test.ts'}
+          expected = {'LANGUAGE.md', 'spec/STAGING.md'}
           changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
           assert changed == expected, changed
           for name in sorted(changed):
               before = subprocess.check_output(['git', 'show', f'{base}:{name}'], text=True)
               after = pathlib.Path(name).read_text()
-              if name.endswith('.md'):
-                  assert before.split() == after.split(), name
-              else:
-                  # Deno only adds line breaks and the trailing argument commas shown in CI.
-                  normalize = lambda s: re.sub(r',(?=\))', '', re.sub(r'\s+', '', s))
-                  assert normalize(before) == normalize(after), name
+              assert before.split() == after.split(), name
           PY
           deno fmt --check
           deno lint
@@ -48,8 +43,8 @@ jobs:
           git diff --binary > "$RUNNER_TEMP/pr170-formatting.patch"
           git config user.name 'OpenAI'
           git config user.email 'noreply@openai.com'
-          git add LANGUAGE.md spec/STAGING.md src/node/type_value_lattice_contract.test.ts
-          git commit -m 'fix: canonical formatting for PR 170 CI without semantic changes'
+          git add LANGUAGE.md spec/STAGING.md
+          git commit -m 'fix: canonical Markdown formatting for PR 170 CI'
           git push origin HEAD:refs/heads/workbench/pr170-ci-candidate-20260917
           echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
           git diff --stat "$base" HEAD >> "$GITHUB_STEP_SUMMARY"
@@ -59,64 +54,4 @@ jobs:
           name: pr170-formatting-repair
           path: ${{ runner.temp }}/pr170-formatting.patch
           if-no-files-found: warn
-          retention-days: 3
-
-  merge-audit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    permissions:
-      contents: read
-      pull-requests: read
-      actions: read
-      checks: read
-    steps:
-      - name: Read current PR heads, checks, files, and shared repair state
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import datetime, json, os, pathlib, urllib.request, urllib.error
-          root = 'https://api.github.com/repos/mewhhaha/blot'
-          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}
-          def get(path):
-              with urllib.request.urlopen(urllib.request.Request(root + path, headers=headers), timeout=60) as r:
-                  return json.load(r)
-          def pages(path):
-              answer = []
-              separator = '&' if '?' in path else '?'
-              for page in range(1, 11):
-                  batch = get(path + separator + f'per_page=100&page={page}')
-                  answer.extend(batch)
-                  if len(batch) < 100:
-                      return answer
-              raise RuntimeError('Pagination bound reached: ' + path)
-          report = {'read_at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'main': get('/commits/main')['sha'], 'open': [], 'related_closed': []}
-          opened = pages('/pulls?state=open&sort=created&direction=asc')
-          for summary in opened:
-              p = get('/pulls/' + str(summary['number']))
-              sha = p['head']['sha']
-              entry = {k: p[k] for k in ('number', 'title', 'html_url', 'draft', 'state', 'merged', 'mergeable', 'mergeable_state', 'body', 'changed_files', 'additions', 'deletions')}
-              entry['head'] = sha
-              entry['branch'] = p['head']['ref']
-              entry['base'] = p['base']['sha']
-              entry['merge_commit_sha'] = p['merge_commit_sha']
-              entry['files'] = [{'path': f['filename'], 'status': f['status'], 'additions': f['additions'], 'deletions': f['deletions'], 'patch': f.get('patch')} for f in pages('/pulls/' + str(p['number']) + '/files')]
-              entry['checks'] = [{'name': c['name'], 'status': c['status'], 'conclusion': c['conclusion'], 'url': c['html_url']} for c in get(f'/commits/{sha}/check-runs?per_page=100')['check_runs']]
-              entry['runs'] = [{'id': r['id'], 'name': r['name'], 'status': r['status'], 'conclusion': r['conclusion'], 'url': r['html_url'], 'head_sha': r['head_sha']} for r in get(f'/actions/runs?head_sha={sha}&event=pull_request&per_page=20')['workflow_runs']]
-              report['open'].append(entry)
-              print(json.dumps({k: entry[k] for k in ('number', 'title', 'draft', 'mergeable', 'head', 'runs')}, ensure_ascii=False))
-          open_numbers = {p['number'] for p in report['open']}
-          for number in (143, 150, 155, 159, 161, 169, 170):
-              if number not in open_numbers:
-                  p = get('/pulls/' + str(number))
-                  report['related_closed'].append({k: p[k] for k in ('number', 'title', 'state', 'merged', 'merged_at', 'merge_commit_sha', 'html_url')})
-          pathlib.Path('merge-audit.json').write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
-          PY
-      - uses: actions/upload-artifact@v7
-        with:
-          name: blot-merge-audit
-          path: merge-audit.json
-          if-no-files-found: error
           retention-days: 3
