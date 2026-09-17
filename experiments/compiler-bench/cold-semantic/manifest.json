@@ -10,7 +10,13 @@
       "path": "experiments/compiler-bench/cold-semantic/generate.ts",
       "sha256": "47eb5c4275cf480121eef534003f3b129af38b07bc6b1cbb8ff79160c65c5827",
       "flags": "--components C --systems S --stages K --sink NAME --out PATH [--framework PATH]",
-      "sinks": ["identity", "build-only", "schedule-only", "union-only", "full"],
+      "sinks": [
+        "identity",
+        "build-only",
+        "schedule-only",
+        "union-only",
+        "full"
+      ],
       "note": "emits Blot source only; never parses Blot; runs under Deno or Node+tsx"
     },
     "sample": {
@@ -31,7 +37,14 @@
       "path": "experiments/compiler-bench/cold-semantic/framework.blot",
       "sha256": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15",
       "bytes": 15538,
-      "provides": ["App(new/add_plugin/add_component/add_system)", "Build.row", "Systems(+components namespace)/define", "Plan(group/barrier/before/merge/then/conflicts/compatible/analyze/compile)", "Schedule(empty/merge/each)", "Force(unite/for_world)"]
+      "provides": [
+        "App(new/add_plugin/add_component/add_system)",
+        "Build.row",
+        "Systems(+components namespace)/define",
+        "Plan(group/barrier/before/merge/then/conflicts/compatible/analyze/compile)",
+        "Schedule(empty/merge/each)",
+        "Force(unite/for_world)"
+      ]
     }
   },
   "frozenPair": {
@@ -39,7 +52,12 @@
       "path": "experiments/compiler-bench/cold-semantic/prefix.blot",
       "sha256": "009d4e05d86b3b437f036ee7573656506bc72141186c9f58214079908faa168e",
       "bytes": 5851,
-      "params": { "components": 4, "systems": 8, "stages": 2, "sink": "identity" },
+      "params": {
+        "components": 4,
+        "systems": 8,
+        "stages": 2,
+        "sink": "identity"
+      },
       "regenerate": "node --import tsx generate.ts --components=4 --systems=8 --stages=2 --sink=identity --out=prefix.blot"
     },
     "full": {
@@ -61,19 +79,34 @@
       "path": "experiments/compiler-bench/cold-semantic/controls/build_only.blot",
       "sha256": "d0259ad3eae69402ab805412aa5063d3bea14239641468698d1621c18c5ec606",
       "bytes": 12123,
-      "params": { "components": 4, "systems": 8, "stages": 2, "sink": "build-only" }
+      "params": {
+        "components": 4,
+        "systems": 8,
+        "stages": 2,
+        "sink": "build-only"
+      }
     },
     {
       "path": "experiments/compiler-bench/cold-semantic/controls/schedule_only.blot",
       "sha256": "88074dbc745788c0ccc1f65691f56d103dcd17968d2654e4880601b47802fd34",
       "bytes": 6599,
-      "params": { "components": 4, "systems": 8, "stages": 2, "sink": "schedule-only" }
+      "params": {
+        "components": 4,
+        "systems": 8,
+        "stages": 2,
+        "sink": "schedule-only"
+      }
     },
     {
       "path": "experiments/compiler-bench/cold-semantic/controls/union_only.blot",
       "sha256": "5c06ec1aec763edf18b36a212b4faa534967ad4a5cfec9052eb1ae8043d7ee45",
       "bytes": 12171,
-      "params": { "components": 4, "systems": 8, "stages": 2, "sink": "union-only" }
+      "params": {
+        "components": 4,
+        "systems": 8,
+        "stages": 2,
+        "sink": "union-only"
+      }
     },
     {
       "path": "experiments/compiler-bench/cold-semantic/controls/full_stages1.blot",
@@ -99,16 +132,57 @@
   ],
   "frozenPilotCounters": {
     "note": "bit-identical across every fresh-process sample per fixture (new artifact e07d8731); from pilot_confirm/raw.jsonl",
-    "prefix": { "schema": 3, "typeNodes": 13708, "typeInterns": 73506, "constraints": 16384, "settleVisits": 124632, "freshenVisits": 8741, "unionVisits": 11661, "boundaryMaterializations": 360, "captureCandidates": 221, "capturesBridged": 198, "interfaceFieldsDemanded": 7, "solverWorklistPeak": 1187 },
-    "full": { "schema": 3, "typeNodes": 39303, "typeInterns": 196223, "constraints": 49139, "settleVisits": 311895, "freshenVisits": 23403, "unionVisits": 31590, "boundaryMaterializations": 963, "captureCandidates": 614, "capturesBridged": 545, "interfaceFieldsDemanded": 7, "solverWorklistPeak": 1187 },
-    "growthFullOverPrefix": { "typeNodes": 2.87, "typeInterns": 2.67, "constraints": 3.0, "settleVisits": 2.5, "freshenVisits": 2.68, "unionVisits": 2.71, "boundaryMaterializations": 2.68, "captureCandidates": 2.78, "capturesBridged": 2.75, "interfaceFieldsDemanded": 1.0, "solverWorklistPeak": 1.0 }
+    "prefix": {
+      "schema": 3,
+      "typeNodes": 13708,
+      "typeInterns": 73506,
+      "constraints": 16384,
+      "settleVisits": 124632,
+      "freshenVisits": 8741,
+      "unionVisits": 11661,
+      "boundaryMaterializations": 360,
+      "captureCandidates": 221,
+      "capturesBridged": 198,
+      "interfaceFieldsDemanded": 7,
+      "solverWorklistPeak": 1187
+    },
+    "full": {
+      "schema": 3,
+      "typeNodes": 39303,
+      "typeInterns": 196223,
+      "constraints": 49139,
+      "settleVisits": 311895,
+      "freshenVisits": 23403,
+      "unionVisits": 31590,
+      "boundaryMaterializations": 963,
+      "captureCandidates": 614,
+      "capturesBridged": 545,
+      "interfaceFieldsDemanded": 7,
+      "solverWorklistPeak": 1187
+    },
+    "growthFullOverPrefix": {
+      "typeNodes": 2.87,
+      "typeInterns": 2.67,
+      "constraints": 3.0,
+      "settleVisits": 2.5,
+      "freshenVisits": 2.68,
+      "unionVisits": 2.71,
+      "boundaryMaterializations": 2.68,
+      "captureCandidates": 2.78,
+      "capturesBridged": 2.75,
+      "interfaceFieldsDemanded": 1.0,
+      "solverWorklistPeak": 1.0
+    }
   },
   "pilotEvidence": {
     "note": "Small pilot only (NOT the 15x3 baseline). First batch ran under heavy contention (load 17.6, another agent's parallel cargo test); confirmation batch at load ~4-6. Every full sample exceeds every prefix sample in both batches.",
     "pilot": {
       "dir": "experiments/compiler-bench/cold-semantic/pilot",
       "artifact": "e07d873107f71a74ca105f3652ef06b31b89b7fe9acbc996db2a7cb2024b2916",
-      "analyzeMs": { "prefix": [2832.5, 636.0, 631.5], "full": [19523.8, 7145.3, 26525.3] },
+      "analyzeMs": {
+        "prefix": [2832.5, 636.0, 631.5],
+        "full": [19523.8, 7145.3, 26525.3]
+      },
       "caveat": "slots 0/1/5 inflated by CPU contention; retained as raw evidence"
     },
     "pilot_confirm": {
@@ -117,13 +191,25 @@
       "analyzeMs": { "prefix": [739.5, 636.8], "full": [7072.8, 7158.8] },
       "createMs": { "prefix": [91.5, 78.2], "full": [80.6, 77.0] },
       "wallMs": { "prefix": [905.6, 788.1], "full": [7241.2, 7323.8] },
-      "hostRssBytes": { "prefix": [260923392, 260444160], "full": [335077376, 338939904] },
-      "medians": { "prefixAnalyzeMs": 688.2, "fullAnalyzeMs": 7115.8, "ratio": 10.3, "deltaMs": 6427.6 }
+      "hostRssBytes": {
+        "prefix": [260923392, 260444160],
+        "full": [335077376, 338939904]
+      },
+      "medians": {
+        "prefixAnalyzeMs": 688.2,
+        "fullAnalyzeMs": 7115.8,
+        "ratio": 10.3,
+        "deltaMs": 6427.6
+      }
     }
   },
   "baselinePlan": {
     "command": "deno run --allow-read --allow-write --allow-env --allow-sys --allow-run=deno,git run.ts --fixtures=$PWD/prefix.blot,$PWD/full.blot --samples=15 --runs=3 --out=baseline",
-    "requires": ["quiet machine (no contention)", "clean tree (or re-freeze + rebuild compiler from it)", "same Deno/pnpm/cargo toolchain as provenance.json"],
+    "requires": [
+      "quiet machine (no contention)",
+      "clean tree (or re-freeze + rebuild compiler from it)",
+      "same Deno/pnpm/cargo toolchain as provenance.json"
+    ],
     "gates": "full/prefix median >= 5x AND full-minus-prefix >= 1000ms in EVERY run; deterministic counters identical to frozenPilotCounters; observation + preflight parity"
   }
 }

@@ -233,7 +233,9 @@ function generate(options: Options): string {
   for (let c = 0; c < components; c += 1) {
     const kind = KINDS[c % KINDS.length]!;
     lines.push(
-      `const app${step} = AppAddComponent (${app}, { .name = "${componentName(c)}"; .Type = ${kind.typeExpr}; .seed = ${kind.seedExpr}; })`,
+      `const app${step} = AppAddComponent (${app}, { .name = "${
+        componentName(c)
+      }"; .Type = ${kind.typeExpr}; .seed = ${kind.seedExpr}; })`,
     );
     app = `app${step}`;
     step += 1;
@@ -242,7 +244,9 @@ function generate(options: Options): string {
     const field = componentName(s % components);
     const kind = KINDS[(s % components) % KINDS.length]!;
     lines.push(
-      `const app${step} = AppAddSystem (${app}, { .name = "${systemName(s)}"; .read = "${field}"; .write = "${field}"; .read_type = ${kind.typeExpr}; .write_type = ${kind.typeExpr}; })`,
+      `const app${step} = AppAddSystem (${app}, { .name = "${
+        systemName(s)
+      }"; .read = "${field}"; .write = "${field}"; .read_type = ${kind.typeExpr}; .write_type = ${kind.typeExpr}; })`,
     );
     app = `app${step}`;
     step += 1;
@@ -285,7 +289,9 @@ function generate(options: Options): string {
     if (sink === "schedule-only") {
       // Three schedule compilations over one build: a staged chain, one
       // flat group, and before-pair chains (duplicate + distinct shapes).
-      lines.push(`const graph${suffix}_staged = ${stagedGraphExpr(systems, stages)}`);
+      lines.push(
+        `const graph${suffix}_staged = ${stagedGraphExpr(systems, stages)}`,
+      );
       lines.push(`const graph${suffix}_flat = ${allGroupExpr(systems)}`);
       const pairs: string[] = [];
       for (let s = 0; s + 1 < systems; s += 2) {
@@ -323,7 +329,9 @@ function generate(options: Options): string {
     lines.push(`    .which = "${tag}";`);
     for (let c = 0; c < components; c += 1) {
       const kind = KINDS[c % KINDS.length]!;
-      lines.push(`    .${componentName(c)} = ${kind.rowExpr("index", "offset")};`);
+      lines.push(
+        `    .${componentName(c)} = ${kind.rowExpr("index", "offset")};`,
+      );
     }
     lines.push(`  }`, `))`, ``);
 
@@ -395,7 +403,9 @@ function generate(options: Options): string {
       lines.push(
         `const tick${suffix} = Sched${suffix}.each Sched${suffix}.empty`,
       );
-      runTerms.push(`checksum${suffix} (tick${suffix} (seed${suffix} (count, 0)))`);
+      runTerms.push(
+        `checksum${suffix} (tick${suffix} (seed${suffix} (count, 0)))`,
+      );
     } else if (sink === "schedule-only") {
       runTerms.push(
         `checksum${suffix} (plan${suffix}_pairs.each (plan${suffix}_flat.each (plan${suffix}_staged.each (seed${suffix} (count, 0)))))`,
@@ -404,7 +414,10 @@ function generate(options: Options): string {
       runTerms.push(`run${suffix} count`);
     }
   }
-  if (runTerms.length > 1 && (sink === "identity" || sink === "build-only" || sink === "union-only")) {
+  if (
+    runTerms.length > 1 &&
+    (sink === "identity" || sink === "build-only" || sink === "union-only")
+  ) {
     lines.push(``);
   }
   lines.push(

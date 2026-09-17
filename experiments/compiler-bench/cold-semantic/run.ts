@@ -344,7 +344,8 @@ function summarizeTelemetry(
       ) {
         continue;
       }
-      const subs: { name: string; milliseconds: number; detail?: unknown }[] = [];
+      const subs: { name: string; milliseconds: number; detail?: unknown }[] =
+        [];
       for (const sub of subSpans) {
         const span = asRecord(sub);
         if (
@@ -359,7 +360,11 @@ function summarizeTelemetry(
           detail: span.detail,
         });
       }
-      views.push({ name: phase.name, milliseconds: phase.milliseconds, subSpans: subs });
+      views.push({
+        name: phase.name,
+        milliseconds: phase.milliseconds,
+        subSpans: subs,
+      });
     }
     if (views.length === 0) continue;
     samples += 1;
@@ -393,7 +398,9 @@ function summarizeTelemetry(
     }
     const calls = host !== null && Array.isArray(host.calls) ? host.calls : [];
     const spans = calls.length > 0 ? asRecord(calls[0]!) : null;
-    const spanList = spans !== null && Array.isArray(spans.spans) ? spans.spans : [];
+    const spanList = spans !== null && Array.isArray(spans.spans)
+      ? spans.spans
+      : [];
     for (const span of spanList) {
       const entry = asRecord(span);
       if (
@@ -429,11 +436,17 @@ function summarizeTelemetry(
     structural: medianMap(structuralSeries),
     // Derived per sample: host guest-call minus guest phase walls =
     // response serialization + telemetry attach + Wasm call overhead.
-    guestUnattributedMs: unattributed.length > 0 ? summarize(unattributed) : null,
+    guestUnattributedMs: unattributed.length > 0
+      ? summarize(unattributed)
+      : null,
   };
 }
 
-function pushTo(series: Map<string, number[]>, key: string, value: number): void {
+function pushTo(
+  series: Map<string, number[]>,
+  key: string,
+  value: number,
+): void {
   const list = series.get(key);
   if (list === undefined) {
     series.set(key, [value]);
