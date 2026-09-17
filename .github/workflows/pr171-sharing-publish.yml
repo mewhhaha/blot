@@ -1,0 +1,51 @@
+name: Publish measured residual graph sharing
+
+on:
+  push:
+    branches: ['workbench/pr171-sharing-publish-20260917']
+    paths: ['.delivery/pr171-sharing/**', '.github/workflows/pr171-sharing-publish.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Verify the measured source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          encoded = b''.join(pathlib.Path(f'.delivery/pr171-sharing/part{i}').read_bytes() for i in range(2))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '6581ec08260440d38c5354792b1c62727fddc5b74a1de7448015e677a7359374'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'sharing.patch').write_bytes(patch)
+          PY
+      - name: Apply to the exact draft head and verify the complete measured tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=20cf793b297a3f65e9e57e637bee7882fbdc8f97
+          git fetch --no-tags origin "$base"
+          git checkout --detach "$base"
+          git config user.name 'OpenAI'
+          git config user.email 'noreply@openai.com'
+          git am "$RUNNER_TEMP/sharing.patch"
+          test "$(git rev-parse HEAD^{tree})" = b6e1ce7b70b09ffca4cd1bca093b8b8b791bd55b
+          git diff --check "$base" HEAD
+          git diff --exit-code "$base" HEAD -- .github generated/compiler
+          git merge-base --is-ancestor "$base" HEAD
+      - name: Publish an isolated candidate without force or PR/main writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/workbench/pr171-sharing-candidate-20260917
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+          echo 'No private application contents, diagnostic probes, or delivery files are in this candidate. The PR reference remains unchanged pending verification.' >> "$GITHUB_STEP_SUMMARY"
