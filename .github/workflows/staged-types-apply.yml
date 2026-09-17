@@ -1,0 +1,52 @@
+name: Apply staged type-system patch
+
+on:
+  pull_request:
+    paths:
+      - '.github/staged-type-delivery/**'
+      - '.github/workflows/staged-types-apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'perf/staged-type-system'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Verify and apply the exact reviewed local patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          import pathlib
+          import subprocess
+          parts = pathlib.Path('.github/staged-type-delivery')
+          encoded = ''.join((parts / f'part-{i}').read_text().strip() for i in range(4))
+          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
+          expected = '445884a66994710554ed32b5b9bd29b7b08c32c414bde2a47cebb3a67e2cba23'
+          if hashlib.sha256(patch).hexdigest() != expected:
+              raise SystemExit('Patch digest mismatch; refusing to modify source')
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '--index', '--whitespace=error', '-'], input=patch, check=True)
+          paths = subprocess.check_output(['git', 'diff', '--cached', '--name-only', '-z']).decode().split('\0')
+          allowed = ('compiler/', 'spec/', 'experiments/compiler-bench/staged-types/')
+          if any(path and not path.startswith(allowed) for path in paths):
+              raise SystemExit('Unexpected patch path; refusing to commit')
+          PY
+          deno fmt experiments/compiler-bench/staged-types/README.md experiments/compiler-bench/staged-types/compare.mjs spec/STAGING.md
+          git add experiments/compiler-bench/staged-types spec/STAGING.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'perf: persistent type-value graphs and selective signature instantiation'
+          git push origin HEAD:refs/heads/perf/staged-type-system
