@@ -1,0 +1,81 @@
+name: Validate evaluator demand candidate
+
+on:
+  push:
+    branches: [workbench/evaluator-demand-delivery-20260917]
+    paths:
+      - '.github/workflows/evaluator-demand-candidate.yml'
+      - 'experiments/compiler-bench/staged-types/evaluator-demand.patch.gz.b64'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      CARGO_PROFILE_TEST_OPT_LEVEL: 1
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Decode and verify locally tested patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode experiments/compiler-bench/staged-types/evaluator-demand.patch.gz.b64 | gzip -d > "$RUNNER_TEMP/evaluator-demand.patch"
+          echo "f3f61fa27a301cd342129cd5e70fe1dbfb27240afb01d7b0d0c15022d843f349  $RUNNER_TEMP/evaluator-demand.patch" | sha256sum --check
+      - uses: actions/checkout@v6
+        with:
+          ref: 46f5067c46a8a74c10a32379db3e3d22ea75737a
+      - name: Apply only the tested source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 46f5067c46a8a74c10a32379db3e3d22ea75737a
+          git apply --check "$RUNNER_TEMP/evaluator-demand.patch"
+          git apply "$RUNNER_TEMP/evaluator-demand.patch"
+          git diff --check
+          test "$(git hash-object compiler/src/eval.rs)" = 2661cff40caee89b6b1abb4685b10d9b19e0d1bd
+          test "$(git hash-object compiler/src/eval_type_demand_tests.rs)" = 833fb767164636222e13f4aca6e2134021c38cd0
+          test "$(git hash-object spec/STAGING.md)" = 79c08b8b1f9189ee10592dcea7aee3ad8743b4f1
+          test "$(git hash-object experiments/compiler-bench/staged-types/compare.mjs)" = b4cdaa16e760b6711e5f96ff0dc99b796f220217
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Formatting and benchmark driver syntax
+        run: |
+          cargo fmt --manifest-path compiler/Cargo.toml -- --check
+          node --check experiments/compiler-bench/staged-types/compare.mjs
+      - name: Native compiler tests
+        run: cargo test --locked --manifest-path compiler/Cargo.toml -- --nocapture
+      - name: Wasm Clippy
+        run: cargo clippy --locked --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+      - name: Release Wasm build
+        run: cargo build --locked --release --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown
+      - name: Publish isolated validated candidate, not main or the PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Blot compiler workbench'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add compiler/src/eval.rs compiler/src/eval_type_demand_tests.rs spec/STAGING.md experiments/compiler-bench/staged-types/compare.mjs
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
+          git commit -m 'perf(eval): demand checked type evidence only at consuming boundaries'
+          test "$(git rev-parse HEAD^)" = 46f5067c46a8a74c10a32379db3e3d22ea75737a
+          git push origin HEAD:refs/heads/perf/evaluator-demand-validated-20260917
+          mkdir -p "$RUNNER_TEMP/evaluator-demand-artifact"
+          git rev-parse HEAD > "$RUNNER_TEMP/evaluator-demand-artifact/commit.txt"
+          git archive HEAD | gzip > "$RUNNER_TEMP/evaluator-demand-artifact/source.tar.gz"
+          cp compiler/target/wasm32-unknown-unknown/release/blot_compiler.wasm "$RUNNER_TEMP/evaluator-demand-artifact/compiler.wasm"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: evaluator-demand-validated
+          path: ${{ runner.temp }}/evaluator-demand-artifact/
+          retention-days: 7
