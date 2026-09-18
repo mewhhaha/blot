@@ -46,7 +46,7 @@
     {
       "id": "unresolved-expression-hole",
       "status": "rejected",
-      "source": "open import \"blot:prelude\"\nlet result :: Int\nlet result = _\nreturn result\n",
+      "source": "open import \"blot:prelude\"\nlet result: Int\nlet result = _\nreturn result\n",
       "code": "BLOT_EXPRESSION_HOLE"
     },
     {

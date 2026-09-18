@@ -3,20 +3,20 @@ open import "blot:prelude"
 const Entry = (Int, Int)
 const Queue = { .entries = [Entry]; .length = Int; }
 
-const empty :: Unit -> Queue
+const empty: Unit -> Queue
 const empty = fn () => do:
-  let entries :: [(Int, Int)]
+  let entries: [(Int, Int)]
   let entries = []
   return { .entries = entries; .length = 0; }
 
-const comes_before :: ((Int, Int), (Int, Int)) -> Bool
+const comes_before: ((Int, Int), (Int, Int)) -> Bool
 const comes_before = fn (left, right) => do:
   if left.0 < right.0:
     return True
 
   return left.0 == right.0 && left.1 < right.1
 
-const rec bubble_up :: ([(Int, Int)], Int) -> [(Int, Int)]
+const rec bubble_up: ([(Int, Int)], Int) -> [(Int, Int)]
 const rec bubble_up = fn (entries, index) => do:
   if index <= 0:
     return entries
@@ -29,7 +29,7 @@ const rec bubble_up = fn (entries, index) => do:
     else:
       return entries
 
-const push :: (Queue, Entry) -> Queue
+const push: (Queue, Entry) -> Queue
 const push = fn (?queue, entry) => do:
   let { .entries; .length; } = queue
   if length < Array.length (&entries):
@@ -45,15 +45,15 @@ const push = fn (?queue, entry) => do:
       .length = length + 1;
     }
 
-const is_empty :: Queue -> Bool
+const is_empty: Queue -> Bool
 const is_empty = fn &queue => queue.length == 0
 
-const minimum :: Queue -> Entry
+const minimum: Queue -> Entry
 const minimum = fn &queue => do:
   let (priority, vertex) = Array.expect_get ((&queue.entries), 0)
   return (priority, vertex)
 
-const rec bubble_down :: ([(Int, Int)], Int, Int) -> [(Int, Int)]
+const rec bubble_down: ([(Int, Int)], Int, Int) -> [(Int, Int)]
 const rec bubble_down = fn (entries, index, length) => do:
   let left = index * 2 + 1
   if left >= length:
@@ -81,7 +81,7 @@ const rec bubble_down = fn (entries, index, length) => do:
     else:
       return entries
 
-const prepare_pop :: ([(Int, Int)], Int) -> [(Int, Int)]
+const prepare_pop: ([(Int, Int)], Int) -> [(Int, Int)]
 const prepare_pop = fn (?entries, &length) => do:
   if length <= 1:
     return entries
@@ -91,7 +91,7 @@ const prepare_pop = fn (?entries, &length) => do:
     let replacement = (priority + 0, vertex + 0)
     return Array.expect_set (entries, 0, replacement)
 
-const pop :: Queue -> Queue
+const pop: Queue -> Queue
 const pop = fn ?queue => do:
   let { .entries; .length; } = queue
   let entries = prepare_pop (?entries, (&length))

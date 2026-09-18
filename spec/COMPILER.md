@@ -155,6 +155,20 @@ describe nested compiler artifacts. They change independently from the public
 ABI, compiler-host ABI, certificate, and Runtime-HIR versions unless a
 representation change crosses one of those separate boundaries.
 
+## Source annotation migration
+
+The surface type-annotation delimiter is `:`. Changing this delimiter updates
+Baba's grammar, generated lexer/parser plan, Rust frontend tables, and source
+fixtures together. It changes no type/effect/ownership judgment or public ABI.
+The original source bytes and generated parser identity remain revision inputs;
+old checked facts and source snapshots cannot be reused under the new grammar
+without their ordinary identity validation. Regenerate the distributed prelude
+snapshot from the migrated prelude rather than accepting an old source image.
+The compact AST rule/field schema and compiler-host ABI are unchanged.
+
+The [staged compiler proposal](../docs/staged-compiler-proposal.md) is an
+experimental design direction only. It replaces no production pass below.
+
 ## 3. Pass graph
 
 The production pass graph is:

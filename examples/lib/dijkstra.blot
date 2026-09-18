@@ -7,9 +7,9 @@ const PriorityQueue = import "./int_min_priority_queue.blot"
 const Distances = DistanceTable.Distances
 const Queue = PriorityQueue.Queue
 
-const shortest_paths :: ([[(Int, Int)]], Int) -> Distances
+const shortest_paths: ([[(Int, Int)]], Int) -> Distances
 const shortest_paths = fn (&graph, source) => do:
-  let rec search :: (Distances, Queue) -> Distances
+  let rec search: (Distances, Queue) -> Distances
   let rec search = fn (distances, queue) => do:
     if PriorityQueue.is_empty (&queue):
       return distances
@@ -28,7 +28,7 @@ const shortest_paths = fn (&graph, source) => do:
 
       #True => do:
         let edges = Graph.outgoing ((&graph), (&vertex))
-        let rec relax :: (Int, Distances, Queue) -> (Distances, Queue)
+        let rec relax: (Int, Distances, Queue) -> (Distances, Queue)
         let rec relax = fn (index, distances, queue) => do:
           if index >= Array.length (&edges):
             return (distances, queue)

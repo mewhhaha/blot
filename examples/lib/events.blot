@@ -2,10 +2,10 @@ open import "blot:prelude"
 const Spark = import "blot:spark"
 const Events = import "blot:events"
 
-let run ::
+let run:
   { .executor = Spark.Executor; .changes = Events.Source Int; } -> Events.Policy -> Int -> Int ~ { Spark.Effect, Events.Effect }
 let run = fn io => fn policy => fn count => do:
-  let body :: Spark.Scope -> Int ~ { Spark.Effect, Events.Effect }
+  let body: Spark.Scope -> Int ~ { Spark.Effect, Events.Effect }
   let body = fn scope => do:
     use subscription <- Events.subscribe scope io.changes policy
     let total = 0

@@ -25,7 +25,7 @@ test("development activation drains async calls and runs cleanup against retaine
   );
   await writeFile(
     formula,
-    'open import "blot:prelude"\nconst apply :: Int -> Int = fn value => value * 2\nreturn { .apply = apply; }\n',
+    'open import "blot:prelude"\nconst apply: Int -> Int = fn value => value * 2\nreturn { .apply = apply; }\n',
   );
   await writeFile(
     join(directory, "main.blot"),
@@ -34,11 +34,11 @@ const Spark = import "blot:spark"
 const formula = import "./formula.blot"
 const Gate = @effect.host { .wait = Effect.suspends (Int -> Int); }
 const Cleanup = @effect.host { .record = Int -> Unit; }
-let run :: Spark.Executor -> Int -> Int ~ { Spark.Effect, Gate, Cleanup }
+let run: Spark.Executor -> Int -> Int ~ { Spark.Effect, Gate, Cleanup }
 let run = fn executor => fn number => do:
-  let body :: Spark.Scope -> Int ~ { Spark.Effect, Gate, Cleanup }
+  let body: Spark.Scope -> Int ~ { Spark.Effect, Gate, Cleanup }
   let body = fn scope => do:
-    let ?cleanup :: Unit -> Unit ~ { Cleanup } = fn () => Cleanup.record (formula.apply number)
+    let ?cleanup: Unit -> Unit ~ { Cleanup } = fn () => Cleanup.record (formula.apply number)
     use () <- Spark.on_exit scope (?cleanup)
     use value <- Gate.wait number
     return formula.apply value
@@ -100,7 +100,7 @@ return { .run = run; }
     const signal = await started.promise;
     await writeFile(
       formula,
-      'open import "blot:prelude"\nconst apply :: Int -> Int = fn value => value * 3\nreturn { .apply = apply; }\n',
+      'open import "blot:prelude"\nconst apply: Int -> Int = fn value => value * 3\nreturn { .apply = apply; }\n',
     );
     await project.markChanged(formula);
     const build = await project.prepareBuild();
@@ -147,17 +147,17 @@ test("development worker jobs reuse compiled units and select the reloaded provi
   );
   await writeFile(
     formula,
-    'open import "blot:prelude"\nconst apply :: Int -> Int = fn value => value * 2\nreturn { .apply = apply; }\n',
+    'open import "blot:prelude"\nconst apply: Int -> Int = fn value => value * 2\nreturn { .apply = apply; }\n',
   );
   await writeFile(
     join(directory, "main.blot"),
     `open import "blot:prelude"
 const Spark = import "blot:spark"
 const formula = import "./formula.blot"
-let run :: Spark.Executor -> Int -> Int ~ { Spark.Effect }
+let run: Spark.Executor -> Int -> Int ~ { Spark.Effect }
 let run = fn executor => fn number => do:
-  let body :: Spark.Scope -> Int ~ { Spark.Effect } = fn scope => do:
-    let ?work :: Unit -> Int = fn () => formula.apply number
+  let body: Spark.Scope -> Int ~ { Spark.Effect } = fn scope => do:
+    let ?work: Unit -> Int = fn () => formula.apply number
     use job <- Spark.parallel scope (?work)
     return Spark.join job
   return Spark.scope executor body
@@ -181,7 +181,7 @@ return { .run = run; }
     for (let multiplier = 3; multiplier <= 20; multiplier += 1) {
       await writeFile(
         formula,
-        `open import "blot:prelude"\nconst apply :: Int -> Int = fn value => value * ${multiplier}\nreturn { .apply = apply; }\n`,
+        `open import "blot:prelude"\nconst apply: Int -> Int = fn value => value * ${multiplier}\nreturn { .apply = apply; }\n`,
       );
       await project.markChanged(formula);
       await project.activate(runtime);
@@ -198,7 +198,7 @@ return { .run = run; }
     await writeFile(
       formula,
       `open import "blot:prelude"
-const apply :: Int -> Int = fn count => do:
+const apply: Int -> Int = fn count => do:
   let total = 0
   for index in Iter.range (0, count):
     total := total + index
@@ -252,7 +252,7 @@ test("development links copy wide parameter blocks between separate memories", a
     join(directory, "formula.blot"),
     `open import "blot:prelude"
 const Payload = { ${fields} .label = Text; .active = Bool; .values = [Int]; }
-const echo :: Payload -> Payload
+const echo: Payload -> Payload
 const echo = fn payload => { ...payload; .label = payload.label <> "!"; }
 return { .Payload; .echo; }
 `,
@@ -260,7 +260,7 @@ return { .Payload; .echo; }
   await writeFile(
     join(directory, "main.blot"),
     `const formula = import "./formula.blot"
-const run :: formula.Payload -> formula.Payload
+const run: formula.Payload -> formula.Payload
 const run = fn payload => formula.echo payload
 return { .run; }
 `,

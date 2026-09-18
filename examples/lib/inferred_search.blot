@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-const find ::
+const find:
   @forall (fn e => @forall (fn T => (([
     T
   ], (T -> Bool) ~ [e]) -> Option T) ~ [e]))
@@ -17,8 +17,8 @@ const find = fn (values, keep) => do:
 
   return visit 0
 
-const run :: [Int] -> Option Int
+const run: [Int] -> Option Int
 const run = fn values => find (values, fn value => value > 2)
-const text :: [Text] -> Option Text
+const text: [Text] -> Option Text
 const text = fn values => find (values, fn value => Text.length value > 2)
 return { .run; .text; }

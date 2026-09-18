@@ -49,7 +49,7 @@ const fixtures = [
   {
     "name": "identity-case",
     "before":
-      "let keep :: Option Int -> Option Int\nlet keep = fn option => case option of\n  #None => #None\n  #Some value => #Some value\nreturn (keep (Some 2), keep None)\n",
+      "let keep: Option Int -> Option Int\nlet keep = fn option => case option of\n  #None => #None\n  #Some value => #Some value\nreturn (keep (Some 2), keep None)\n",
     "code": "BLOT_LINT_IDENTITY_VARIANT_CASE",
   },
   {
@@ -78,13 +78,13 @@ const fixtures = [
   {
     "name": "terminal-continue",
     "before":
-      "let total :: Int\nlet total = 0\nfor value in Iter.range (0, 5):\n  total := total + value\n  continue\nreturn total\n",
+      "let total: Int\nlet total = 0\nfor value in Iter.range (0, 5):\n  total := total + value\n  continue\nreturn total\n",
     "code": "BLOT_LINT_TERMINAL_CONTINUE",
   },
   {
     "name": "refutable-loop-pattern",
     "before":
-      "let total :: Int\nlet total = 0\nfor candidate in Iter.items [Some 2, None, Some 5]:\n  if let #Some value = candidate else:\n    continue\n  total := total + value\nreturn total\n",
+      "let total: Int\nlet total = 0\nfor candidate in Iter.items [Some 2, None, Some 5]:\n  if let #Some value = candidate else:\n    continue\n  total := total + value\nreturn total\n",
     "code": "BLOT_LINT_FILTERING_LOOP_PATTERN",
   },
   {
@@ -102,19 +102,19 @@ const fixtures = [
   {
     "name": "variant-map",
     "before":
-      "let increment = fn value => value + 1\nlet change :: Option Int -> Option Int\nlet change = fn option => case option of\n  #None => #None\n  #Some value => #Some (increment value)\nreturn (change (Some 1), change None)\n",
+      "let increment = fn value => value + 1\nlet change: Option Int -> Option Int\nlet change = fn option => case option of\n  #None => #None\n  #Some value => #Some (increment value)\nreturn (change (Some 1), change None)\n",
     "code": "BLOT_LINT_VARIANT_MAP",
   },
   {
     "name": "variant-and-then",
     "before":
-      "let validate = fn value => case value > 0 of\n  #True => Some value\n  #False => None\nlet change :: Option Int -> Option Int\nlet change = fn option => case option of\n  #None => #None\n  #Some value => validate value\nreturn (change (Some 1), change (Some 0), change None)\n",
+      "let validate = fn value => case value > 0 of\n  #True => Some value\n  #False => None\nlet change: Option Int -> Option Int\nlet change = fn option => case option of\n  #None => #None\n  #Some value => validate value\nreturn (change (Some 1), change (Some 0), change None)\n",
     "code": "BLOT_LINT_VARIANT_CHAINING",
   },
   {
     "name": "variant-fallback",
     "before":
-      "let fallback = fn () => 42\nlet unwrap :: Option Int -> Int\nlet unwrap = fn option => case option of\n  #None => fallback ()\n  #Some value => value\nreturn (unwrap (Some 7), unwrap None)\n",
+      "let fallback = fn () => 42\nlet unwrap: Option Int -> Int\nlet unwrap = fn option => case option of\n  #None => fallback ()\n  #Some value => value\nreturn (unwrap (Some 7), unwrap None)\n",
     "code": "BLOT_LINT_VARIANT_FALLBACK",
   },
   {
@@ -126,26 +126,26 @@ const fixtures = [
   {
     "name": "array-find",
     "before":
-      "\nlet find :: [Int] -> Option Int\nlet find = fn values => do:\n  let found = None\n  for value in Iter.items values:\n    if value > 2:\n      found := Some value\n      break\n  return found\nreturn (find [], find [1, 2], find [1, 3, 4])\n",
+      "\nlet find: [Int] -> Option Int\nlet find = fn values => do:\n  let found = None\n  for value in Iter.items values:\n    if value > 2:\n      found := Some value\n      break\n  return found\nreturn (find [], find [1, 2], find [1, 3, 4])\n",
     "code": "BLOT_LINT_ARRAY_FIND",
   },
   {
     "name": "result-map",
     "code": "BLOT_LINT_VARIANT_MAP",
     "before":
-      'let increment = fn value => value + 1\nlet change :: Result (Int, Text) -> Result (Int, Text)\nlet change = fn result => case result of\n  #Error error => #Error error\n  #Ok value => #Ok (increment value)\nreturn (change (#Ok 1), change (#Error "no"))\n',
+      'let increment = fn value => value + 1\nlet change: Result (Int, Text) -> Result (Int, Text)\nlet change = fn result => case result of\n  #Error error => #Error error\n  #Ok value => #Ok (increment value)\nreturn (change (#Ok 1), change (#Error "no"))\n',
   },
   {
     "name": "result-map-error",
     "code": "BLOT_LINT_VARIANT_MAP",
     "before":
-      'let label = fn text => Text.append text "!"\nlet change :: Result (Int, Text) -> Result (Int, Text)\nlet change = fn result => case result of\n  #Ok value => #Ok value\n  #Error error => #Error (label error)\nreturn (change (#Ok 1), change (#Error "no"))\n',
+      'let label = fn text => Text.append text "!"\nlet change: Result (Int, Text) -> Result (Int, Text)\nlet change = fn result => case result of\n  #Ok value => #Ok value\n  #Error error => #Error (label error)\nreturn (change (#Ok 1), change (#Error "no"))\n',
   },
   {
     "name": "result-fallback",
     "code": "BLOT_LINT_VARIANT_FALLBACK",
     "before":
-      'let recover = fn text => Text.length text\nlet unwrap :: Result (Int, Text) -> Int\nlet unwrap = fn result => case result of\n  #Ok value => value\n  #Error error => recover error\nreturn (unwrap (#Ok 7), unwrap (#Error "no"))\n',
+      'let recover = fn text => Text.length text\nlet unwrap: Result (Int, Text) -> Int\nlet unwrap = fn result => case result of\n  #Ok value => value\n  #Error error => recover error\nreturn (unwrap (#Ok 7), unwrap (#Error "no"))\n',
   },
   {
     "name": "effectful-map",
@@ -157,7 +157,7 @@ const fixtures = [
     "name": "undemanded-fallback",
     "code": "BLOT_LINT_VARIANT_FALLBACK",
     "before":
-      "let fallback = fn () => @int.div 1 0\nlet unwrap :: Option Int -> Int\nlet unwrap = fn option => case option of\n  #None => fallback ()\n  #Some value => value\nreturn unwrap (Some 7)\n",
+      "let fallback = fn () => @int.div 1 0\nlet unwrap: Option Int -> Int\nlet unwrap = fn option => case option of\n  #None => fallback ()\n  #Some value => value\nreturn unwrap (Some 7)\n",
   },
   {
     "name": "unused-pure-binding",

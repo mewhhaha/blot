@@ -2,19 +2,19 @@ open import "blot:prelude"
 const Particles = import "../simd/particles.blot"
 const Transforms = import "../simd/transforms.blot"
 
-const particle_sum :: [Particles.Entity] -> F32
+const particle_sum: [Particles.Entity] -> F32
 const particle_sum = fn rows => fold (rows, F32.of_int 0, fn (total, row) => F32.add total (F32.add row.Position (F32.mul 7 row.Velocity)))
-const transform_sum :: [Transforms.Scalar.Entity] -> F32
+const transform_sum: [Transforms.Scalar.Entity] -> F32
 const transform_sum = fn rows => fold (rows, F32.of_int 0, fn (total, row) => F32.add total (F32.add (F32.add row.Projected.x row.Projected.y) (F32.add row.Projected.z (F32.of_int row.Age))))
 
-const scalar_particles :: (Int, Int) -> F32
+const scalar_particles: (Int, Int) -> F32
 const scalar_particles = fn (count, frames) => particle_sum (Particles.scalar (Particles.seed count, frames))
-const simd_particles :: (Int, Int) -> F32
+const simd_particles: (Int, Int) -> F32
 const simd_particles = fn (count, frames) => particle_sum (Particles.run (Particles.seed count, frames))
-const setup_particles :: (Int, Int) -> F32
+const setup_particles: (Int, Int) -> F32
 const setup_particles = fn (count, _) => particle_sum (Particles.seed count)
 
-const scalar_transforms :: (Int, Int) -> F32
+const scalar_transforms: (Int, Int) -> F32
 const scalar_transforms = fn (count, frames) => do:
   let rows = Transforms.seed count
   for Iter.range (0, frames):
@@ -22,7 +22,7 @@ const scalar_transforms = fn (count, frames) => do:
 
   return transform_sum rows
 
-const simd_transforms :: (Int, Int) -> F32
+const simd_transforms: (Int, Int) -> F32
 const simd_transforms = fn (count, frames) => do:
   let rows = map (Transforms.seed count, Transforms.pack)
   for Iter.range (0, frames):
@@ -30,7 +30,7 @@ const simd_transforms = fn (count, frames) => do:
 
   return transform_sum (map (rows, Transforms.unpack))
 
-const setup_transforms :: (Int, Int) -> F32
+const setup_transforms: (Int, Int) -> F32
 const setup_transforms = fn (count, _) => transform_sum (Transforms.seed count)
 
 return { .scalar_particles; .simd_particles; .setup_particles; .scalar_transforms; .simd_transforms; .setup_transforms; }

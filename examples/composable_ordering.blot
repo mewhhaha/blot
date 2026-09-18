@@ -18,27 +18,27 @@ const id = O.on (O.integer, fn ticket => ticket.id)
 // Pain point: Order is contravariant in its subject through `.compare`; this
 // public signature keeps a mixed-subject composition from collapsing to an
 // unusably open comparator before a later call constrains it.
-const queue_order :: O.Order Ticket
+const queue_order: O.Order Ticket
 const queue_order = O.then (priority, O.then (team, id))
 
-const docs :: Ticket
+const docs: Ticket
 const docs = { .priority = 1; .team = "api"; .id = 8; .title = "docs"; }
-const blank_page :: Ticket
+const blank_page: Ticket
 const blank_page =
   { .priority = 3; .team = "web"; .id = 5; .title = "blank page"; }
-const timeouts :: Ticket
+const timeouts: Ticket
 const timeouts = { .priority = 3; .team = "api"; .id = 7; .title = "timeouts"; }
-const latency :: Ticket
+const latency: Ticket
 const latency = { .priority = 3; .team = "api"; .id = 2; .title = "latency"; }
-const latency_followup :: Ticket
+const latency_followup: Ticket
 const latency_followup =
   { .priority = 3; .team = "api"; .id = 2; .title = "latency follow-up"; }
-const retry :: Ticket
+const retry: Ticket
 const retry = { .priority = 2; .team = "worker"; .id = 1; .title = "retry"; }
-const tickets :: [Ticket]
+const tickets: [Ticket]
 const tickets = [docs, blank_page, timeouts, latency, latency_followup, retry]
 
-const empty :: [Ticket]
+const empty: [Ticket]
 const empty = []
 
 return {

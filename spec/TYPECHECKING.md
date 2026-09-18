@@ -61,7 +61,7 @@ an immutable closure-body fact available after loading a module capsule;
 silently accepting a still-open predicate at residualization is an invariant
 failure.
 
-For `k r? x :: R` followed by `k r? x = e`, elaboration evaluates `R` at compile
+For `k r? x: R` followed by `k r? x = e`, elaboration evaluates `R` at compile
 time and requires `R` to bridge to `canonical(A)`, then checks `e` against `A`.
 Any difference in `k`, the presence of `rec`, or `x` is a source diagnostic
 before either declaration contributes a binding.
@@ -418,7 +418,7 @@ equi-recursive source type. Recursive type values remain outside this algebra.
 ### Lemma 6: persistent environments preserve lexical lookup
 
 Let an environment be an ordered chain of finite maps
-`Gamma = Delta_n :: ... :: Delta_0`, with lookup choosing the first map that
+`Gamma = Delta_n: ...: Delta_0`, with lookup choosing the first map that
 contains a name. Replacing a copied aggregate map with an immutable parent and a
 copy-on-write child overlay preserves every lookup provided a write enters only
 the current overlay.
@@ -465,8 +465,8 @@ generative effect atom. Assume every target in `mu` is absent from the preceding
 lexical environment. Define lookup through the frame by:
 
 ```txt
-lookup(open(F, mu) :: Gamma, x) = F[mu(x)]  when x in dom(mu)
-lookup(open(F, mu) :: Gamma, x) = lookup(Gamma, x) otherwise
+lookup(open(F, mu): Gamma, x) = F[mu(x)]  when x in dom(mu)
+lookup(open(F, mu): Gamma, x) = lookup(Gamma, x) otherwise
 ```
 
 This equals lookup after eagerly inserting every `x -> F[mu(x)]` into a copied
@@ -959,7 +959,7 @@ known field-name vector `L = [l_0, ..., l_(n-1)]`, partial evaluation obeys
 
 ```txt
 PE(fold([], s, k)) = PE(s)
-PE(fold(l :: ls, s, k)) = PE(fold(ls, k(s, l), k))
+PE(fold(l: ls, s, k)) = PE(fold(ls, k(s, l), k))
 PE(shape.get(~r, l)) = ~(project_l r)       when l is static
 PE({ ...~r; .[l] = ~v }) = ~(update_l r v)  when l is static
 ```

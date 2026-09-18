@@ -4,6 +4,6 @@
 
 open import "blot:prelude"
 
-let double :: Int -> Int
+let double: Int -> Int
 let double = fn value => @text.concat value "!"
 return double

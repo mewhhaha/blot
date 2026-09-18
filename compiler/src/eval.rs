@@ -6925,7 +6925,7 @@ mod tests {
     fn shared_text_large_uncached_arguments_still_evaluate() {
         let text = "β🐱\u{feff}".repeat(COMPTIME_ARGUMENT_BYTE_LIMIT);
         let program = format!(
-            "let count :: @type.text -> @type.int\n\
+            "let count: @type.text -> @type.int\n\
              let count = fn text => @text.len text\n\
              let text = \"{text}\"\n\
              return (count text, count text)\n"

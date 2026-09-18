@@ -5,19 +5,19 @@ open import "blot:prelude"
 // which capabilities a composed computation actually requires.
 const Reader = fn (environment, value) => environment -> value
 
-const pure :: @forall (fn Environment => @forall (fn Value => Value -> Reader (Environment, Value)))
+const pure: @forall (fn Environment => @forall (fn Value => Value -> Reader (Environment, Value)))
 const pure = fn value => fn _ => value
 
-const map :: @forall (fn Environment => @forall (fn Input => @forall (fn Output => ((Input -> Output), Reader (Environment, Input)) -> Reader (Environment, Output))))
+const map: @forall (fn Environment => @forall (fn Input => @forall (fn Output => ((Input -> Output), Reader (Environment, Input)) -> Reader (Environment, Output))))
 const map = fn (transform, computation) => fn environment => transform (computation environment)
 
-const zip_with :: @forall (fn Environment => @forall (fn Left => @forall (fn Right => @forall (fn Output => (((Left, Right) -> Output), Reader (Environment, Left), Reader (Environment, Right)) -> Reader (Environment, Output)))))
+const zip_with: @forall (fn Environment => @forall (fn Left => @forall (fn Right => @forall (fn Output => (((Left, Right) -> Output), Reader (Environment, Left), Reader (Environment, Right)) -> Reader (Environment, Output)))))
 const zip_with = fn (combine, left, right) => fn environment => combine (left environment, right environment)
 
-const local :: @forall (fn Outer => @forall (fn Inner => @forall (fn Value => ((Outer -> Inner), Reader (Inner, Value)) -> Reader (Outer, Value))))
+const local: @forall (fn Outer => @forall (fn Inner => @forall (fn Value => ((Outer -> Inner), Reader (Inner, Value)) -> Reader (Outer, Value))))
 const local = fn (project, computation) => fn outer => computation (project outer)
 
-const provide :: @forall (fn Environment => @forall (fn Value => (Environment, Reader (Environment, Value)) -> Value))
+const provide: @forall (fn Environment => @forall (fn Value => (Environment, Reader (Environment, Value)) -> Value))
 const provide = fn (environment, computation) => computation environment
 
 return {

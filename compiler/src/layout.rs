@@ -127,11 +127,12 @@ pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>>
     let mut continuation_hints = Vec::new();
     update_delimiters(source, &mut delimiters, previous);
 
-    for token in tokens.iter().skip(1) {
+    for (token_index, token) in tokens.iter().enumerate().skip(1) {
         let gap = &source[previous.end..token.start];
         let newline = last_newline_end(gap);
         let separator = newline.is_some() && record_separator(source, &delimiters, previous, token);
-        let suite_introducer = opens_suite(source, previous);
+        let suite_introducer =
+            opens_suite(source, previous) && !is_annotation_colon(source, &tokens, token_index - 1);
         let frame = *frames.last().expect("layout always has a root frame");
         let inside_active_suite = frames.len() > 1 && delimiters.brackets == frame.brackets;
         let layout_active = inside_active_suite || delimiters.brackets == 0 || suite_introducer;
@@ -320,6 +321,39 @@ fn source_indent_width(source: &[u16], offset: usize) -> usize {
         .position(|unit| *unit != b' ' as u16 && *unit != b'\t' as u16)
         .map_or(offset, |index| start + index);
     indentation_width(&source[start..end]).expect("line indentation is whitespace")
+}
+
+// Match the bounded annotation-header context used by source-only layout.
+// This prevents a multiline type from becoming a statement suite; Baba remains
+// the syntax authority and the colon keeps one lexical terminal identity.
+fn is_annotation_colon(source: &[u16], tokens: &[&Token], index: usize) -> bool {
+    if index < 2 || !is_text(source, tokens[index], ":") {
+        return false;
+    }
+    if !matches!(kind(tokens[index - 1]), Some("IDENT" | "TYPE_IDENT")) {
+        return false;
+    }
+    let mut before = index - 2;
+    if ["!", "?", "&", "~"]
+        .iter()
+        .any(|text| is_text(source, tokens[before], text))
+    {
+        let Some(prior) = before.checked_sub(1) else {
+            return false;
+        };
+        before = prior;
+    }
+    if ["let", "const", "use", "(", ","]
+        .iter()
+        .any(|text| is_text(source, tokens[before], text))
+    {
+        return true;
+    }
+    is_text(source, tokens[before], "rec")
+        && before > 0
+        && ["let", "const"]
+            .iter()
+            .any(|text| is_text(source, tokens[before - 1], text))
 }
 
 fn opens_suite(source: &[u16], token: &Token) -> bool {

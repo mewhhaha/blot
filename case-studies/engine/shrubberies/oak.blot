@@ -21,7 +21,7 @@ let deep_leaf_shadow = C.rgb (37, 92, 48)
 let summer_leaf = C.rgb (55, 129, 62)
 let sunlit_leaf = C.rgb (92, 164, 71)
 
-let oak :: OakRecipe
+let oak: OakRecipe
 let oak =
   {
     .trunk_height = 11;

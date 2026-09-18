@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Type annotations now use `:` instead of `::`, including signature headers,
+  inline `let`/`const`/`use` annotations, and typed function parameters. Migrate
+  existing source; `::` is not retained as a typing alias. Suite colons, `:=`,
+  and `->` result annotations are unchanged. The grammar, generated frontend,
+  prelude snapshot, formatter, editor actions, examples, and tests move
+  together.
+- Record the explicitly staged, inference-rich compiler architecture as a
+  proposal with an opt-in prototype and cold/edited validation milestones.
+
 ## Unreleased — direct calls for pure callees
 
 ### Symptom

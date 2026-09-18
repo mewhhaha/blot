@@ -10,7 +10,7 @@ let resume = fn ?once => once
 let borrow = fn &shared => shared
 
 let scan = fn options => do:
-  let total :: Int
+  let total: Int
   let total = 0
   for case #Some value in Iter.items options:
     if value < 0:

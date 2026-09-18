@@ -17,7 +17,7 @@ try {
 const make = fn name => fn value => @shape.get value name
 const left = make "left"
 const right = make "right"
-let read :: Int -> Int
+let read: Int -> Int
 let read = fn number => do:
   let pair = { .left = number; .right = 7; }
   return left pair + right pair

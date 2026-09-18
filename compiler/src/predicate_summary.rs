@@ -400,7 +400,7 @@ mod tests {
             )
             .unwrap();
         let source = format!(
-            "open import \"blot:prelude\"\n{definition}\nlet run :: Int -> Int\nlet run = fn index => do:\n  let values = [10, 20]\n  if {condition}:\n{consequence}\n  return 0\nreturn run\n"
+            "open import \"blot:prelude\"\n{definition}\nlet run: Int -> Int\nlet run = fn index => do:\n  let values = [10, 20]\n  if {condition}:\n{consequence}\n  return 0\nreturn run\n"
         );
         session
             .add_source("main.blot".to_owned(), source.encode_utf16().collect())

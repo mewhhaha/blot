@@ -5,9 +5,9 @@ const Format = import "./float_format.blot"
 
 const PartialOrdering = #Equal | #Greater | #Less | #Unordered
 
-const f64_partial_cmp :: F64 -> F64 -> PartialOrdering
+const f64_partial_cmp: F64 -> F64 -> PartialOrdering
 const f64_partial_cmp = fn left => fn right => do:
-  let code :: 0 | 1 | 2 | 3
+  let code: 0 | 1 | 2 | 3
   let code = case F64.is_nan left of
     #True => 3
     #False => case F64.is_nan right of
@@ -24,9 +24,9 @@ const f64_partial_cmp = fn left => fn right => do:
     2 => #Less
     _ => #Unordered
 
-const f32_partial_cmp :: F32 -> F32 -> PartialOrdering
+const f32_partial_cmp: F32 -> F32 -> PartialOrdering
 const f32_partial_cmp = fn left => fn right => do:
-  let code :: 0 | 1 | 2 | 3
+  let code: 0 | 1 | 2 | 3
   let code = case F32.is_nan left of
     #True => 3
     #False => case F32.is_nan right of

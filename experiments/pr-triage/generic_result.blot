@@ -1,11 +1,11 @@
 open import "blot:prelude"
 const Parsed = fn T => { .value = T; .rest = Text; }
 const Parser = fn T => Text -> Result (Parsed T, Text)
-const map :: @forall (fn A => @forall (fn B => (Parser A, (A -> B)) -> Parser B))
+const map: @forall (fn A => @forall (fn B => (Parser A, (A -> B)) -> Parser B))
 const map = fn (parse, transform) => fn text => case parse text of
   #Error error => #Error error
   #Ok parsed => #Ok { .value = transform parsed.value; .rest = parsed.rest; }
-const literal :: Parser Text
+const literal: Parser Text
 const literal = fn text => #Ok { .value = text; .rest = ""; }
 const mapped = map (literal, fn _ => #Health)
 return mapped "/health"

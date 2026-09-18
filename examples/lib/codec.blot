@@ -10,7 +10,7 @@ const Codec = fn (model, wire, error) => {
 // A lossless representation change leaves the wire format and decode error
 // unchanged. Both directions are required, so a one-way map cannot claim to be
 // a codec.
-const imap :: @forall (fn Inner => @forall (fn Outer => @forall (fn Wire => @forall (fn Error => (Codec (Inner, Wire, Error), (Inner -> Outer), (Outer -> Inner)) -> Codec (Outer, Wire, Error)))))
+const imap: @forall (fn Inner => @forall (fn Outer => @forall (fn Wire => @forall (fn Error => (Codec (Inner, Wire, Error), (Inner -> Outer), (Outer -> Inner)) -> Codec (Outer, Wire, Error)))))
 const imap = fn (codec, forward, backward) => {
   .encode = fn outer => codec.encode (backward outer);
   .decode = fn wire => case codec.decode wire of
@@ -21,7 +21,7 @@ const imap = fn (codec, forward, backward) => {
 
 // A checked representation change may reject during decoding while encoding is
 // total because callers already hold a valid Outer value.
-const validate :: @forall (fn Inner => @forall (fn Outer => @forall (fn Wire => @forall (fn Error => (Codec (Inner, Wire, Error), (Inner -> Result (Outer, Error)), (Outer -> Inner)) -> Codec (Outer, Wire, Error)))))
+const validate: @forall (fn Inner => @forall (fn Outer => @forall (fn Wire => @forall (fn Error => (Codec (Inner, Wire, Error), (Inner -> Result (Outer, Error)), (Outer -> Inner)) -> Codec (Outer, Wire, Error)))))
 const validate = fn (codec, check, forget) => {
   .encode = fn outer => codec.encode (forget outer);
   .decode = fn wire => case codec.decode wire of
@@ -30,7 +30,7 @@ const validate = fn (codec, check, forget) => {
   ;
 }
 
-const identity :: @forall (fn Value => @forall (fn Error => Codec (Value, Value, Error)))
+const identity: @forall (fn Value => @forall (fn Error => Codec (Value, Value, Error)))
 const identity = {
   .encode = fn value => value;
   .decode = fn value => #Ok value;
@@ -38,7 +38,7 @@ const identity = {
 
 // Product composition relates both model components to their corresponding wire
 // components while computing the union of their independent decode errors.
-const product :: @forall (fn Left => @forall (fn Right => @forall (fn LeftWire => @forall (fn RightWire => @forall (fn LeftError => @forall (fn RightError => (Codec (Left, LeftWire, LeftError), Codec (Right, RightWire, RightError)) -> Codec ((Left, Right), (LeftWire, RightWire), LeftError | RightError)))))))
+const product: @forall (fn Left => @forall (fn Right => @forall (fn LeftWire => @forall (fn RightWire => @forall (fn LeftError => @forall (fn RightError => (Codec (Left, LeftWire, LeftError), Codec (Right, RightWire, RightError)) -> Codec ((Left, Right), (LeftWire, RightWire), LeftError | RightError)))))))
 const product = fn (left, right) => {
   .encode = fn (left_value, right_value) => (
     left.encode left_value,

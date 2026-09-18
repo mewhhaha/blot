@@ -255,7 +255,7 @@ Deno.test("a check-interface fix resolves to its proven rewrite", async () => {
   const service = new LanguageService();
   const uri = "untitled:selected-checked-fix.blot";
   const source = `open import "blot:prelude"
-let increment :: Int -> Int
+let increment: Int -> Int
 let increment = fn value => do:
   // Increment at the boundary.
   return value + 1 // The returned value stays documented.
@@ -441,7 +441,7 @@ Deno.test("eager code actions stay within the validation budget", async () => {
   // budgeted lint-fix set plus eagerly resolved fix-all actions.
   const lines: string[] = [];
   for (let index = 0; index < 40; index += 1) {
-    lines.push(`let unused${index} :: _`);
+    lines.push(`let unused${index}: _`);
     lines.push(`let unused${index} = ${index}`);
   }
   lines.push("return unused39");

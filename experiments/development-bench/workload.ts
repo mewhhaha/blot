@@ -136,9 +136,9 @@ const Voxel = {
   .color = { .red = Int; .green = Int; .blue = Int; };
   .flags = [#Solid | #Shadow];
 }
-let voxel_catalog :: [Voxel]
+let voxel_catalog: [Voxel]
 let voxel_catalog = [${voxels.join(",")}]
-let add :: Int -> Int
+let add: Int -> Int
 let add = fn value => value + ${increment}
 return { .add = add; }
 `;

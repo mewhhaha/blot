@@ -107,7 +107,7 @@ fn execute(entry: &Entry, arguments: Vec<Value>) -> Value {
     }
 }
 
-const CAPTURE_APP: &str = "const lib = import \"lib\"\nconst run :: @type.int -> { .first = @type.int; .second = @type.int; }\nconst run = fn value => do:\n  let apply = lib.make value\n  return apply 2\nreturn { .run = run; }\n";
+const CAPTURE_APP: &str = "const lib = import \"lib\"\nconst run: @type.int -> { .first = @type.int; .second = @type.int; }\nconst run = fn value => do:\n  let apply = lib.make value\n  return apply 2\nreturn { .run = run; }\n";
 const CAPTURE_LIB: &str = "const make = fn captured => fn value => { .first = @int.add value captured; .second = captured; }\nreturn { .make = make; }\n";
 
 #[test]
@@ -211,8 +211,8 @@ fn aggregate_capture_graphs_survive_restart_and_relocate_arenas() {
 
 #[test]
 fn recursive_function_components_restore_together() {
-    let app = "const lib = import \"lib\"\nconst run :: @type.int -> @type.int\nconst run = fn value => lib.count value\nreturn { .run = run; }\n";
-    let provider = "let rec even :: @type.int -> @type.int = fn value => case value of\n  0 => 0\n  _ => @int.add 1 (odd (@int.sub value 1))\nlet rec odd :: @type.int -> @type.int = fn value => case value of\n  0 => 0\n  _ => @int.add 2 (even (@int.sub value 1))\nreturn { .count = even; }\n";
+    let app = "const lib = import \"lib\"\nconst run: @type.int -> @type.int\nconst run = fn value => lib.count value\nreturn { .run = run; }\n";
+    let provider = "let rec even: @type.int -> @type.int = fn value => case value of\n  0 => 0\n  _ => @int.add 1 (odd (@int.sub value 1))\nlet rec odd: @type.int -> @type.int = fn value => case value of\n  0 => 0\n  _ => @int.add 2 (even (@int.sub value 1))\nreturn { .count = even; }\n";
     let cold = session(app, provider, &[]);
     build(&cold);
     let entries = cold.take_development_cache_entries();
@@ -306,8 +306,8 @@ fn graph_cache_budget_evicts_payloads_and_pending_persistence_references() {
 
 #[test]
 fn generative_source_evidence_declines_graph_persistence() {
-    let app = "const lib = import \"lib\"\nconst run :: @type.int -> @type.int\nconst run = fn value => lib.run value\nreturn { .run = run; }\n";
-    let provider = "const run :: @type.int -> @type.int\nconst run = fn value => do:\n  const Effect = @effect { .request = @type.int -> @type.int; }\n  return @int.add value 1\nreturn { .run = run; }\n";
+    let app = "const lib = import \"lib\"\nconst run: @type.int -> @type.int\nconst run = fn value => lib.run value\nreturn { .run = run; }\n";
+    let provider = "const run: @type.int -> @type.int\nconst run = fn value => do:\n  const Effect = @effect { .request = @type.int -> @type.int; }\n  return @int.add value 1\nreturn { .run = run; }\n";
     let session = session(app, provider, &[]);
     let compiled = build(&session);
     assert!(session.take_development_cache_entries().is_empty());
@@ -322,11 +322,11 @@ fn generative_source_evidence_declines_graph_persistence() {
 fn cached_generic_graphs_preserve_unchanged_unit_identity_after_provider_edits() {
     let provider = |increment| {
         format!(
-            "const identity = fn value => value\nconst rec countdown :: @type.int -> @type.int\nconst rec countdown = fn value => case value of\n  0 => 0\n  value => @int.add 1 (countdown (@int.sub value 1))\nconst step0 :: @type.int -> @type.int = fn value => @int.add value 1\nconst step1 :: @type.int -> @type.int = fn value => @int.add (step0 value) 1\nconst run :: @type.int -> @type.int = fn value => @int.add (@int.add (step1 (identity value)) (countdown (@int.rem value 4))) {increment}\nconst float_identity :: @type.float32 -> @type.float32 = fn value => identity value\nreturn {{ .run = run; .float_identity = float_identity; }}\n"
+            "const identity = fn value => value\nconst rec countdown: @type.int -> @type.int\nconst rec countdown = fn value => case value of\n  0 => 0\n  value => @int.add 1 (countdown (@int.sub value 1))\nconst step0: @type.int -> @type.int = fn value => @int.add value 1\nconst step1: @type.int -> @type.int = fn value => @int.add (step0 value) 1\nconst run: @type.int -> @type.int = fn value => @int.add (@int.add (step1 (identity value)) (countdown (@int.rem value 4))) {increment}\nconst float_identity: @type.float32 -> @type.float32 = fn value => identity value\nreturn {{ .run = run; .float_identity = float_identity; }}\n"
         )
     };
     let mut session = CompilerSession::default();
-    let app = "const first = import \"first\"\nconst second = import \"second\"\nconst run :: @type.int -> @type.int = fn value => @int.add (first.run value) (second.run value)\nconst float_run :: @type.float32 -> @type.float32 = fn value => @f32.add (first.float_identity value) (second.float_identity value)\nreturn { .run = run; .float_run = float_run; }\n";
+    let app = "const first = import \"first\"\nconst second = import \"second\"\nconst run: @type.int -> @type.int = fn value => @int.add (first.run value) (second.run value)\nconst float_run: @type.float32 -> @type.float32 = fn value => @f32.add (first.float_identity value) (second.float_identity value)\nreturn { .run = run; .float_run = float_run; }\n";
     session
         .add_source("app.blot".into(), app.encode_utf16().collect())
         .unwrap();

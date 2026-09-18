@@ -17,15 +17,15 @@ function tuple(...values: RuntimeValue[]): RuntimeValue {
 }
 
 const source = `open import "blot:prelude"
-const split :: (Text, Text) -> [Text]
+const split: (Text, Text) -> [Text]
 const split = fn pair => Text.split pair
-const replace :: (Text, Text, Text) -> Text
+const replace: (Text, Text, Text) -> Text
 const replace = fn triple => Text.replace triple
-const slice :: (Text, Int, Int) -> Text
+const slice: (Text, Int, Int) -> Text
 const slice = fn (text, start, end) => @text.slice_bytes text start end
-const scalar_slice :: (Text, Int, Int) -> Text
+const scalar_slice: (Text, Int, Int) -> Text
 const scalar_slice = fn (text, start, end) => @text.slice text start end
-const find :: (Text, Text, Int) -> Int
+const find: (Text, Text, Int) -> Int
 const find = fn (text, query, start) => @text.find_byte_from text query start
 return { .split = split; .replace = replace; .slice = slice; .scalar_slice = scalar_slice; .find = find; }
 `;

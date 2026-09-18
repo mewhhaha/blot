@@ -62,3 +62,13 @@ establish performance for changes to imports or public interfaces.
 The application snapshot remains private. Do not publish application source,
 Wasm, ABI contents, or source-bearing profiles in this public repository.
 Synthetic regressions and aggregate measurements belong here.
+
+## Architecture direction
+
+The [staged compiler proposal](../../../docs/staged-compiler-proposal.md)
+records the agreed next step: an inference-rich, explicitly staged experimental
+core, with separately checked generic bodies, typed generator outputs, precise
+semantic queries, and measured cold/real-edited compilation. It is a proposal,
+not an implemented replacement or an achieved 100 ms result. The accompanying
+migration uses `:` rather than `::` for source type annotations. Historical
+measurements and their raw inputs/hashes remain historical evidence.

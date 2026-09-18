@@ -5,14 +5,14 @@ open import "blot:prelude"
 const Quantity = fn (name, symbol) => do:
   const T = #Quantity { .unit = name; .value = Int; }
 
-  let from_int :: Int -> T
+  let from_int: Int -> T
   let from_int = fn value => #Quantity { .unit = name; .value = value; }
 
-  let value :: T -> Int
+  let value: T -> Int
   let value = fn quantity => case quantity of
     #Quantity quantity => quantity.value
 
-  let add :: T -> T -> T
+  let add: T -> T -> T
   let add = fn left => fn right => from_int (value left + value right)
 
   return {
@@ -26,7 +26,7 @@ const Quantity = fn (name, symbol) => do:
 // A conversion is generated from two descriptors. `From.type` and `To.type`
 // make the relationship part of the resulting function's checked signature.
 const scale = fn (From, To, factor) => do:
-  let convert :: From.type -> To.type
+  let convert: From.type -> To.type
   let convert = fn quantity => To.of (From.value quantity * factor)
   return convert
 

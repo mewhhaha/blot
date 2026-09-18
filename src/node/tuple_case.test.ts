@@ -18,27 +18,27 @@ const Input = @effect.host {
   .flag = Unit -> Bool;
   .index = Unit -> Int;
 }
-let pick :: (Bool, Int) -> Int
+let pick: (Bool, Int) -> Int
 let pick = fn (trunk, y) => case (trunk, y % 3) of
   (#True, _) => 10
   (_, 0) => 20
   (_, 1) => 30
   _ => 40
-let strict :: Unit -> Int ~ { Input }
+let strict: Unit -> Int ~ { Input }
 let strict = fn () => case (Input.flag (), Input.index ()) of
   (#True, _) => 10
   (_, 0) => 20
   _ => 40
-let identity :: Bool -> Bool
+let identity: Bool -> Bool
 let identity = fn flag => flag
-let flip :: Bool -> Bool
+let flip: Bool -> Bool
 let flip = fn flag => case flag of
   #True => #False
   #False => #True
 const Choice = #Zulu | #Alpha | #Middle
-let enum_identity :: Choice -> Choice
+let enum_identity: Choice -> Choice
 let enum_identity = fn choice => choice
-let enum_index :: Choice -> Int
+let enum_index: Choice -> Int
 let enum_index = fn choice => case choice of
   #Zulu => 42
   #Alpha => 7

@@ -263,10 +263,10 @@ and disjunction remain ordinary source code.
 Predicate-defined canonical types do not replace branch refinement. For example:
 
 ```blot
-let consume :: Natural -> Int
+let consume: Natural -> Int
 let consume = fn value => value
 
-let checked :: Int -> Int
+let checked: Int -> Int
 let checked = fn value => do:
   if value >= 0:
     return consume value

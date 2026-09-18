@@ -82,7 +82,7 @@ const registry_a = {
   );
 }
 
-const seed_a :: (Int, Int) -> [Row_a]
+const seed_a: (Int, Int) -> [Row_a]
 const seed_a = fn (count, offset) => Iter.collect (Iter.map (
   Iter.range (0, count),
   fn index => {
@@ -95,14 +95,14 @@ const seed_a = fn (count, offset) => Iter.collect (Iter.map (
 ))
 
 const render_a = fn row => row.C0 + row.C1.x * 5 + row.C1.y * 7 + Text.length row.C2 + flag_value row.C3
-const checksum_a :: [Row_a] -> Int
+const checksum_a: [Row_a] -> Int
 const checksum_a = fn rows => fold (rows, 0, fn (total, row) => total + render_a row)
 
 const Sched_a = SchedFn_a Row_a
 const tick1_a = Sched_a.merge (registry_a.s0.step, Sched_a.merge (registry_a.s1.step, Sched_a.merge (registry_a.s2.step, Sched_a.merge (registry_a.s3.step, Sched_a.merge (registry_a.s4.step, Sched_a.merge (registry_a.s5.step, Sched_a.merge (registry_a.s6.step, registry_a.s7.step)))))))
 
 const Loop_a = ForceForWorld_a Row_a
-const initial_a :: Unit -> Row_a
+const initial_a: Unit -> Row_a
 const initial_a = fn () => {
     .which = "a";
     .C0 = 0;
@@ -118,7 +118,7 @@ const game_a = {
 const run_a = Loop_a.run game_a
 
 const tick_a = Sched_a.each Sched_a.empty
-const run :: Int -> Int
-const run = fn (count :: Int) -> Int => checksum_a (tick_a (seed_a (count, 0)))
+const run: Int -> Int
+const run = fn (count: Int) -> Int => checksum_a (tick_a (seed_a (count, 0)))
 
 return { .run; }

@@ -56,7 +56,7 @@ for (const variant of products) {
       );
       await writeFile(
         path,
-        `${prelude}${variant.declarations}let run :: Int -> Int
+        `${prelude}${variant.declarations}let run: Int -> Int
 let run = fn number => ${variant.body}
 return run
 `,
@@ -120,7 +120,7 @@ test("a source-free capsule preserves an inferred structural helper", async () =
     await writeFile(
       path,
       `${prelude}const add = import "@test/addition"
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn number => add { .left = number; .right = 7; .extra = 100; }
 return run
 `,
@@ -158,7 +158,7 @@ test("dependency edits agree between resident and fresh compiler sessions", asyn
     await writeFile(
       path,
       `${prelude}const offset = import "./offset.blot"
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn number => offset number
 return run
 `,
@@ -205,7 +205,7 @@ for (const imported of [false, true]) {
       await writeFile(
         path,
         `${prelude}${declaration}
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn number => case same number 42 of
   #True => 1
   #False => 0

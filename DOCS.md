@@ -204,11 +204,11 @@ let status = #Ready
 ```
 
 Put a signature header directly above the binding it constrains. Repeat the
-binding header and replace `=` with `::`; signatures document a boundary; they
+binding header and replace `=` with `:`; signatures document a boundary; they
 are not a substitute for inference on every local:
 
 ```blot
-let describe :: Message -> Text
+let describe: Message -> Text
 let describe = fn message => case message of
   #Ready => "ready"
   #Failed reason => reason
@@ -558,7 +558,7 @@ Use a named recursive function when recursion is the algorithm rather than an
 implementation of ordinary traversal:
 
 ```blot
-let rec factorial :: Int -> Int
+let rec factorial: Int -> Int
 let rec factorial = fn value => do:
   if value <= 1:
     return 1
@@ -598,7 +598,7 @@ Write effectful callbacks with the effect row in the signature when the boundary
 matters:
 
 ```blot
-let report :: Text -> Unit ~ { Console }
+let report: Text -> Unit ~ { Console }
 let report = fn text => do:
   use Console.write text
   return ()
@@ -778,7 +778,7 @@ construction and accessors:
 ```blot
 const Point = struct { .x = I32; .y = I32; }
 
-let origin :: Point
+let origin: Point
 let origin = Point.new { .x = 0; .y = 0; }
 let x = Point.x origin
 ```
@@ -841,7 +841,7 @@ operation. Store stable integer addresses in nodes, reserve address zero as a
 sentinel, and make the arena affine so appends may reuse its scratch storage:
 
 ```blot
-let rec build :: (Int, [(Int, Int)], Int) -> ([(Int, Int)], Int)
+let rec build: (Int, [(Int, Int)], Int) -> ([(Int, Int)], Int)
 let rec build = fn (remaining, ?nodes, head) => do:
   if remaining == 0:
     return (nodes, head)

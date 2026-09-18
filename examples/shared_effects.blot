@@ -6,7 +6,7 @@ const counter = fn () => @effect.shared "example.counter.read" {
 const First = counter ()
 const Second = counter ()
 
-let run = fn (count :: Int) => @handle (
+let run = fn (count: Int) => @handle (
   First,
   fn () => Second.get (),
   {

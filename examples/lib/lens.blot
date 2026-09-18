@@ -10,7 +10,7 @@ const Lens = fn (whole, part) => {
 // `Middle` type, so an invalid path is rejected before any update can run.
 // Pain point: expressing that relationship needs three explicit nested @forall
 // binders even though the implementation is a two-line record of functions.
-const compose :: @forall (fn Whole => @forall (fn Middle => @forall (fn Part => (Lens (Whole, Middle), Lens (Middle, Part)) -> Lens (Whole, Part))))
+const compose: @forall (fn Whole => @forall (fn Middle => @forall (fn Part => (Lens (Whole, Middle), Lens (Middle, Part)) -> Lens (Whole, Part))))
 const compose = fn (outer, inner) => {
   .view = fn whole => inner.view (outer.view whole);
   .set = fn (whole, part) => outer.set (
@@ -19,7 +19,7 @@ const compose = fn (outer, inner) => {
   );
 }
 
-const over :: @forall (fn Whole => @forall (fn Part => (Lens (Whole, Part), Whole, (Part -> Part)) -> Whole))
+const over: @forall (fn Whole => @forall (fn Part => (Lens (Whole, Part), Whole, (Part -> Part)) -> Whole))
 const over = fn (lens, whole, change) => lens.set (whole, change (lens.view whole))
 
 return {

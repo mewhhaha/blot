@@ -13,10 +13,10 @@ const PricingCapability = { .pricing = Pricing; }
 const CurrencyCapability = { .currency = Text; }
 const App = { ...PricingCapability; ...CurrencyCapability; }
 
-const tax :: Cart -> R.Reader (TaxPolicy, Int)
+const tax: Cart -> R.Reader (TaxPolicy, Int)
 const tax = fn cart => fn policy => cart.subtotal * policy.tax_percent / 100
 
-const shipping :: Cart -> R.Reader (ShippingPolicy, Int)
+const shipping: Cart -> R.Reader (ShippingPolicy, Int)
 const shipping = fn cart => fn policy => case cart.zone of
   #Local => policy.local_shipping
   #Remote => policy.remote_shipping
@@ -24,7 +24,7 @@ const shipping = fn cart => fn policy => case cart.zone of
 // `zip_with` has one Environment parameter. Function-input contravariance,
 // record spreads, and record width subtyping let the narrower readers
 // flow into one Pricing requirement without wrappers, casts, or field copying.
-const pricing_total :: Cart -> R.Reader (Pricing, Int)
+const pricing_total: Cart -> R.Reader (Pricing, Int)
 const pricing_total = fn cart => do:
   let extras = R.zip_with (
     fn (tax_value, shipping_value) => tax_value + shipping_value,
@@ -35,13 +35,13 @@ const pricing_total = fn cart => do:
 
 // Pain point: lifting through one nested field still needs an explicit
 // projection lambda; there is no field-section shorthand for `local` to reuse.
-const lifted_total :: Cart -> R.Reader (PricingCapability, Int)
+const lifted_total: Cart -> R.Reader (PricingCapability, Int)
 const lifted_total = fn cart => R.local (fn environment => environment.pricing, pricing_total cart)
 
-const currency :: R.Reader (CurrencyCapability, Text)
+const currency: R.Reader (CurrencyCapability, Text)
 const currency = fn environment => environment.currency
 
-const quote_for :: Cart -> R.Reader (App, Text)
+const quote_for: Cart -> R.Reader (App, Text)
 const quote_for = fn cart => R.zip_with (
   fn (total, unit) => unit <> " " <> Text.of_int total,
   lifted_total cart,

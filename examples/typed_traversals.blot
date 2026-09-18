@@ -13,19 +13,19 @@ const Probe =
 const Wave = [Probe]
 const Plan = [Wave]
 
-const probe_label :: T.Traversal (Probe, Text)
+const probe_label: T.Traversal (Probe, Text)
 const probe_label =
   T.one (
     fn probe => probe.label,
     fn (probe, label) => Shape.update (probe, { .label; })
   )
 
-const probes :: T.Traversal (Plan, Probe)
+const probes: T.Traversal (Plan, Probe)
 const probes = T.compose (T.each, T.each)
-const labels :: T.Traversal (Plan, Text)
+const labels: T.Traversal (Plan, Text)
 const labels = T.compose (probes, probe_label)
 
-let plan :: Plan
+let plan: Plan
 let plan =
   [
     [
@@ -40,7 +40,7 @@ let before = labels.collect plan
 let updated = T.over (labels, plan, fn label => label <> "-prod")
 let after = labels.collect updated
 
-let empty :: Plan
+let empty: Plan
 let empty = []
 let empty_updated = T.over (labels, empty, fn label => label <> "!")
 

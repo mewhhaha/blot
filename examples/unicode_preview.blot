@@ -2,7 +2,7 @@
 
 open import "blot:prelude"
 
-let preview :: (Text, Int) -> Result (Text, Text)
+let preview: (Text, Int) -> Result (Text, Text)
 let preview = fn (text, limit) => do:
   if limit < 0:
     return Error "negative preview limit"

@@ -4,6 +4,6 @@ const Projection = import "../../../examples/lib/record_projection.blot"
 const Deployment = { .host = Text; .port = Int; .owner = Text; }
 const network = Projection.fields (Deployment, ["host", "port"])
 
-let initial :: Deployment
+let initial: Deployment
 let initial = { .host = "api"; .port = 8080; .owner = "Ada"; }
 return network.projection.put (initial, { .host = "edge"; })

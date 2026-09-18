@@ -1,10 +1,10 @@
 open import "blot:prelude"
 
-const run :: Int -> [Int] = fn input => do:
-  let present :: Option Int = Some input
-  let absent :: Option Int = None
-  let success :: Result (Int, Text) = Ok input
-  let failure :: Result (Int, Text) = Error "missing"
+const run: Int -> [Int] = fn input => do:
+  let present: Option Int = Some input
+  let absent: Option Int = None
+  let success: Result (Int, Text) = Ok input
+  let failure: Result (Int, Text) = Error "missing"
   let increment = fn value => value + 1
   let optional = present |> Option.map increment |> Option.and_then (fn value => Some (value * 2))
   let recovered = absent |> Option.or_else (Some (input + 3))

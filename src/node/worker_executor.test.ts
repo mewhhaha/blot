@@ -168,8 +168,8 @@ test("parallel source work must be pure", async () => {
       compiler.checkSource(
         path,
         source.replace(
-          "const sum :: Int -> Int",
-          "const Clock = @effect.host { .tick = Effect.suspends (Int -> Int); }\nconst sum :: Int -> Int ~ { Clock }",
+          "const sum: Int -> Int",
+          "const Clock = @effect.host { .tick = Effect.suspends (Int -> Int); }\nconst sum: Int -> Int ~ { Clock }",
         ).replace("return total", "return Clock.tick total").replaceAll(
           "Unit -> Int =",
           "Unit -> Int ~ { Clock } =",

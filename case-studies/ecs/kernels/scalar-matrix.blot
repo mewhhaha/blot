@@ -1,11 +1,11 @@
 open import "blot:prelude"
 const Mat4 = import "../simd/matrix.blot"
-const multiply :: [(Mat4.Matrix, Mat4.Matrix)] -> [Mat4.Matrix]
+const multiply: [(Mat4.Matrix, Mat4.Matrix)] -> [Mat4.Matrix]
 const multiply = fn pairs => map (pairs, Mat4.Scalar.multiply)
-const transform :: [(Mat4.Matrix, Mat4.Vector)] -> [Mat4.Vector]
+const transform: [(Mat4.Matrix, Mat4.Vector)] -> [Mat4.Vector]
 const transform = fn requests => map (requests, Mat4.Scalar.transform)
-const product :: (Mat4.Matrix, Mat4.Matrix) -> Mat4.Matrix
+const product: (Mat4.Matrix, Mat4.Matrix) -> Mat4.Matrix
 const product = Mat4.Scalar.multiply
-const point :: (Mat4.Matrix, Mat4.Vector) -> Mat4.Vector
+const point: (Mat4.Matrix, Mat4.Vector) -> Mat4.Vector
 const point = Mat4.Scalar.transform
 return { .multiply; .transform; .product; .point; }

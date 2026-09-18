@@ -3,7 +3,7 @@ const { .Result; } = import "blot:prelude"
 // A fallback can change the failure type while preserving the successful value.
 // The fallback expression is deferred, so it is evaluated only when the primary
 // result fails.
-const recover :: @forall (fn Value => @forall (fn PrimaryError => @forall (fn FallbackError => Result (Value, FallbackError) ~> Result (Value, PrimaryError) -> Result (Value, FallbackError))))
+const recover: @forall (fn Value => @forall (fn PrimaryError => @forall (fn FallbackError => Result (Value, FallbackError) ~> Result (Value, PrimaryError) -> Result (Value, FallbackError))))
 const recover = fn ~fallback => fn primary => case primary of
   #Ok value => #Ok value
   #Error _ => fallback
@@ -15,7 +15,7 @@ const BothFailed = fn (primary_error, fallback_error) => {
   .fallback = fallback_error;
 }
 
-const recover_with_context :: @forall (fn Value => @forall (fn PrimaryError => @forall (fn FallbackError => Result (Value, FallbackError) ~> Result (Value, PrimaryError) -> Result (Value, BothFailed (PrimaryError, FallbackError)))))
+const recover_with_context: @forall (fn Value => @forall (fn PrimaryError => @forall (fn FallbackError => Result (Value, FallbackError) ~> Result (Value, PrimaryError) -> Result (Value, BothFailed (PrimaryError, FallbackError)))))
 const recover_with_context = fn ~fallback => fn primary => case primary of
   #Ok value => #Ok value
   #Error primary_error => case fallback of

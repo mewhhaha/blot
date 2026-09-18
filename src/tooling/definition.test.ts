@@ -45,7 +45,7 @@ return even
 });
 
 Deno.test("a signature header navigates to the binding it constrains", async () => {
-  const source = `let answer :: Number
+  const source = `let answer: Number
 let answer = 42
 return answer
 `;
@@ -93,7 +93,7 @@ return Thing.build
 
 Deno.test("a value occurrence finds the explicit type value in its signature", async () => {
   const source = `const Point = { .x = Number; }
-let point :: Point
+let point: Point
 let point = { .x = 42; }
 return point
 `;
@@ -113,7 +113,7 @@ return point
 Deno.test("a nested value finds the signature in its own block scope", async () => {
   const source = `let run = fn () => do:
   const Point = { .x = Number; }
-  let point :: Point
+  let point: Point
   let point = { .x = 42; }
   return point
 return run ()

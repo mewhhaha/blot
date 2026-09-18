@@ -72,7 +72,7 @@ const KEYWORDS = new Set([
   "rec",
 ]);
 
-const OPERATORS = new Set(["=", ":=", "::", "<-", "=>"]);
+const OPERATORS = new Set(["=", ":=", ":", "<-", "=>"]);
 const TIGHT_RIGHT = new Set([")", "]", ",", ";", ":"]);
 const TIGHT_LEFT = new Set(["(", "[", ".", "#"]);
 
@@ -681,7 +681,7 @@ class Printer {
   private sourceValueBroken(statement: Rule): boolean {
     let introducer: TokenCursor | null = null;
     if (statement.name === "signature") {
-      introducer = directToken(statement, "::");
+      introducer = directToken(statement, ":");
     } else if (statement.name === "binding") {
       introducer = directToken(statement, "=");
     } else {
@@ -1639,7 +1639,7 @@ class Printer {
       return false;
     }
     if (left.type !== "token") return false;
-    if (parent.name === "signature") return left.text === "::";
+    if (parent.name === "signature") return left.text === ":";
     if (parent.name === "binding") return left.text === "=";
     return left.text === "return";
   }

@@ -2,7 +2,7 @@
 
 open import "blot:prelude"
 
-let first :: [Int] -> [Int] -> Int
+let first: [Int] -> [Int] -> Int
 let first = fn xs => fn ys => do:
   let xs_length = Array.length xs
   let ys_length = Array.length ys

@@ -9,11 +9,11 @@ try {
   await compiler.checkSource(
     path,
     `open import "blot:prelude"
-const lines :: Text -> Int
+const lines: Text -> Int
 const lines = fn text => Array.length (Text.lines text)
-const replace :: Text -> Int
+const replace: Text -> Int
 const replace = fn text => Text.length (Text.replace (text, "\\n", "|"))
-const length :: Text -> Int
+const length: Text -> Int
 const length = fn text => Text.length text
 return { .lines; .replace; .length; }
 `,

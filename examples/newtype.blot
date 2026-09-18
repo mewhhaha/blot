@@ -33,7 +33,7 @@ Money := Money <+ {
   ;
 }
 
-let price :: Money
+let price: Money
 let price = Money.of 42
 
 // The table is reached through the *name*, not through a parameter. A type's
@@ -47,13 +47,13 @@ let price = Money.of 42
 // Addition returns Int, not I32: the bounds check in `.add` proves that its
 // result fits Money's carrier, and traps instead of claiming a narrower type
 // on overflow. A result signature remains a checked obligation.
-let same :: Bool
+let same: Bool
 let same = Money.eq price (Money.of 42)
 
-let differs :: Bool
+let differs: Bool
 let differs = Money.eq price Money.zero
 
-let summed :: Money
+let summed: Money
 let summed = Money.add price (Money.of 8)
 
 return {

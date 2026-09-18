@@ -344,7 +344,7 @@ test("generic resource types retain their payload through specialization and the
         "/tmp/blot-resource-invariant.blot",
         `open import "blot:prelude"
 const Box = fn element => Resource.of_type "Box" element
-let invalid :: Box Int -> Box Text
+let invalid: Box Int -> Box Text
 let invalid = fn value => value
 return invalid
 `,
@@ -520,7 +520,7 @@ test("resource types reject source fabrication and invocation-owned results cann
         path,
         `open import "blot:prelude"
 const Stream = Resource.of "Stream"
-let run :: Int -> Stream
+let run: Int -> Stream
 let run = fn value => value
 return run
 `,

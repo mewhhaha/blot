@@ -45,7 +45,7 @@ use requested_selection <- Host.selection ()
 let selection = S.selection_of requested_selection
 use Host.selected { .key = selection.key; .name = selection.name; }
 use meshes <- S.build_shrubbery (seed, selection)
-let game :: Game
+let game: Game
 let game = { .meshes = meshes; }
 
 let frames = 0

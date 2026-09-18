@@ -4,7 +4,7 @@
 
 open import "blot:prelude"
 
-let rec fibonacci :: Int -> Int
+let rec fibonacci: Int -> Int
 let rec fibonacci = fn n => do:
   if n < 2:
     return n

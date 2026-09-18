@@ -8,7 +8,7 @@ import { Compiler } from "../compiler.ts";
 
 test("Money.add preserves its I32 carrier and traps on either overflow", async () => {
   const source = await readFile(resolve("examples/newtype.blot"), "utf8");
-  const declarationsEnd = source.indexOf("let price :: Money");
+  const declarationsEnd = source.indexOf("let price: Money");
   assert.notEqual(declarationsEnd, -1, "missing newtype example declarations");
   const declarations = source.slice(0, declarationsEnd);
   const directory = await mkdtemp(join(tmpdir(), "blot-newtype-"));
@@ -17,7 +17,7 @@ test("Money.add preserves its I32 carrier and traps on either overflow", async (
     const path = join(directory, "add.blot");
     await writeFile(
       path,
-      `${declarations}let add :: I32 -> I32 -> I32
+      `${declarations}let add: I32 -> I32 -> I32
 let add = fn left => fn right => case Money.add (Money.of left) (Money.of right) of
   #Money sum => sum
 return add

@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-let inspect ::
+let inspect:
   Text -> {
     .length = Int;
     .first = Text;

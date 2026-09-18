@@ -51,7 +51,7 @@ export function hoverAt(
 
   const lines: string[] = [];
   if (binding.type !== null) {
-    lines.push(`${binding.header} :: ${binding.type}`);
+    lines.push(`${binding.header}: ${binding.type}`);
   }
   if (binding.preview !== null) {
     lines.push(binding.preview);
@@ -588,7 +588,7 @@ function documentationBefore(source: string, offset: number): string | null {
     const previousEnd = lineStart - 1;
     const previousStart = source.lastIndexOf("\n", previousEnd - 1) + 1;
     const previousLine = source.slice(previousStart, previousEnd).trimStart();
-    if (/^(let|const)( rec)? [A-Za-z_][A-Za-z0-9_]* ::/.test(previousLine)) {
+    if (/^(let|const)( rec)? [A-Za-z_][A-Za-z0-9_]*\s*:/.test(previousLine)) {
       anchor = previousStart;
     }
   }
@@ -659,12 +659,12 @@ const PUNCTUATION_DOCUMENTATION: Readonly<Record<string, string>> = {
   ";": "Separates fields inside a structural record.",
   ".": "Projects a field or introduces a named record field.",
   "=": "Associates a binding, field, or pattern with its value.",
-  "::": "Associates a repeated binding header with its signature.",
   ":=": "Rebinds an existing name while preserving its stable type.",
   "<-":
     "Separates the optional result pattern from the computation in a `use` statement.",
   "=>": "Separates a function parameter or case pattern from its body.",
-  ":": "Introduces an indentation-delimited statement or branch suite.",
+  ":":
+    "Introduces a type annotation or an indentation-delimited statement or branch suite.",
   "...": "Spreads the members or elements of the following value.",
   "#": "Introduces a variant constructor.",
   "@": "Introduces a compile-time declaration tag when followed by `[`.",

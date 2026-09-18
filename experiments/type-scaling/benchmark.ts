@@ -268,7 +268,7 @@ function unionSource(size: number): string {
   }
   return moduleSource([
     `const Event = ${members.join(" | ")}`,
-    "let read :: Event -> Int",
+    "let read: Event -> Int",
     `let read = fn event => case event of\n${arms.join("\n")}`,
   ], `read (#Event${size - 1} ${size})`);
 }
@@ -288,7 +288,7 @@ function refinementSource(size: number): string {
   for (let index = 1; index <= size; index += 1) {
     declarations.push(
       `const Range${index} = refine (Int, fn value => value >= 0 && value <= ${index})`,
-      `let keep${index} :: Range${index} -> Range${index}`,
+      `let keep${index}: Range${index} -> Range${index}`,
       `let keep${index} = fn value => value`,
       `let value${index} = keep${index} ${index}`,
     );
@@ -316,7 +316,7 @@ function measureSource(size: number): string {
     );
   }
   declarations.push(
-    "let at :: [Int] -> Int -> Int",
+    "let at: [Int] -> Int -> Int",
     `let at = fn &values => fn index => case index >= 0 && index < count${size} (&values) of\n` +
       "  #True => @array.get values index\n" +
       "  #False => 0",
@@ -384,7 +384,7 @@ function literalUnionSource(size: number): string {
   const members = Array.from({ length: size }, (_, index) => index);
   return moduleSource([
     `const Choice = ${members.join(" | ")}`,
-    "let value :: Choice",
+    "let value: Choice",
     `let value = ${size - 1}`,
   ], "value + 1");
 }
@@ -400,7 +400,7 @@ function projectionSource(size: number): string {
   );
   const declarations = [
     `const Record = { ${typeFields.join(" ")} }`,
-    "let record :: Record",
+    "let record: Record",
     `let record = { ${valueFields.join(" ")} }`,
     "let total0 = record.field0",
   ];

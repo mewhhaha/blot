@@ -3,7 +3,7 @@ open import "blot:prelude"
 
 const Console = @effect { .write = Text -> Unit; }
 
-let apply_logged ::
+let apply_logged:
   (Int -> Int ~ { ..e }) ->
   Int -> Int ~ { Console, ..e }
 let apply_logged = fn transform => fn value => do:

@@ -137,7 +137,7 @@ export type LiteralKind =
   | "let"
   | "const"
   | "rec"
-  | "::"
+  | ":"
   | "@"
   | "["
   | "]"
@@ -146,7 +146,6 @@ export type LiteralKind =
   | "<-"
   | "for"
   | "case"
-  | ":"
   | "in"
   | "break"
   | "continue"
@@ -373,7 +372,7 @@ export interface SignatureCursor extends RuleCursorBase<"signature"> {
 }
 
 export interface BindingCursor extends RuleCursorBase<"binding"> {
-  field(name: "annotation"): readonly [TokenCursor<"literal", "::">, ValueCursor] | null;
+  field(name: "annotation"): readonly [TokenCursor<"literal", ":">, ValueCursor] | null;
   field(name: "kind"): TokenCursor<"literal", "const"> | TokenCursor<"literal", "let">;
   field(name: "pattern"): BindingPatternCursor;
   field(name: "recursive"): TokenCursor<"literal", "rec"> | null;
@@ -414,7 +413,7 @@ export interface IndexSuffixCursor extends RuleCursorBase<"index_suffix"> {
 }
 
 export interface SequencingCursor extends RuleCursorBase<"sequencing"> {
-  field(name: "annotation"): readonly [TokenCursor<"literal", "::">, ValueCursor] | null;
+  field(name: "annotation"): readonly [TokenCursor<"literal", ":">, ValueCursor] | null;
   field(name: "head"): ValueCursor;
   field(name: "value"): ValueCursor | null;
   field(name: string): CursorFieldValue | undefined;
@@ -476,7 +475,7 @@ export interface TuplePatternCursor extends RuleCursorBase<"tuple_pattern"> {
 }
 
 export interface AnnotatedPatternCursor extends RuleCursorBase<"annotated_pattern"> {
-  field(name: "annotation"): readonly [TokenCursor<"literal", "::">, ValueCursor] | null;
+  field(name: "annotation"): readonly [TokenCursor<"literal", ":">, ValueCursor] | null;
   field(name: "pattern"): BindingPatternCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];

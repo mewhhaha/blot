@@ -72,7 +72,7 @@ fn source_member_result_is_not_replaced_by_operator_spelling() {
 fn source_member_refined_result_survives_dispatch() {
     with_stack(|| {
         let mut compiler = session(&format!(
-            "{DISPATCH}const custom :: @type.int -> @type.int -> 7\nconst custom = fn left => fn right => 7\nconst Int = @type.attach @type.int \"add\" custom\nreturn 1 + 2\n"
+            "{DISPATCH}const custom: @type.int -> @type.int -> 7\nconst custom = fn left => fn right => 7\nconst Int = @type.attach @type.int \"add\" custom\nreturn 1 + 2\n"
         ));
         assert_result(&mut compiler, "7", "7");
     });
@@ -82,7 +82,7 @@ fn source_member_refined_result_survives_dispatch() {
 fn source_member_parameter_signature_is_checked_even_when_body_ignores_it() {
     with_stack(|| {
         let compiler = session(&format!(
-            "{DISPATCH}const custom :: @type.text -> @type.text -> 7\nconst custom = fn left => fn right => 7\nconst Int = @type.attach @type.int \"add\" custom\nreturn 1 + 2\n"
+            "{DISPATCH}const custom: @type.text -> @type.text -> 7\nconst custom = fn left => fn right => 7\nconst Int = @type.attach @type.int \"add\" custom\nreturn 1 + 2\n"
         ));
         let checked = compiler.check_module("main.blot");
         assert_eq!(checked["ok"], false, "{checked}");
@@ -109,9 +109,9 @@ fn one_inferred_operator_function_is_reusable_across_numeric_domains() {
         let compiler = with_prelude(concat!(
             "open import \"blot:prelude\"\n",
             "const sum = fn left => fn right => left + right\n",
-            "let integer :: Int\nlet integer = sum 2 3\n",
-            "let double :: F64\nlet double = sum (F64.of_int 2) (F64.of_int 3)\n",
-            "let single :: F32\nlet single = sum (F32.of_int 2) (F32.of_int 3)\n",
+            "let integer: Int\nlet integer = sum 2 3\n",
+            "let double: F64\nlet double = sum (F64.of_int 2) (F64.of_int 3)\n",
+            "let single: F32\nlet single = sum (F32.of_int 2) (F32.of_int 3)\n",
             "return { .integer = integer; .double = double; .single = single; }\n",
         ));
         let checked = compiler.check_module("main.blot");
@@ -159,7 +159,7 @@ fn exported_numeric_operations_retain_their_checked_types() {
             ),
             (
                 "chained",
-                "open import \"blot:prelude\"\nconst run :: (F32, F32) -> F32\nconst run = fn (x, y) => (x + y) * 2.0 / 4.0 - 0.5\nreturn { .run = run; }\n",
+                "open import \"blot:prelude\"\nconst run: (F32, F32) -> F32\nconst run = fn (x, y) => (x + y) * 2.0 / 4.0 - 0.5\nreturn { .run = run; }\n",
             ),
             (
                 "negation",
@@ -222,7 +222,7 @@ fn generic_dispatch_rejects_unsupported_operands_even_with_unused_result() {
     with_stack(|| {
         for call in ["sum () ()", "sum integer (@float.of_int 3)"] {
             let compiler = session(&format!(
-                "{DISPATCH}const sum = fn left => fn right => left + right\nlet integer :: @type.int\nlet integer = 2\nlet unused = {call}\nreturn ()\n"
+                "{DISPATCH}const sum = fn left => fn right => left + right\nlet integer: @type.int\nlet integer = 2\nlet unused = {call}\nreturn ()\n"
             ));
             let checked = compiler.check_module("main.blot");
             assert_eq!(checked["ok"], false, "{call}: {checked}");
@@ -252,9 +252,9 @@ fn imported_dispatcher_does_not_reuse_an_earlier_specialization() {
         let mut compiler = session(concat!(
             "open import \"operators\"\n",
             "const sum = fn left => fn right => left + right\n",
-            "let integer :: @type.int\nlet integer = sum 2 3\n",
-            "let double :: @type.float\nlet double = sum (@float.of_int 2) (@float.of_int 3)\n",
-            "let single :: @type.float32\nlet single = sum (@f32.of_int 2) (@f32.of_int 3)\n",
+            "let integer: @type.int\nlet integer = sum 2 3\n",
+            "let double: @type.float\nlet double = sum (@float.of_int 2) (@float.of_int 3)\n",
+            "let single: @type.float32\nlet single = sum (@f32.of_int 2) (@f32.of_int 3)\n",
             "return (integer, double, single)\n",
         ));
         compiler.add_source("operators.blot".to_owned(), format!(
@@ -286,7 +286,7 @@ fn inferred_members_are_not_limited_to_standard_operator_names() {
         let mut compiler = session(concat!(
             "infixl 60 (+) = Op.combine\n",
             "const Op = { .combine = fn left => fn right => (@type.inferred left).combine left right; }\n",
-            "const custom :: @type.int -> @type.int -> 7\n",
+            "const custom: @type.int -> @type.int -> 7\n",
             "const custom = fn left => fn right => 7\n",
             "const Int = @type.attach @type.int \"combine\" custom\n",
             "return 1 + 2\n",

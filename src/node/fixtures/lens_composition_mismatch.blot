@@ -5,14 +5,14 @@ const L = import "../../../examples/lib/lens.blot"
 const User = { .name = Text; }
 const Address = { .city = Text; }
 
-const user_name :: L.Lens (User, Text)
+const user_name: L.Lens (User, Text)
 const user_name =
   {
     .view = fn user => user.name;
     .set = fn (user, name) => Shape.update (user, { .name = name; });
   }
 
-const address_city :: L.Lens (Address, Text)
+const address_city: L.Lens (Address, Text)
 const address_city =
   {
     .view = fn address => address.city;

@@ -12,7 +12,7 @@ const CheckoutDetails = { .sku = Text; .total = Int; }
 const Checkout =
   #Confirmed CheckoutDetails | #OutOfStock CheckoutDetails | #PaymentDeclined CheckoutDetails
 
-let checkout :: (Text, Int) -> Checkout ~ { Inventory, Payment }
+let checkout: (Text, Int) -> Checkout ~ { Inventory, Payment }
 let checkout = fn (sku, total) => do:
   let details = { .sku = sku; .total = total; }
   use reserved <- Inventory.reserve sku

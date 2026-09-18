@@ -1,10 +1,10 @@
 open import "blot:prelude"
 const R = import "../../../examples/lib/reversible_update.blot"
 
-const step :: R.Reversible (Int, Int, Int)
+const step: R.Reversible (Int, Int, Int)
 const step = R.replace (fn state => state, fn (_, next) => next)
 
 const right_associated = R.compose (step, R.compose (step, step))
-const left_shape :: R.Reversible (Int, ((Int, Int), Int), ((Int, Int), Int))
+const left_shape: R.Reversible (Int, ((Int, Int), Int), ((Int, Int), Int))
 const left_shape = right_associated
 return left_shape

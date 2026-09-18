@@ -5,7 +5,7 @@ const Model = Space.space #Model
 const World = Space.space #World
 const Screen = Space.space #Screen
 
-const model_to_world :: Space.Transform (Model.tag, World.tag)
+const model_to_world: Space.Transform (Model.tag, World.tag)
 const model_to_world =
   {
     .point = fn point => {
@@ -20,7 +20,7 @@ const model_to_world =
     };
   }
 
-const world_to_screen :: Space.Transform (World.tag, Screen.tag)
+const world_to_screen: Space.Transform (World.tag, Screen.tag)
 const world_to_screen =
   {
     .point = fn point => {
@@ -35,30 +35,30 @@ const world_to_screen =
     };
   }
 
-const model_to_screen :: Space.Transform (Model.tag, Screen.tag)
+const model_to_screen: Space.Transform (Model.tag, Screen.tag)
 const model_to_screen = Space.compose (model_to_world, world_to_screen)
 
-const origin :: Model.Point
+const origin: Model.Point
 const origin = Model.point (0, 0)
-const target :: Model.Point
+const target: Model.Point
 const target = Model.point (3, 2)
-const offset :: Model.Vector
+const offset: Model.Vector
 const offset = Model.between (origin, target)
 
-const vertices :: [Model.Point]
+const vertices: [Model.Point]
 const vertices = [origin, target, Model.point (0 - 4, 1)]
 
-const screen_vertices :: [Screen.Point]
+const screen_vertices: [Screen.Point]
 const screen_vertices = Space.map_points (model_to_screen, vertices)
 
-const screen_origin :: Screen.Point
+const screen_origin: Screen.Point
 const screen_origin = model_to_screen.point origin
-const screen_offset :: Screen.Vector
+const screen_offset: Screen.Vector
 const screen_offset = model_to_screen.vector offset
-const moved :: Screen.Point
+const moved: Screen.Point
 const moved = Screen.move (screen_origin, screen_offset)
 
-const same_target :: Model.Point
+const same_target: Model.Point
 const same_target = Space.identity.point target
 
 return {

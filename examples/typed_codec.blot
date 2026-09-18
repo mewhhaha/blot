@@ -6,36 +6,36 @@ const Nights = refine (Int, fn value => value >= 1 && value <= 30)
 const Reservation = { .guests = Guests; .nights = Nights; }
 const DecodeError = #InvalidGuests Int | #InvalidNights Int
 
-const guest_base :: C.Codec (Int, Int, #InvalidGuests Int)
+const guest_base: C.Codec (Int, Int, #InvalidGuests Int)
 const guest_base = C.identity
-const night_base :: C.Codec (Int, Int, #InvalidNights Int)
+const night_base: C.Codec (Int, Int, #InvalidNights Int)
 const night_base = C.identity
 
-const check_guests :: Int -> Result (Guests, #InvalidGuests Int)
+const check_guests: Int -> Result (Guests, #InvalidGuests Int)
 const check_guests = fn value => do:
   if value >= 1 && value <= 8:
     return #Ok value
 
   return #Error (#InvalidGuests value)
 
-const check_nights :: Int -> Result (Nights, #InvalidNights Int)
+const check_nights: Int -> Result (Nights, #InvalidNights Int)
 const check_nights = fn value => do:
   if value >= 1 && value <= 30:
     return #Ok value
 
   return #Error (#InvalidNights value)
 
-const guest_codec :: C.Codec (Guests, Int, #InvalidGuests Int)
+const guest_codec: C.Codec (Guests, Int, #InvalidGuests Int)
 const guest_codec = C.validate (guest_base, check_guests, fn value => value)
-const night_codec :: C.Codec (Nights, Int, #InvalidNights Int)
+const night_codec: C.Codec (Nights, Int, #InvalidNights Int)
 const night_codec = C.validate (night_base, check_nights, fn value => value)
 
 // Product computes the union of the two narrow leaf error types, so neither
 // leaf codec needs to know the application's complete decode-error set.
-const pair_codec :: C.Codec ((Guests, Nights), (Int, Int), DecodeError)
+const pair_codec: C.Codec ((Guests, Nights), (Int, Int), DecodeError)
 const pair_codec = C.product (guest_codec, night_codec)
 
-const reservation_codec :: C.Codec (Reservation, (Int, Int), DecodeError)
+const reservation_codec: C.Codec (Reservation, (Int, Int), DecodeError)
 const reservation_codec =
   C.imap (
     pair_codec,
@@ -43,7 +43,7 @@ const reservation_codec =
     fn reservation => (reservation.guests, reservation.nights)
   )
 
-const stored :: Reservation
+const stored: Reservation
 const stored = { .guests = 3; .nights = 2; }
 let (encoded_guests, encoded_nights) = reservation_codec.encode stored
 

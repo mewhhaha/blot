@@ -21,12 +21,12 @@ const digit_value = fn scalar => case Text.find_from (
     else:
       return index
 
-const integer_radix :: (Text, Int) -> Result (Int, IntegerError)
+const integer_radix: (Text, Int) -> Result (Int, IntegerError)
 const integer_radix = fn (text, radix) => do:
   if radix < 2 || radix > 36:
     return #Error (#InvalidRadix radix)
 
-  let rec visit ::
+  let rec visit:
     (Text.Cursor, Int, Int, Int, Bool) -> Result (Int, IntegerError)
   let rec visit =
     fn (
@@ -69,7 +69,7 @@ const integer_radix = fn (text, radix) => do:
 
   return visit (Text.cursor text, 0, 0, 0, False)
 
-const integer :: Text -> Result (Int, IntegerError)
+const integer: Text -> Result (Int, IntegerError)
 const integer = fn text => integer_radix (text, 10)
 
 return {

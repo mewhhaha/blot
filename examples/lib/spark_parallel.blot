@@ -1,14 +1,14 @@
 open import "blot:prelude"
 const Spark = import "blot:spark"
 
-const sum :: Int -> Int = fn count => do:
+const sum: Int -> Int = fn count => do:
   let total = 0
   for index in Iter.range (0, count):
     total := total + index
 
   return total
 
-let run :: { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect }
+let run: { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect }
 let run = fn io => fn count => do:
   return Spark.scope io.executor $ fn scope => do:
     use first <- Spark.parallel scope (fn () => sum count)

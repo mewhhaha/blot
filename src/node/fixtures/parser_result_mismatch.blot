@@ -1,7 +1,7 @@
 open import "blot:prelude"
 const P = import "../../../examples/lib/parser.blot"
 
-const invalid :: P.Parser Int
+const invalid: P.Parser Int
 const invalid = P.map (P.literal "/health", fn _ => "health")
 
 return { .default = P.run (invalid, "/health"); }

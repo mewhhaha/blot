@@ -86,7 +86,7 @@ const View =
 
 const Lens = #Perspective | #Orthographic
 
-const lens_of :: Int -> Lens
+const lens_of: Int -> Lens
 const lens_of = fn encoded => case encoded of
   0 => #Perspective
   _ => #Orthographic
@@ -372,7 +372,7 @@ const Paint =
       .texture = Text;
     } -> Unit ~ { Canvas };
   } -> Unit ~ { Canvas }
-let frame :: Paint -> Unit ~ { Canvas, View }
+let frame: Paint -> Unit ~ { Canvas, View }
 let frame = fn &paint => do:
   use Canvas.clear ()
   use yaw <- View.yaw ()

@@ -4,23 +4,23 @@ const R = import "../../../examples/lib/reversible_update.blot"
 const Quota = range (1, 100)
 const Profile = { .name = Text; .quota = Quota; }
 
-const rename :: R.Reversible (Profile, Text, Text)
+const rename: R.Reversible (Profile, Text, Text)
 const rename =
   R.replace (
     fn profile => profile.name,
     fn (profile, name) => Shape.update (profile, { .name; })
   )
 
-const set_quota :: R.Reversible (Profile, Quota, Quota)
+const set_quota: R.Reversible (Profile, Quota, Quota)
 const set_quota =
   R.replace (
     fn profile => profile.quota,
     fn (profile, quota) => Shape.update (profile, { .quota; })
   )
 
-const plan :: R.Reversible (Profile, (Text, Quota), (Text, Quota))
+const plan: R.Reversible (Profile, (Text, Quota), (Text, Quota))
 const plan = R.compose (rename, set_quota)
-const original :: Profile
+const original: Profile
 const original = { .name = "Ada"; .quota = 20; }
 let (changed, _) = plan.apply (original, ("Grace", 40))
 return plan.revert (changed, (20, "Ada"))

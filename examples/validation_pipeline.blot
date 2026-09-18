@@ -7,7 +7,7 @@ const Summary =
     .errors = [Text];
   }
 
-let validate :: Int -> Result
+let validate: Int -> Result
 let validate = fn value => do:
   if value <= 0:
     return #Rejected "not positive"
@@ -17,7 +17,7 @@ let validate = fn value => do:
 
   return #Accepted value
 
-let rec summarize :: ([Int], Int, [Int], [Text]) -> Summary
+let rec summarize: ([Int], Int, [Int], [Text]) -> Summary
 let rec summarize = fn (&values, index, accepted, errors) => case Array.get (
   (&values),
   index

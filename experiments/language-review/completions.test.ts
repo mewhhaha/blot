@@ -81,7 +81,7 @@ test("candidate validation cannot comment out or escape the surrounding expressi
 test("whole-program checking preserves the required result type", async () => {
   await withCompiler(async (compiler, path) => {
     const source =
-      'open import "blot:prelude"\nlet value :: Int\nlet value = @hole "value"\nreturn value\n';
+      'open import "blot:prelude"\nlet value: Int\nlet value = @hole "value"\nreturn value\n';
     const accepted = await checkCompletion(
       compiler,
       path,

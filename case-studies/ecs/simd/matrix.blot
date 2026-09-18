@@ -12,18 +12,18 @@ const map_columns = fn (matrix, transform) => {
   .c3 = transform matrix.c3;
 }
 
-const pack_vector :: Vector -> F32x4
+const pack_vector: Vector -> F32x4
 const pack_vector = fn point => F32x4.of (point.x, point.y, point.z, point.w)
-const unpack_vector :: F32x4 -> Vector
+const unpack_vector: F32x4 -> Vector
 const unpack_vector = fn point => { .x = F32x4.x point; .y = F32x4.y point; .z = F32x4.z point; .w = F32x4.w point; }
-const pack :: Matrix -> Packed
+const pack: Matrix -> Packed
 const pack = fn matrix => map_columns (matrix, pack_vector)
-const unpack :: Packed -> Matrix
+const unpack: Packed -> Matrix
 const unpack = fn matrix => map_columns (matrix, unpack_vector)
 
 // Columns multiply column vectors. The pairwise addition tree is shared by
 // both implementations so each F32 rounding occurs at the same place.
-const transform :: (Packed, F32x4) -> F32x4
+const transform: (Packed, F32x4) -> F32x4
 const transform = fn (matrix, point) => do:
   let x = F32x4.scale (matrix.c0, F32x4.x point)
   let y = F32x4.scale (matrix.c1, F32x4.y point)
@@ -31,30 +31,30 @@ const transform = fn (matrix, point) => do:
   let w = F32x4.scale (matrix.c3, F32x4.w point)
   return F32x4.add (F32x4.add x y) (F32x4.add z w)
 
-const multiply :: (Packed, Packed) -> Packed
+const multiply: (Packed, Packed) -> Packed
 const multiply = fn (left, right) => map_columns (right, fn column => transform (left, column))
 
-const dot4 :: (Vector, Vector) -> F32
+const dot4: (Vector, Vector) -> F32
 const dot4 = fn (row, point) => F32.add (
   F32.add (F32.mul row.x point.x) (F32.mul row.y point.y)
 ) (F32.add (F32.mul row.z point.z) (F32.mul row.w point.w))
 
-const scalar_transform :: (Matrix, Vector) -> Vector
+const scalar_transform: (Matrix, Vector) -> Vector
 const scalar_transform = fn (matrix, point) => {
   .x = dot4 ({ .x = matrix.c0.x; .y = matrix.c1.x; .z = matrix.c2.x; .w = matrix.c3.x; }, point);
   .y = dot4 ({ .x = matrix.c0.y; .y = matrix.c1.y; .z = matrix.c2.y; .w = matrix.c3.y; }, point);
   .z = dot4 ({ .x = matrix.c0.z; .y = matrix.c1.z; .z = matrix.c2.z; .w = matrix.c3.z; }, point);
   .w = dot4 ({ .x = matrix.c0.w; .y = matrix.c1.w; .z = matrix.c2.w; .w = matrix.c3.w; }, point);
 }
-const scalar_multiply :: (Matrix, Matrix) -> Matrix
+const scalar_multiply: (Matrix, Matrix) -> Matrix
 const scalar_multiply = fn (left, right) => map_columns (right, fn column => scalar_transform (left, column))
 
-const product :: (Matrix, Matrix) -> Matrix
+const product: (Matrix, Matrix) -> Matrix
 const product = fn (left, right) => unpack (multiply (pack left, pack right))
-const point :: (Matrix, Vector) -> Vector
+const point: (Matrix, Vector) -> Vector
 const point = fn (matrix, vector) => unpack_vector (transform (pack matrix, pack_vector vector))
 
-const identity :: Matrix
+const identity: Matrix
 const identity = {
   .c0 = { .x = 1; .y = 0; .z = 0; .w = 0; };
   .c1 = { .x = 0; .y = 1; .z = 0; .w = 0; };

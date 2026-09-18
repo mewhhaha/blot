@@ -124,7 +124,8 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
     const newline = lastNewlineEnd(gap);
     const separator = newline >= 0 &&
       recordSeparator(source, delimiters, previous, token);
-    const suiteIntroducer = opensSuite(previous);
+    const suiteIntroducer = opensSuite(previous) &&
+      !isAnnotationColon(tokens, tokenIndex - 1);
     const frame = frames[frames.length - 1];
     const insideActiveSuite = frames.length > 1 &&
       delimiters.brackets === frame.brackets;
@@ -334,6 +335,25 @@ function sourceIndentWidth(source: string, offset: number): number {
   const indentation = beforeToken.match(/^[ \t]*/)?.[0];
   if (indentation === undefined) throw new Error("A source line has no start.");
   return indentationWidth(indentation);
+}
+
+// A type header can continue across several equally indented lines. Unlike a
+// statement-suite colon it must not open a statement layout frame. This bounded
+// token context changes layout only; Baba still owns all syntax acceptance.
+function isAnnotationColon(tokens: readonly Token[], index: number): boolean {
+  if (tokens[index]?.text !== ":") return false;
+  const name = tokens[index - 1];
+  if (
+    name?.type !== "named" ||
+    (name.kind !== "IDENT" && name.kind !== "TYPE_IDENT")
+  ) {
+    return false;
+  }
+  let before = index - 2;
+  if (["!", "?", "&", "~"].includes(tokens[before]?.text)) before -= 1;
+  const head = tokens[before]?.text;
+  if (["let", "const", "use", "(", ","].includes(head)) return true;
+  return head === "rec" && ["let", "const"].includes(tokens[before - 1]?.text);
 }
 
 function opensSuite(token: Token): boolean {

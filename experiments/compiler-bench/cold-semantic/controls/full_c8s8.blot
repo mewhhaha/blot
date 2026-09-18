@@ -105,7 +105,7 @@ const registry_a = {
 const graph_a = PlanThen ((PlanThen (PlanGroup ["s0"], PlanThen (PlanGroup ["s1"], PlanThen (PlanGroup ["s2"], PlanGroup ["s3"])))), PlanThen ((PlanBarrier "cut0"), (PlanThen (PlanGroup ["s4"], PlanThen (PlanGroup ["s5"], PlanThen (PlanGroup ["s6"], PlanGroup ["s7"]))))))
 const plan_a = PlanCompile_a (Row_a, registry_a, graph_a)
 
-const seed_a :: (Int, Int) -> [Row_a]
+const seed_a: (Int, Int) -> [Row_a]
 const seed_a = fn (count, offset) => Iter.collect (Iter.map (
   Iter.range (0, count),
   fn index => {
@@ -122,14 +122,14 @@ const seed_a = fn (count, offset) => Iter.collect (Iter.map (
 ))
 
 const render_a = fn row => row.C0 + row.C1.x * 5 + row.C1.y * 7 + Text.length row.C2 + flag_value row.C3 + row.C4 + row.C5.x * 5 + row.C5.y * 7 + Text.length row.C6 + flag_value row.C7
-const checksum_a :: [Row_a] -> Int
+const checksum_a: [Row_a] -> Int
 const checksum_a = fn rows => fold (rows, 0, fn (total, row) => total + render_a row)
 
 const Sched_a = SchedFn_a Row_a
 const tick1_a = Sched_a.merge (registry_a.s0.step, Sched_a.merge (registry_a.s1.step, Sched_a.merge (registry_a.s2.step, Sched_a.merge (registry_a.s3.step, Sched_a.merge (registry_a.s4.step, Sched_a.merge (registry_a.s5.step, Sched_a.merge (registry_a.s6.step, registry_a.s7.step)))))))
 
 const Loop_a = ForceForWorld_a Row_a
-const initial_a :: Unit -> Row_a
+const initial_a: Unit -> Row_a
 const initial_a = fn () => {
     .which = "a";
     .C0 = 0;
@@ -187,7 +187,7 @@ const registry_b = {
 const graph_b = PlanThen ((PlanThen (PlanGroup ["s0"], PlanThen (PlanGroup ["s1"], PlanThen (PlanGroup ["s2"], PlanGroup ["s3"])))), PlanThen ((PlanBarrier "cut0"), (PlanThen (PlanGroup ["s4"], PlanThen (PlanGroup ["s5"], PlanThen (PlanGroup ["s6"], PlanGroup ["s7"]))))))
 const plan_b = PlanCompile_b (Row_b, registry_b, graph_b)
 
-const seed_b :: (Int, Int) -> [Row_b]
+const seed_b: (Int, Int) -> [Row_b]
 const seed_b = fn (count, offset) => Iter.collect (Iter.map (
   Iter.range (0, count),
   fn index => {
@@ -204,14 +204,14 @@ const seed_b = fn (count, offset) => Iter.collect (Iter.map (
 ))
 
 const render_b = fn row => row.C0 + row.C1.x * 5 + row.C1.y * 7 + Text.length row.C2 + flag_value row.C3 + row.C4 + row.C5.x * 5 + row.C5.y * 7 + Text.length row.C6 + flag_value row.C7
-const checksum_b :: [Row_b] -> Int
+const checksum_b: [Row_b] -> Int
 const checksum_b = fn rows => fold (rows, 0, fn (total, row) => total + render_b row)
 
 const Sched_b = SchedFn_b Row_b
 const tick1_b = Sched_b.merge (registry_b.s0.step, Sched_b.merge (registry_b.s1.step, Sched_b.merge (registry_b.s2.step, Sched_b.merge (registry_b.s3.step, Sched_b.merge (registry_b.s4.step, Sched_b.merge (registry_b.s5.step, Sched_b.merge (registry_b.s6.step, registry_b.s7.step)))))))
 
 const Loop_b = ForceForWorld_b Row_b
-const initial_b :: Unit -> Row_b
+const initial_b: Unit -> Row_b
 const initial_b = fn () => {
     .which = "b";
     .C0 = 0;
@@ -269,7 +269,7 @@ const registry_c = {
 const graph_c = PlanThen ((PlanThen (PlanGroup ["s0"], PlanThen (PlanGroup ["s1"], PlanThen (PlanGroup ["s2"], PlanGroup ["s3"])))), PlanThen ((PlanBarrier "cut0"), (PlanThen (PlanGroup ["s4"], PlanThen (PlanGroup ["s5"], PlanThen (PlanGroup ["s6"], PlanGroup ["s7"]))))))
 const plan_c = PlanCompile_c (Row_c, registry_c, graph_c)
 
-const seed_c :: (Int, Int) -> [Row_c]
+const seed_c: (Int, Int) -> [Row_c]
 const seed_c = fn (count, offset) => Iter.collect (Iter.map (
   Iter.range (0, count),
   fn index => {
@@ -286,14 +286,14 @@ const seed_c = fn (count, offset) => Iter.collect (Iter.map (
 ))
 
 const render_c = fn row => row.C0 + row.C1.x * 5 + row.C1.y * 7 + Text.length row.C2 + flag_value row.C3 + row.C4 + row.C5.x * 5 + row.C5.y * 7 + Text.length row.C6 + flag_value row.C7
-const checksum_c :: [Row_c] -> Int
+const checksum_c: [Row_c] -> Int
 const checksum_c = fn rows => fold (rows, 0, fn (total, row) => total + render_c row)
 
 const Sched_c = SchedFn_c Row_c
 const tick1_c = Sched_c.merge (registry_c.s0.step, Sched_c.merge (registry_c.s1.step, Sched_c.merge (registry_c.s2.step, Sched_c.merge (registry_c.s3.step, Sched_c.merge (registry_c.s4.step, Sched_c.merge (registry_c.s5.step, Sched_c.merge (registry_c.s6.step, registry_c.s7.step)))))))
 
 const Loop_c = ForceForWorld_c Row_c
-const initial_c :: Unit -> Row_c
+const initial_c: Unit -> Row_c
 const initial_c = fn () => {
     .which = "c";
     .C0 = 0;
@@ -314,7 +314,7 @@ const run_c = Loop_c.run game_c
 
 const World = ForceUnite [Row_a, Row_b, Row_c]
 
-const run :: Int -> Int
-const run = fn (count :: Int) -> Int => run_a count + run_b count + run_c count
+const run: Int -> Int
+const run = fn (count: Int) -> Int => run_a count + run_b count + run_c count
 
 return { .run; }

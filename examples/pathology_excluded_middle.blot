@@ -3,6 +3,6 @@
 open import "blot:prelude"
 
 const Allowed = refine (range (-10, 10), fn value => value < 0 || value >= 0)
-let chosen :: Allowed
+let chosen: Allowed
 let chosen = -10
 return chosen

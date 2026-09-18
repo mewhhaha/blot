@@ -797,7 +797,7 @@
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 13290
+      "lines": 13332
     },
     {
       "path": "compiler/src/backend.rs",
@@ -817,7 +817,7 @@
     },
     {
       "path": "compiler/src/frontend_plan.rs",
-      "lines": 3780
+      "lines": 3772
     },
     {
       "path": "src/syntax/lower.ts",

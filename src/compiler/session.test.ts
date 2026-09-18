@@ -59,7 +59,7 @@ test("typed multi-subject Boolean matrix rejects its missing combination", async
       compiler.checkSource(
         join(tmpdir(), "blot-typed-incomplete-matrix.blot"),
         'open import "blot:prelude"\n' +
-          "let choose :: (Bool, Bool) -> Int\n" +
+          "let choose: (Bool, Bool) -> Int\n" +
           "let choose = fn (first, second) => case first, second of\n" +
           "  #True, _ => 1\n" +
           "  _, #True => 2\n" +
@@ -777,7 +777,7 @@ test("branch restoration still rejects two moves along one path", async () => {
         "examples/double_move.test.blot",
         `
 open import "blot:prelude"
-const bad :: Int -> [Int]
+const bad: Int -> [Int]
 const bad = fn count => do:
   let heads = [0, 1]
   for index in Iter.range (0, count):

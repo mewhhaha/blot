@@ -1,6 +1,6 @@
 open import "blot:prelude"
 const Cost = Option Int
-const cheapest :: (Cost, Cost) -> Cost
+const cheapest: (Cost, Cost) -> Cost
 const cheapest = fn (left, right) => case left of
   #None => right
   #Some left_cost => case right of

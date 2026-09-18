@@ -13,20 +13,20 @@ const CacheError = #CacheMiss Text
 const StoreError = #StoreMiss Text
 const ResolutionError = Fallback.BothFailed (CacheError, StoreError)
 
-const cache :: Text -> Result (Profile, CacheError)
+const cache: Text -> Result (Profile, CacheError)
 const cache = fn key => case key == "cached" of
   #True => #Ok { .name = "Ada"; .source_score = 1; }
   #False => #Error (#CacheMiss key)
 
-const store :: (Text, Int) -> Result (Profile, StoreError)
+const store: (Text, Int) -> Result (Profile, StoreError)
 const store = fn (key, divisor) => case key == "missing" of
   #True => #Error (#StoreMiss key)
   #False => #Ok { .name = "Grace"; .source_score = 84 / divisor; }
 
-const resolve :: (Text, Int) -> Result (Profile, ResolutionError)
+const resolve: (Text, Int) -> Result (Profile, ResolutionError)
 const resolve = fn (key, divisor) => cache key |> Fallback.recover_with_context (store (key, divisor))
 
-const replace_error :: (Text, Int) -> Result (Profile, StoreError)
+const replace_error: (Text, Int) -> Result (Profile, StoreError)
 const replace_error = fn (key, divisor) => cache key |> Fallback.recover (store (key, divisor))
 
 const Remote = @effect { .load = Text -> Result (Profile, StoreError); }
@@ -34,7 +34,7 @@ const Remote = @effect { .load = Text -> Result (Profile, StoreError); }
 // Demand is conditional at runtime, but effect checking is deliberately
 // conservative: this resolver keeps `Remote` in its row even when a cache hit
 // skips the deferred `Remote.load` expression.
-let resolve_remote :: Text -> Result (Profile, ResolutionError) ~ { Remote }
+let resolve_remote: Text -> Result (Profile, ResolutionError) ~ { Remote }
 let resolve_remote = fn key => cache key |> Fallback.recover_with_context (Remote.load key)
 
 const remote_handler = {
@@ -47,12 +47,12 @@ const remote_handler = {
   .return = fn answer => answer;
 }
 
-let cached_remote_program :: Unit -> Result (Profile, ResolutionError) ~ { Remote }
+let cached_remote_program: Unit -> Result (Profile, ResolutionError) ~ { Remote }
 let cached_remote_program = fn () => resolve_remote "cached"
 let cached_remote = cached_remote_program |> @handle (Remote, remote_handler)
 use cached_remote_answer <- cached_remote
 
-let missing_remote_program :: Unit -> Result (Profile, ResolutionError) ~ { Remote }
+let missing_remote_program: Unit -> Result (Profile, ResolutionError) ~ { Remote }
 let missing_remote_program = fn () => resolve_remote "remote"
 let missing_remote = missing_remote_program |> @handle (Remote, remote_handler)
 use missing_remote_answer <- missing_remote

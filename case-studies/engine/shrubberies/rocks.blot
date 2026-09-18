@@ -10,7 +10,7 @@ const Rock = { .centre = Point; .radii = Point; .color = C.Color; }
 let cool_granite = C.rgb (111, 119, 124)
 let sun_warmed_stone = C.rgb (139, 124, 105)
 
-let rocks :: [Rock]
+let rocks: [Rock]
 let rocks =
   [
     {

@@ -6,7 +6,7 @@ const Yield = fn T => @effect { .emit = T -> Unit; }
 const Amounts = Yield Int
 const Labels = Yield Text
 
-let prices :: Unit -> Int ~ { Amounts }
+let prices: Unit -> Int ~ { Amounts }
 let prices = fn () => do:
   use Amounts.emit 10
   use Amounts.emit 20

@@ -2,7 +2,7 @@
 // an owned input is transferred before traversal begins.
 open import "blot:prelude"
 
-const map_with ::
+const map_with:
   @forall (fn e => @forall (fn T => @forall (fn U => do:
     return ((T -> U) ~ [e]) -> (([T] -> [U]) ~ [e])
   )))
@@ -20,7 +20,7 @@ const map_with = fn transform => fn values => do:
 
       return visit (1, [first_mapped])
 
-const filter_with ::
+const filter_with:
   @forall (fn e => @forall (fn T => do:
     return ((T -> Bool) ~ [e]) -> (([T] -> [T]) ~ [e])
   ))
@@ -41,7 +41,7 @@ const filter_with = fn keep => fn values => do:
 
       return visit (0, output)
 
-const fold_with ::
+const fold_with:
   @forall (fn e => @forall (fn T => @forall (fn S => do:
     return (((S, T) -> S) ~ [e]) -> S -> (([T] -> S) ~ [e])
   )))

@@ -9,23 +9,23 @@ const Order = { .id = Int; .customer_id = CustomerId; .total = Int; }
 const Product = { .id = ProductId; .name = Text; }
 const Line = { .product_id = ProductId; .quantity = Int; }
 
-const customer_id_value :: CustomerId -> Int
+const customer_id_value: CustomerId -> Int
 const customer_id_value = fn id => case id of
   #CustomerId value => value
 
-const product_id_value :: ProductId -> Int
+const product_id_value: ProductId -> Int
 const product_id_value = fn id => case id of
   #ProductId value => value
 
-const customer_id_equal :: (CustomerId, CustomerId) -> Bool
+const customer_id_equal: (CustomerId, CustomerId) -> Bool
 const customer_id_equal =
   fn (left, right) => customer_id_value left == customer_id_value right
 
-const product_id_equal :: (ProductId, ProductId) -> Bool
+const product_id_equal: (ProductId, ProductId) -> Bool
 const product_id_equal =
   fn (left, right) => product_id_value left == product_id_value right
 
-const customer_orders :: Join.On (Customer, Order, CustomerId)
+const customer_orders: Join.On (Customer, Order, CustomerId)
 const customer_orders =
   {
     .left_key = fn customer => customer.id;
@@ -33,7 +33,7 @@ const customer_orders =
     .equal = customer_id_equal;
   }
 
-const product_lines :: Join.On (Product, Line, ProductId)
+const product_lines: Join.On (Product, Line, ProductId)
 const product_lines =
   {
     .left_key = fn product => product.id;
@@ -67,7 +67,7 @@ const lines =
   ]
 
 const CustomerSummary = { .customer = Text; .order_count = Int; .total = Int; }
-const summarize_customer :: Join.Group (Customer, Order) -> CustomerSummary
+const summarize_customer: Join.Group (Customer, Order) -> CustomerSummary
 const summarize_customer = fn group => {
   .customer = group.left.name;
   .order_count = Array.length (&group.matches);
@@ -75,7 +75,7 @@ const summarize_customer = fn group => {
 }
 
 const ProductSummary = { .product = Text; .line_count = Int; .quantity = Int; }
-const summarize_product :: Join.Group (Product, Line) -> ProductSummary
+const summarize_product: Join.Group (Product, Line) -> ProductSummary
 const summarize_product = fn group => {
   .product = group.left.name;
   .line_count = Array.length (&group.matches);
@@ -87,22 +87,22 @@ const summarize_product = fn group => {
 }
 
 const OrderSummary = { .order = Int; .customer_count = Int; }
-const summarize_order :: Join.Group (Order, Customer) -> OrderSummary
+const summarize_order: Join.Group (Order, Customer) -> OrderSummary
 const summarize_order = fn group => {
   .order = group.left.id;
   .customer_count = Array.length (&group.matches);
 }
 
-const customer_groups :: [Join.Group (Customer, Order)]
+const customer_groups: [Join.Group (Customer, Order)]
 const customer_groups = Join.group (customer_orders, customers, orders)
 
-const product_groups :: [Join.Group (Product, Line)]
+const product_groups: [Join.Group (Product, Line)]
 const product_groups = Join.group (product_lines, products, lines)
 
-const order_groups :: [Join.Group (Order, Customer)]
+const order_groups: [Join.Group (Order, Customer)]
 const order_groups = Join.group (Join.flip customer_orders, orders, customers)
 
-const empty_right :: [Join.Group (Customer, Order)]
+const empty_right: [Join.Group (Customer, Order)]
 const empty_right = Join.group (customer_orders, customers, [])
 
 const empty_left = Join.group (customer_orders, [], orders)

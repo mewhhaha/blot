@@ -32,7 +32,7 @@ const Receipt =
 const CheckoutError =
   #InvalidQuantity Int | #InvalidUnitPrice Int | #LimitExceeded Int
 
-let price :: Step (Draft, Priced, CheckoutError)
+let price: Step (Draft, Priced, CheckoutError)
 let price = fn draft => case draft of
   #Draft request => do:
     if request.quantity <= 0:
@@ -46,7 +46,7 @@ let price = fn draft => case draft of
       .subtotal = request.quantity * request.unit_price;
     })
 
-let authorize :: Step (Priced, Approved, CheckoutError)
+let authorize: Step (Priced, Approved, CheckoutError)
 let authorize = fn priced => case priced of
   #Priced order => do:
     if order.subtotal > 100:
@@ -57,7 +57,7 @@ let authorize = fn priced => case priced of
       .reference = "approved";
     })
 
-let capture :: Step (Approved, Receipt, CheckoutError)
+let capture: Step (Approved, Receipt, CheckoutError)
 let capture = fn approved => case approved of
   #Approved payment => Ok (#Receipt {
     .subtotal = payment.subtotal;
@@ -69,7 +69,7 @@ let capture = fn approved => case approved of
 // compact without weakening the state relationship.
 // The only composition rule is adjacency: the first step's output must be the
 // second step's input. `CheckoutError` stays one exhaustively matched union.
-let checkout :: Step (Draft, Receipt, CheckoutError)
+let checkout: Step (Draft, Receipt, CheckoutError)
 let checkout = Flow.and_then (price, Flow.and_then (authorize, capture))
 
 const Outcome =
@@ -79,7 +79,7 @@ const Outcome =
     .detail = Int;
   }
 
-let summarize :: Result (Receipt, CheckoutError) -> Outcome
+let summarize: Result (Receipt, CheckoutError) -> Outcome
 let summarize = fn result => case result of
   #Ok receipt => case receipt of
     #Receipt value => {

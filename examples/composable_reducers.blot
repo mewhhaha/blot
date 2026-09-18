@@ -19,7 +19,7 @@ const Report =
     .average_unit_cents = Option Int;
   }
 
-const sum_int :: R.Reducer (Int, Int, Int)
+const sum_int: R.Reducer (Int, Int, Int)
 const sum_int =
   {
     .initial = 0;
@@ -27,7 +27,7 @@ const sum_int =
     .finish = fn state => state;
   }
 
-const count_lines :: R.Reducer (Line, Int, Int)
+const count_lines: R.Reducer (Line, Int, Int)
 const count_lines =
   {
     .initial = 0;
@@ -35,14 +35,14 @@ const count_lines =
     .finish = fn state => state;
   }
 
-const revenue :: R.Reducer (Line, Int, Int)
+const revenue: R.Reducer (Line, Int, Int)
 const revenue =
   R.contramap (
     sum_int,
     fn line => line.quantity * line.unit_cents
   )
 
-const units :: R.Reducer (Line, Int, Int)
+const units: R.Reducer (Line, Int, Int)
 const units = R.contramap (sum_int, fn line => line.quantity)
 
 const money =
@@ -80,7 +80,7 @@ const report =
 
 // A concrete public boundary closes the generic input type, so callers of
 // `analyze` must provide actual `Line` values even though `R.run` is generic.
-const analyze :: [Line] -> Report
+const analyze: [Line] -> Report
 const analyze = fn values => R.run (report, values)
 
 const lines =

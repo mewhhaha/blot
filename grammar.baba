@@ -90,7 +90,7 @@ signature = (
   kind:("let" | "const")
   recursive:"rec"?
   name:(IDENT | TYPE_IDENT)
-  "::"
+  ":"
   value:(value | indented_value)
   LAYOUT_NEWLINE
 ) ;
@@ -100,7 +100,7 @@ binding = (
   kind:("let" | "const")
   recursive:"rec"?
   pattern:binding_pattern
-  annotation:("::" value)?
+  annotation:(":" value)?
   "="
   value:(value | indented_value)
   LAYOUT_NEWLINE
@@ -150,7 +150,7 @@ index_suffix = ("[" value:value "]") ;
 sequencing = (
   "use"
   head:value
-  annotation:("::" value)?
+  annotation:(":" value)?
   ("<-" value:value)?
   LAYOUT_NEWLINE
 ) ;
@@ -258,7 +258,7 @@ tuple_pattern = (
 
 annotated_pattern = (
   pattern:binding_pattern
-  annotation:("::" value)?
+  annotation:(":" value)?
 ) ;
 
 array_pattern = (

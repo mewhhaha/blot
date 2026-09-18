@@ -119,7 +119,7 @@ The [standalone fold probe](../experiments/pr-triage/fold_input.blot) is:
 
 ```blot
 open import "blot:prelude"
-const add :: (Int, Int) -> Int
+const add: (Int, Int) -> Int
 const add = fn (sum, value) => sum + value
 return fold (["oops"], 0, add)
 ```

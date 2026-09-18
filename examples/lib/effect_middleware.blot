@@ -3,7 +3,7 @@ open import "blot:prelude"
 const Trace = @effect { .event = Text -> Unit; }
 const Metrics = @effect { .increment = Text -> Unit; }
 
-let traced ::
+let traced:
   @forall (fn Input => @forall (fn Output => (Input -> Output ~ { ..e }) -> Input -> Output ~ { Trace, ..e }))
 let traced = fn operation => fn input => do:
   use Trace.event "start"
@@ -11,7 +11,7 @@ let traced = fn operation => fn input => do:
   use Trace.event "finish"
   return output
 
-let counted ::
+let counted:
   @forall (fn Input => @forall (fn Output => (Input -> Output ~ { ..e }) -> Input -> Output ~ { Metrics, ..e }))
 let counted = fn operation => fn input => do:
   use Metrics.increment "call"

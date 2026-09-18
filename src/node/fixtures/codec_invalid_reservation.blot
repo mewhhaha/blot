@@ -4,6 +4,6 @@ const Guests = refine (Int, fn value => value >= 1 && value <= 8)
 const Nights = refine (Int, fn value => value >= 1 && value <= 30)
 const Reservation = { .guests = Guests; .nights = Nights; }
 
-const invalid :: Reservation
+const invalid: Reservation
 const invalid = { .guests = 0; .nights = 4; }
 return invalid

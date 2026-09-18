@@ -2,14 +2,14 @@ open import "blot:prelude"
 
 const P = import "../../../examples/lib/prism.blot"
 
-const first :: P.Prism (Int, Text)
+const first: P.Prism (Int, Text)
 const first =
   {
     .preview = fn _ => #Some "first";
     .review = fn _ => 1;
   }
 
-const second :: P.Prism (Int, Text)
+const second: P.Prism (Int, Text)
 const second =
   {
     .preview = fn _ => #Some "second";

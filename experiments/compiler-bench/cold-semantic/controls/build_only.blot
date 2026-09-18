@@ -98,7 +98,7 @@ const registry_a = {
   );
 }
 
-const seed_a :: (Int, Int) -> [Row_a]
+const seed_a: (Int, Int) -> [Row_a]
 const seed_a = fn (count, offset) => Iter.collect (Iter.map (
   Iter.range (0, count),
   fn index => {
@@ -111,14 +111,14 @@ const seed_a = fn (count, offset) => Iter.collect (Iter.map (
 ))
 
 const render_a = fn row => row.C0 + row.C1.x * 5 + row.C1.y * 7 + Text.length row.C2 + flag_value row.C3
-const checksum_a :: [Row_a] -> Int
+const checksum_a: [Row_a] -> Int
 const checksum_a = fn rows => fold (rows, 0, fn (total, row) => total + render_a row)
 
 const Sched_a = SchedFn_a Row_a
 const tick1_a = Sched_a.merge (registry_a.s0.step, Sched_a.merge (registry_a.s1.step, Sched_a.merge (registry_a.s2.step, Sched_a.merge (registry_a.s3.step, Sched_a.merge (registry_a.s4.step, Sched_a.merge (registry_a.s5.step, Sched_a.merge (registry_a.s6.step, registry_a.s7.step)))))))
 
 const Loop_a = ForceForWorld_a Row_a
-const initial_a :: Unit -> Row_a
+const initial_a: Unit -> Row_a
 const initial_a = fn () => {
     .which = "a";
     .C0 = 0;
@@ -169,7 +169,7 @@ const registry_b = {
   );
 }
 
-const seed_b :: (Int, Int) -> [Row_b]
+const seed_b: (Int, Int) -> [Row_b]
 const seed_b = fn (count, offset) => Iter.collect (Iter.map (
   Iter.range (0, count),
   fn index => {
@@ -182,14 +182,14 @@ const seed_b = fn (count, offset) => Iter.collect (Iter.map (
 ))
 
 const render_b = fn row => row.C0 + row.C1.x * 5 + row.C1.y * 7 + Text.length row.C2 + flag_value row.C3
-const checksum_b :: [Row_b] -> Int
+const checksum_b: [Row_b] -> Int
 const checksum_b = fn rows => fold (rows, 0, fn (total, row) => total + render_b row)
 
 const Sched_b = SchedFn_b Row_b
 const tick1_b = Sched_b.merge (registry_b.s0.step, Sched_b.merge (registry_b.s1.step, Sched_b.merge (registry_b.s2.step, Sched_b.merge (registry_b.s3.step, Sched_b.merge (registry_b.s4.step, Sched_b.merge (registry_b.s5.step, Sched_b.merge (registry_b.s6.step, registry_b.s7.step)))))))
 
 const Loop_b = ForceForWorld_b Row_b
-const initial_b :: Unit -> Row_b
+const initial_b: Unit -> Row_b
 const initial_b = fn () => {
     .which = "b";
     .C0 = 0;
@@ -240,7 +240,7 @@ const registry_c = {
   );
 }
 
-const seed_c :: (Int, Int) -> [Row_c]
+const seed_c: (Int, Int) -> [Row_c]
 const seed_c = fn (count, offset) => Iter.collect (Iter.map (
   Iter.range (0, count),
   fn index => {
@@ -253,14 +253,14 @@ const seed_c = fn (count, offset) => Iter.collect (Iter.map (
 ))
 
 const render_c = fn row => row.C0 + row.C1.x * 5 + row.C1.y * 7 + Text.length row.C2 + flag_value row.C3
-const checksum_c :: [Row_c] -> Int
+const checksum_c: [Row_c] -> Int
 const checksum_c = fn rows => fold (rows, 0, fn (total, row) => total + render_c row)
 
 const Sched_c = SchedFn_c Row_c
 const tick1_c = Sched_c.merge (registry_c.s0.step, Sched_c.merge (registry_c.s1.step, Sched_c.merge (registry_c.s2.step, Sched_c.merge (registry_c.s3.step, Sched_c.merge (registry_c.s4.step, Sched_c.merge (registry_c.s5.step, Sched_c.merge (registry_c.s6.step, registry_c.s7.step)))))))
 
 const Loop_c = ForceForWorld_c Row_c
-const initial_c :: Unit -> Row_c
+const initial_c: Unit -> Row_c
 const initial_c = fn () => {
     .which = "c";
     .C0 = 0;
@@ -279,7 +279,7 @@ const tick_a = Sched_a.each Sched_a.empty
 const tick_b = Sched_b.each Sched_b.empty
 const tick_c = Sched_c.each Sched_c.empty
 
-const run :: Int -> Int
-const run = fn (count :: Int) -> Int => checksum_a (tick_a (seed_a (count, 0))) + checksum_b (tick_b (seed_b (count, 0))) + checksum_c (tick_c (seed_c (count, 0)))
+const run: Int -> Int
+const run = fn (count: Int) -> Int => checksum_a (tick_a (seed_a (count, 0))) + checksum_b (tick_b (seed_b (count, 0))) + checksum_c (tick_c (seed_c (count, 0)))
 
 return { .run; }

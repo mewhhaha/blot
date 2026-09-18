@@ -61,7 +61,7 @@ operations, not runtime reflection.
 
 ```blot
 const Codec = Derive.integer_record { .count = Int; .code = Int; }
-let encode :: Int -> Text
+let encode: Int -> Text
 let encode = fn count => Codec.encode { .count = count; .code = 7; }
 ```
 

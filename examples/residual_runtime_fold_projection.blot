@@ -5,7 +5,7 @@ const project = fn runtime_token => {
   .magazine = 12;
 }
 
-const folded_project_value :: Int -> Int
+const folded_project_value: Int -> Int
 const folded_project_value = fn state => fold (
   [(project state).magazine],
   0,
