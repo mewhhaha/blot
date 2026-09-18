@@ -12,6 +12,17 @@ The compiler implements one language judgment. A fast path, cache hit, resident
 server, batch scheduler, auxiliary evaluator, or target backend may validate or
 memoize that judgment; it cannot define a weaker semantic mode.
 
+## Opt-in research boundary
+
+The separate `experiments/staged-core/native` Rust crate exposes the laboratory
+in [`STAGED_PROTOTYPE.md`](STAGED_PROTOTYPE.md). Its checked pure core and
+explicitly experimental Wasm artifact implement only a restricted research
+fragment. They are not production typed artifacts, certificates, validated
+Runtime HIR, or the canonical ABI. No production entry point, query or backend
+consumes them. Baba's existing frontend is reused; there is no alternate
+lexer/parser or host semantic implementation. Feature tests and an additive
+execution workflow check this experiment without weakening any production gate.
+
 ## 1. Whole-compiler judgment
 
 Let:

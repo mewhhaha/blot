@@ -24,6 +24,16 @@ namespace, and the compilation boundaries to WebAssembly.
 the authority for what accepted source means. A disagreement between either one
 and the compiler is a compiler or specification bug.
 
+## Experimental implementation boundary
+
+The opt-in `staged-prototype` laboratory described in
+[`spec/STAGED_PROTOTYPE.md`](spec/STAGED_PROTOTYPE.md) tests a proposed pure
+staged core using Baba's syntax. Its `@staged.*` operations and uniform-word ABI
+are not production language primitives or an alternative accepted Blot mode.
+Normal compilation never selects it, and unsupported effects, ownership and
+other source forms are refused rather than erased or delegated. This document
+remains authoritative for production source meaning.
+
 ## 1. Design model
 
 Blot is a strict, expression-oriented functional language with:

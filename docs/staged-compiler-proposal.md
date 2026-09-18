@@ -6,7 +6,21 @@ This is the architecture direction for PR #172's 100 ms investigation. It is a
 **proposal, not the implemented language or a performance result**. The existing
 Rust/Wasm compiler and the normative contracts in `LANGUAGE.md` and `spec/`
 remain authoritative. The existing optimization experiments remain measurable
-changes in their own right; they do not implement this architecture.
+changes in their own right.
+
+An initial opt-in **pure M1 / narrow executable M2 slice** now lives in
+`compiler/src/staged/`. It implements rank-one and open-record inference,
+explicit static execution of checked core, computed schemas and closed typed
+accessor/quotation generation, nominal fresh types, reusable runtime closures,
+and dependency-validated real edits. The native CLI emits runnable, validated
+Wasm under a deliberately experimental scalar ABI. This does not implement the
+full M1 feature target: effects/ownership, general recursion, variants, scoped
+open quotation and suspended static obligations remain future work.
+
+The [experiment README](../experiments/staged-core/README.md) and
+[laboratory contract](../spec/STAGED_PROTOTYPE.md) distinguish implemented
+behavior, unsupported forms, work counters and validation. No application-level
+100 ms result or production semantic replacement is claimed.
 
 Keep strong compile-time execution, first-class type values, generated types,
 reflection, higher-order compile-time functions, inferred generics, and typed
@@ -277,5 +291,6 @@ Report initialization, cold and edited full compilation, invalidation, emitted
 bytes, peak/retained memory, work counters, and output checks separately. Test
 multiple workloads rather than optimizing one private application alone. A fast
 development backend may omit expensive optional optimization, never required
-type/effect/ownership checks or static obligations. This is the next experiment
-to build, not a result already achieved.
+type/effect/ownership checks or static obligations. The pure laboratory now
+tests part of this matrix; full-feature acceptance and application-level latency
+remain unestablished.
