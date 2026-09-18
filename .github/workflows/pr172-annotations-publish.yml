@@ -1,0 +1,84 @@
+name: Publish inspected colon migration and architecture proposal
+
+on:
+  push:
+    branches: ['workbench/pr172-annotations-publish-20260918']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Verify and retain the inspected patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .delivery/pr172-annotations/mechanical.py "$RUNNER_TEMP/mechanical.py"
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          encoded = b''.join(pathlib.Path(f'.delivery/pr172-annotations/part{i}').read_bytes() for i in range(4))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'b38584ada651cc8b825c35e593658e9b255cc58b9973a745ac6131259b6191ab'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'annotations.patch').write_bytes(patch)
+          PY
+      - name: Reconstruct only the inspected source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach f2fc306b5644030d8cd1c055348d625a08d7be1b
+          python3 "$RUNNER_TEMP/mechanical.py"
+          git apply "$RUNNER_TEMP/annotations.patch"
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.19.0'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - run: pnpm install --frozen-lockfile
+      - name: Regenerate grammar, canonical formatting, snapshot and inventories
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno task generate
+          cargo fmt --manifest-path compiler/Cargo.toml --all
+          deno fmt
+          node --import tsx scripts/format_blot.ts --write --base f2fc306b5644030d8cd1c055348d625a08d7be1b
+          pnpm compiler:build
+          deno run --allow-read --allow-write scripts/generate_language_health.ts
+      - name: Verify the exact locally tested tree and focused syntax checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          actual=$(git write-tree)
+          echo "Reconstructed tree: $actual"
+          test "$actual" = bc1d965809b49aeaa511313ce48f8618cb357f5f
+          git diff --cached --check
+          git diff --cached --exit-code -- .github
+          deno fmt --check
+          deno lint
+          deno test --allow-read src/syntax/type_annotations.test.ts scripts/migrate_type_annotations.test.ts
+          deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts --check
+          deno run --allow-read scripts/generate_language_health.ts --check
+      - name: Publish isolated candidate without PR or main writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name OpenAI
+          git config user.email noreply@openai.com
+          git commit -m 'feat: use single-colon type annotations and record staged compiler direction' -m 'Migrate Baba grammar, layout, formatters, editor tooling, source fixtures, documentation and generated artifacts together. Include a lexer-based legacy migration utility and syntax regressions. Record the approved architecture as a proposal, not an implemented rewrite or a latency claim.'
+          git push origin HEAD:refs/heads/workbench/pr172-annotations-candidate-20260918
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
