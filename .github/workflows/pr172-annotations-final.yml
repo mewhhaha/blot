@@ -1,0 +1,77 @@
+name: Validate compound annotation layout before publication
+
+on:
+  push:
+    branches: ['workbench/pr172-annotations-final-publish-20260918']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Decode the inspected layout correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          encoded = pathlib.Path('.delivery/pr172-compound/fix.b64').read_bytes()
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '8009813ac8fddc15f75df27549f78385f57b47985a0d5fda42e1b0ee4ebe3f2c'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'compound.patch').write_bytes(patch)
+          PY
+          git checkout --detach 0f383c9467cad3786ac6afb533aab40ab0434e90
+          git apply "$RUNNER_TEMP/compound.patch"
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.19.0'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - run: pnpm install --frozen-lockfile
+      - name: Rebuild generated artifacts from the corrected layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path compiler/Cargo.toml --all
+          deno fmt
+          pnpm compiler:build
+          deno run --allow-read --allow-write scripts/generate_language_health.ts
+      - name: Verify exact source identity and annotation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          actual=$(git write-tree)
+          echo "Reconstructed tree: $actual"
+          test "$actual" = a0229863921ae4621c1e74e9483b64a494b5950f
+          git diff --cached --check
+          git diff --cached --exit-code -- .github
+          deno fmt --check
+          deno lint
+          deno test --allow-read src/syntax/type_annotations.test.ts scripts/migrate_type_annotations.test.ts
+          cargo test --manifest-path compiler/Cargo.toml single_colon_annotations_check_evaluate_and_emit -- --nocapture
+          deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts --check
+          deno run --allow-read scripts/generate_language_health.ts --check
+      - name: Publish isolated final candidate without main or PR writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name OpenAI
+          git config user.email noreply@openai.com
+          git commit -m 'fix: preserve multiline annotations on compound parameters' -m 'Use matching delimiter metadata to distinguish annotation continuations from statement suites in both layout implementations. Cover tuple, constructor and unit patterns alongside parenthesized block suites; Baba remains the parser authority.'
+          git push origin HEAD:refs/heads/workbench/pr172-annotations-final-20260918
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
