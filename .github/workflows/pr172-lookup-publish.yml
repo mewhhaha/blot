@@ -1,0 +1,75 @@
+name: Publish inspected PR 172 WIP checkpoint
+
+on:
+  push:
+    branches: ['workbench/pr172-lookup-publish-20260918']
+    paths: ['.delivery/pr172-lookup/**', '.github/workflows/pr172-lookup-publish.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Decode and verify the inspected public-source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          encoded = pathlib.Path('.delivery/pr172-lookup/patch.b64').read_bytes()
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert len(patch) == 49691
+          assert hashlib.sha256(patch).hexdigest() == '1db9b7edfa60a44cb0392f0cb17aed299a330f49fa1d0792dc1b21867f725246'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'pr172-lookup.patch').write_bytes(patch)
+          PY
+      - name: Apply to the exact PR head and verify the complete source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=2529e5203d203710f6f11e1545e9cc526feced03
+          git fetch --no-tags origin "$base"
+          git checkout --detach "$base"
+          test "$(git rev-parse HEAD^{tree})" = 2c1d176754344559ed64713c6091a6dfb8f98fc6
+          git apply --index "$RUNNER_TEMP/pr172-lookup.patch"
+          git diff --cached --check
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              'compiler/src/eval.rs': 'd092a73258b3cb30ded01a5784ea07661361a9d7',
+              'compiler/src/hir.rs': '5e08635165917e11a6d2798d55f1936d2826abaf',
+              'compiler/src/residual_identity.rs': 'f6eb442714cb0b6a0bde6136d09ea18ad74addc9',
+              'compiler/src/type_instantiation.rs': '53e9bf54affde83ab3ddcf532ce42059d5076c62',
+              'compiler/src/type_value.rs': '68463d5c8afdfdf7796fa0ee4f1bb52200f00b7f',
+              'compiler/src/value.rs': 'bc06285741c626a5de6e39343130639b4e21c9a4',
+              'experiments/compiler-bench/latency-budget/LOOKUP_WIP.md': 'e993506815a299068b3e1f074f329c5ee6fd24ec',
+              'generated/language-health.json': 'ef5caede54d04bec16d04c95894f5692cab00c5b',
+              'spec/STAGING.md': '134f71e5649fd26d8ff7679c73d295104cb5b6ef',
+          }
+          changed = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines()
+          assert set(changed) == set(expected), changed
+          for path, sha in expected.items():
+              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+              assert actual == sha, (path, actual, sha)
+          tree = subprocess.check_output(['git', 'write-tree'], text=True).strip()
+          assert tree == 'fc1051c3cc86639f6d452cf95d9d1c098e8b9f5a', tree
+          print('All changed blobs and the complete integrated source tree match the inspected checkpoint.')
+          PY
+          git config user.name OpenAI
+          git config user.email noreply@openai.com
+          git commit -m 'wip: publish signature substitution and borrowed-evidence experiments' -m 'Apply the saved post-171 checkpoint on top of the existing PR 172 provenance implementation. Adapt its recursive lookup fixture to persistent EffectScope, retain 15 new regressions, refresh generated inventory, and document incomplete performance and full-suite validation. No private application contents or standard CI changes are included.'
+          git diff --exit-code "$base" HEAD -- .github compiler/src/effect_scope.rs compiler/src/value_capsule.rs experiments/compiler-bench/compile-sample.ts experiments/compiler-bench/compile-sample.test.ts generated/compiler
+          git merge-base --is-ancestor "$base" HEAD
+      - name: Publish isolated candidate for verification without PR or main writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/workbench/pr172-lookup-candidate-20260918
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+          echo 'WIP publication only. No merge, force push, PR/main write, or claim of complete validation.' >> "$GITHUB_STEP_SUMMARY"
