@@ -1,0 +1,62 @@
+name: Publish inspected isolated staged compiler
+
+on:
+  push:
+    branches: ['workbench/pr172-staged-publish-20260918']
+    paths: ['.delivery/pr172-staged/**', '.github/workflows/pr172-staged-publish.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Decode and verify the inspected source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          encoded = b''.join(pathlib.Path(f'.delivery/pr172-staged/part{i}').read_bytes() for i in range(4))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert len(patch) == 291207
+          assert hashlib.sha256(patch).hexdigest() == '38b08f844d91271ed3dfcb08f1a61db399e33456a3320fdbd1664884a56422aa'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'staged.patch').write_bytes(patch)
+          PY
+      - name: Reconstruct the exact tested tree on the recorded PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=506879e8f3d2495c89da5dcaa6e5af99f918dd83
+          git fetch --no-tags origin "$base"
+          git checkout --detach "$base"
+          git apply --index "$RUNNER_TEMP/staged.patch"
+          git diff --cached --check
+          test "$(git write-tree)" = 8d35440369b96b5a59f78d45db8d6ddaa02fbae5
+          git diff --cached --exit-code -- compiler/Cargo.toml compiler/src/lib.rs compiler/src/frontend.rs compiler/src/frontend_plan.rs generated
+          python3 - <<'PY'
+          import subprocess
+          changed = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines()
+          exact = {'LANGUAGE.md', 'spec/COMPILER.md', 'spec/STAGED_PROTOTYPE.md', 'docs/staged-compiler-proposal.md', '.github/workflows/staged-prototype.yml'}
+          prefixes = ('compiler/src/staged/', 'experiments/staged-core/')
+          assert len(changed) == 23, changed
+          assert all(p in exact or p.startswith(prefixes) for p in changed), changed
+          assert all('/target/' not in p and not p.endswith('.wasm') for p in changed)
+          print('All 23 source, contract, test, and measurement files match the inspected tree.')
+          PY
+          git config user.name OpenAI
+          git config user.email noreply@openai.com
+          git commit -m 'feat: add isolated typed staging and incremental Wasm prototype' -m 'Implement a pure rank-one/row-inferred Rust core using the existing Baba frontend, explicit typed static execution and generation, runtime closures, dependency-aware definition reuse and symbolic Wasm fragments. Add 35 core regressions, emitted execution checks, synthetic measurements and an independent read-only CI workflow. Production Cargo settings, entry points, frontend and snapshot are unchanged; this is not the full language or a gdev latency result.'
+      - name: Publish only the isolated candidate, without force or main/PR writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/workbench/pr172-staged-candidate-20260918
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+          echo 'The PR branch is updated separately after verifying this candidate.' >> "$GITHUB_STEP_SUMMARY"
