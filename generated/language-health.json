@@ -793,7 +793,7 @@
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 16766
+      "lines": 16916
     },
     {
       "path": "compiler/src/session.rs",
@@ -805,7 +805,7 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 7942
+      "lines": 7967
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -832,12 +832,12 @@
       "lines": 3580
     },
     {
-      "path": "compiler/src/primitives.rs",
-      "lines": 2500
+      "path": "compiler/src/value.rs",
+      "lines": 2689
     },
     {
-      "path": "compiler/src/value.rs",
-      "lines": 2491
+      "path": "compiler/src/primitives.rs",
+      "lines": 2500
     },
     {
       "path": "src/language_service.ts",

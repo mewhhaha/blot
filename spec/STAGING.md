@@ -213,7 +213,17 @@ first-binding behavior. A previously bound variable retains its recorded value.
 These shortcuts cannot bypass source checking or predicate obligations. Closed
 subgraphs may be reused during substitution, but environment-specific
 substitution results must not be reused across independent calls or later
-changes to lexical substitution environments.
+changes to lexical substitution environments. Within one synchronous
+signature-substitution operation, repeated immutable function/range edges and
+record storage may share their substituted result. The operation retains its
+indexed input owners; addresses identify repeated storage and never establish
+type equality. Its memo is discarded before another operation, including another
+read of the same lexical environment. Missing and nearest type/effect
+substitutions therefore remain sensitive to later changes to bindings and parent
+scopes. Sharing preserves the existing single-step substitution of a variable's
+replacement, quantified binder identities, effect-row tails, and union
+normalization. It does not authorize source-call memoization or a second
+compatibility judgment.
 
 Closure calls select signature evidence in this order: the attached signature,
 then the recursive lexical signature, then inferred closure evidence. Lower
@@ -550,6 +560,27 @@ remains in the existing staging path, subject to its ordinary limits and target
 policy. This decision is made before lowering a call argument, so declining
 sharing does not emit duplicate argument work. It is not a new source rejection
 or an excuse to fall back to a type-only key.
+
+An application must test for an active residual trace before looking up a
+variable argument solely to derive conservative runtime representation evidence.
+Without that consumer, it must not inspect the argument for this purpose. This
+does not skip source evaluation, checked argument/result evidence, fuel charges,
+or the ordinary fallback for recognizing a concrete argument's type.
+
+Runtime-presence queries may visit shared record storage once per synchronous
+query. They retain their existing variant boundaries and left-to-right short
+circuiting; in particular, a type edge, union, or extension's members do not
+become a runtime capture merely because this traversal is graph-aware. Mutable
+region cells are read afresh in subsequent queries. The query neither executes
+source code nor retains a cache across evaluation or revision changes.
+
+Captured values and signatures may be borrowed while constructing residual
+identity evidence instead of being cloned for an immediately discarded read. The
+read is synchronous and must not mutate lexical maps. It retains ordinary lookup
+precedence, recursive-group materialization, explicit absence, and observed-open
+demand recording; inspection-only reads remain unobserved. No binding value or
+absence is cached by this borrowing operation, and all lexical borrows end
+before subsequent evaluation may change the environment.
 
 Immutable record evidence uses shared chunks once all contained closure
 references are stable. The encoder retains record storage while indexing its

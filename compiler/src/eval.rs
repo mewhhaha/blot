@@ -22,6 +22,7 @@ use crate::value::{
     RecursiveBindings, Resume, RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature,
     capture_env, child_env, contains_type_variables, declaration_env, equal, lookup,
     lookup_signature, opened_members, recursive_env, reusable_across_module_instances, show, tuple,
+    with_lookup,
 };
 use crate::value_capsule::ValueCapsule;
 
@@ -1859,6 +1860,23 @@ fn recognition_argument_type(runtime: &Runtime, span: Span) -> Option<Value> {
     }
 }
 
+// Runtime argument evidence cannot be consumed without a residual trace. Test
+// that premise before looking up or inspecting an arbitrarily large value.
+fn residual_argument_type(
+    runtime: &Runtime,
+    environment: &Environment,
+    name: &str,
+) -> Option<Value> {
+    let trace = runtime.residual.as_ref()?;
+    with_lookup(environment, name, |value| {
+        let value = value?;
+        if !crate::hir::contains_runtime(value) {
+            return None;
+        }
+        trace.borrow().conservative_value_type(value)
+    })
+}
+
 fn runtime_value_type(value: Value) -> Option<Value> {
     let constant = |name| crate::primitives::constant(name);
     match value {
@@ -2861,14 +2879,9 @@ pub fn evaluate_expression(
                 .expression_type(&context, module_path.as_str(), argument)
                 .map(|type_| substitute_signature(&type_, &environment));
             let runtime_argument = match &loaded_module.arena.expressions[argument.0 as usize] {
-                Expression::Var { name, .. } => lookup(&environment, name)
-                    .filter(crate::hir::contains_runtime)
-                    .and_then(|value| {
-                        runtime
-                            .residual
-                            .as_ref()
-                            .and_then(|trace| trace.borrow().conservative_value_type(&value))
-                    }),
+                Expression::Var { name, .. } => {
+                    residual_argument_type(&runtime, &environment, name)
+                }
                 _ => None,
             };
             let expected_argument = runtime_argument
@@ -6839,6 +6852,18 @@ mod select_type_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn absent_residual_trace_does_not_inspect_argument_bindings() {
+        let environment = crate::value::child_env(None);
+        // A lookup would panic on this live mutable borrow. Neither phase may
+        // inspect an argument for trace evidence when there is no trace.
+        let _borrow = environment.names.borrow_mut();
+        for phase in [super::Phase::Comptime, super::Phase::Runtime] {
+            let runtime = super::Runtime::new(phase, "demand-test.blot".into());
+            assert!(super::residual_argument_type(&runtime, &environment, "unused").is_none());
+        }
+    }
+
     use super::*;
 
     #[test]
