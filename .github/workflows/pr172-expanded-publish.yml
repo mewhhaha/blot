@@ -1,0 +1,51 @@
+name: Publish inspected staged-core expansion
+
+on:
+  push:
+    branches: ['workbench/pr172-expanded-publish-20260918']
+    paths: ['.delivery/pr172-expanded/**', '.github/workflows/pr172-expanded-publish.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Decode and verify the inspected patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          encoded = b''.join(pathlib.Path(f'.delivery/pr172-expanded/part{i}').read_bytes() for i in range(5))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'aad65cecb817b5be963e465f4c5b4758420bc5f78b3e3b0bfda53b8dc3012dc4'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'expanded.patch').write_bytes(patch)
+          PY
+      - name: Apply only to recorded PR head and verify the complete tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=84d63aa1c5f8849cca6ada2d735a20d2114894c6
+          git fetch --no-tags origin "$base"
+          git checkout --detach "$base"
+          git apply --index "$RUNNER_TEMP/expanded.patch"
+          git diff --cached --check
+          test "$(git write-tree)" = 1a9145db98a6950219807de6275b0e74ec38a461
+          git config user.name OpenAI
+          git config user.email noreply@openai.com
+          git commit -m 'feat: expand staged inference, recursive collections and scoped code generation' -m 'Add definition-local blocked-static obligations, iterative static tail calls, runtime arrays/variants, deterministic edited-code relocation and shared Baba frontend reuse. Preserve exact checked semantics and resource limits; include native and Wasm regressions and complete public scaling observations. This does not implement the private application or establish its 100 ms target.'
+          test "$(git rev-parse HEAD^{tree})" = 1a9145db98a6950219807de6275b0e74ec38a461
+      - name: Publish isolated candidate without force or PR/main writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/workbench/pr172-expanded-candidate-20260918
+          echo "Candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tree: $(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+          echo 'The repository connection will advance PR 172 only after verifying this candidate. Temporary delivery files are absent from its tree.' >> "$GITHUB_STEP_SUMMARY"
