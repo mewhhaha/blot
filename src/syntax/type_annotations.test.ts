@@ -3,6 +3,10 @@ import { parse } from "./parse.ts";
 import { formatSource } from "../tooling/formatter.ts";
 
 const annotatedPrograms = [
+  "const f = fn ((a, b):\n  (Int, Int)) -> Int => a\nreturn f\n",
+  "const f = fn (#Some a:\n  #Some Int) -> Int => a\nreturn f\n",
+  "const f = fn (():\n  Unit) -> Int => 1\nreturn f\n",
+  "const f = fn (x: Int) -> Int => (do:\n  if (x == 42):\n    return x\n  else:\n    return 0\n)\nreturn f\n",
   "let apply:\n  (Int -> Int ~ { ..e }) ->\n  Int -> Int ~ { Console, ..e }\nlet apply = fn f => f\nreturn apply\n",
   "const f = fn (x:\n  Int, y:\n  Int) -> Int => x\nreturn f\n",
   "let answer: Int\nlet answer = 42\nreturn answer\n",

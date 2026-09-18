@@ -7799,6 +7799,8 @@ mod tests {
     fn single_colon_annotations_check_evaluate_and_emit() {
         run_with_compiler_test_stack(|| {
             for program in [
+                "const f = fn ((a, b):\n  (@type.int, @type.int)) -> @type.int => @int.add a b\nreturn f (20, 22)\n",
+                "const f = fn (():\n  @type.unit) -> @type.int => 42\nreturn f ()\n",
                 "let answer: @type.int\nlet answer = 42\nreturn answer\n",
                 "const answer:@type.int=42\nreturn answer\n",
                 "const identity:\n  @type.int -> @type.int\nconst identity = fn (x: @type.int) -> @type.int => x\nreturn identity 42\n",

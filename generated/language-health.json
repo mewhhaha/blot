@@ -797,7 +797,7 @@
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 13332
+      "lines": 13334
     },
     {
       "path": "compiler/src/backend.rs",
