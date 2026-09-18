@@ -31,8 +31,14 @@ fn run() -> Result<(), String> {
         .enumerate()
     {
         let start = Instant::now();
+        let mut phase_start = start;
+        let mut phases_ms = std::collections::BTreeMap::new();
         let artifact = session
-            .compile(source)
+            .compile_observed(source, |name| {
+                let now = Instant::now();
+                phases_ms.insert(name, now.duration_since(phase_start).as_secs_f64() * 1000.0);
+                phase_start = now;
+            })
             .map_err(|e| serde_json::to_string(&e).unwrap())?;
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         let output = if index == 0 {
@@ -43,7 +49,7 @@ fn run() -> Result<(), String> {
         std::fs::write(&output, &artifact.wasm).map_err(|e| e.to_string())?;
         println!(
             "{}",
-            serde_json::json!({"mode":if index==0{"cold"}else{"edited"},"compilationMs":elapsed,"initializationMs":initialization_ms,"wasmBytes":artifact.wasm.len(),"artifact":artifact})
+            serde_json::json!({"mode":if index==0{"cold"}else{"edited"},"compilationMs":elapsed,"phasesMs":phases_ms,"initializationMs":initialization_ms,"wasmBytes":artifact.wasm.len(),"artifact":artifact})
         );
     }
     Ok(())

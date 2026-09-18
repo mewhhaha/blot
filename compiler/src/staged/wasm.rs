@@ -5,7 +5,7 @@ use super::core::{Global, Local, Node, Primitive, Symbol, TermId, Value, ValueId
 use super::types::{self, Type};
 use super::{Budget, Failure, PrototypeSession, Site, Work};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use wasm_encoder::{
     BlockType, CodeSection, ConstExpr, CustomSection, ElementSection, Elements, ExportKind,
     ExportSection, Function, FunctionSection, GlobalSection, GlobalType, Instruction, MemArg,
@@ -132,13 +132,13 @@ impl Builder<'_> {
         }
         let aggregate = matches!(
             self.session.values.nodes[value],
-            Value::Tuple(_) | Value::Record(_)
+            Value::Tuple(_) | Value::Array(_) | Value::Record(_) | Value::Variant(..)
         );
         match self.session.values.nodes[value].clone() {
             Value::Int(n) => self.i(Instruction::I64Const(n)),
             Value::Bool(b) => self.i(Instruction::I64Const(i64::from(b))),
             Value::Unit => self.i(Instruction::I64Const(0)),
-            Value::Tuple(xs) => {
+            Value::Tuple(xs) | Value::Array(xs) => {
                 let p = self.alloc(8 + xs.len() * 8)?;
                 self.i(Instruction::LocalGet(p));
                 self.i(Instruction::I32Const(xs.len() as i32));
@@ -147,6 +147,19 @@ impl Builder<'_> {
                     self.i(Instruction::LocalGet(p));
                     self.constant_graph(x, depth + 1, memo)?;
                     self.i(Instruction::I64Store(mem((8 + i * 8) as u64)));
+                }
+                self.i(Instruction::LocalGet(p));
+                self.i(Instruction::I64ExtendI32U);
+            }
+            Value::Variant(name, payload) => {
+                let p = self.alloc(16)?;
+                self.i(Instruction::LocalGet(p));
+                self.ops.push(Op::Label(name));
+                self.i(Instruction::I32Store(mem(0)));
+                if let Some(value) = payload {
+                    self.i(Instruction::LocalGet(p));
+                    self.constant_graph(value, depth + 1, memo)?;
+                    self.i(Instruction::I64Store(mem(8)));
                 }
                 self.i(Instruction::LocalGet(p));
                 self.i(Instruction::I64ExtendI32U);
@@ -182,9 +195,18 @@ impl Builder<'_> {
         Ok(())
     }
     fn expr(&mut self, id: TermId, depth: usize) -> Result<(), Failure> {
+        self.expr_context(id, depth, false)
+    }
+    fn expr_context(&mut self, id: TermId, depth: usize, tail: bool) -> Result<(), Failure> {
         self.budget.depth(self.site, depth)?;
         self.budget.tick(self.site)?;
         match self.session.terms.nodes[id].node.clone() {
+            Node::Blocked(_) => {
+                return Err(Failure::invariant(
+                    self.site,
+                    "staging hole reached runtime emission",
+                ));
+            }
             Node::Constant(v) => self.constant(v, depth + 1)?,
             Node::Local(n) => {
                 let slot = *self.slots.get(&n).ok_or_else(|| {
@@ -193,8 +215,10 @@ impl Builder<'_> {
                 self.i(Instruction::LocalGet(slot));
             }
             Node::Global(s) => self.ops.push(Op::Global(s)),
-            Node::Instance(id) => self.expr(id, depth + 1)?,
-            Node::Function { .. } | Node::Primitive(_) => self.capture(id)?,
+            Node::Instance(id) => self.expr_context(id, depth + 1, tail)?,
+            Node::Function { .. } | Node::RecursiveFunction { .. } | Node::Primitive(_) => {
+                self.capture(id)?
+            }
             Node::Call(f, a) => {
                 let closure = self.temp(ValType::I64);
                 let arg = self.temp(ValType::I64);
@@ -208,12 +232,19 @@ impl Builder<'_> {
                 self.i(Instruction::LocalGet(closure));
                 self.i(Instruction::I32WrapI64);
                 self.i(Instruction::I32Load(mem(0)));
-                self.i(Instruction::CallIndirect {
-                    type_index: CLOSURE_TYPE,
-                    table_index: 0,
-                });
+                if tail {
+                    self.i(Instruction::ReturnCallIndirect {
+                        type_index: CLOSURE_TYPE,
+                        table_index: 0,
+                    });
+                } else {
+                    self.i(Instruction::CallIndirect {
+                        type_index: CLOSURE_TYPE,
+                        table_index: 0,
+                    });
+                }
             }
-            Node::Tuple(xs) => {
+            Node::Tuple(xs) | Node::Array(xs) => {
                 let p = self.alloc(8 + xs.len() * 8)?;
                 self.i(Instruction::LocalGet(p));
                 self.i(Instruction::I32Const(xs.len() as i32));
@@ -225,6 +256,69 @@ impl Builder<'_> {
                 }
                 self.i(Instruction::LocalGet(p));
                 self.i(Instruction::I64ExtendI32U);
+            }
+            Node::Variant(name, payload) => {
+                let p = self.alloc(16)?;
+                self.i(Instruction::LocalGet(p));
+                self.ops.push(Op::Label(name));
+                self.i(Instruction::I32Store(mem(0)));
+                if let Some(value) = payload {
+                    self.i(Instruction::LocalGet(p));
+                    self.expr(value, depth + 1)?;
+                    self.i(Instruction::I64Store(mem(8)));
+                }
+                self.i(Instruction::LocalGet(p));
+                self.i(Instruction::I64ExtendI32U);
+            }
+            Node::Case {
+                target,
+                arms,
+                fallback,
+            } => {
+                let scrutinee = self.temp(ValType::I64);
+                self.expr(target, depth + 1)?;
+                self.i(Instruction::LocalSet(scrutinee));
+                for (name, payload, body) in &arms {
+                    self.i(Instruction::LocalGet(scrutinee));
+                    self.i(Instruction::I32WrapI64);
+                    self.i(Instruction::I32Load(mem(0)));
+                    self.ops.push(Op::Label(name.clone()));
+                    self.i(Instruction::I32Eq);
+                    self.i(Instruction::If(BlockType::Result(ValType::I64)));
+                    let saved = if let Some(parameter) = payload {
+                        let value = self.temp(ValType::I64);
+                        self.i(Instruction::LocalGet(scrutinee));
+                        self.i(Instruction::I32WrapI64);
+                        self.i(Instruction::I64Load(mem(8)));
+                        self.i(Instruction::LocalSet(value));
+                        Some((*parameter, self.slots.insert(*parameter, value)))
+                    } else {
+                        None
+                    };
+                    self.expr_context(*body, depth + 1, tail)?;
+                    if let Some((parameter, old)) = saved {
+                        if let Some(old) = old {
+                            self.slots.insert(parameter, old);
+                        } else {
+                            self.slots.remove(&parameter);
+                        }
+                    }
+                    self.i(Instruction::Else);
+                }
+                if let Some((parameter, body)) = fallback {
+                    let old = self.slots.insert(parameter, scrutinee);
+                    self.expr_context(body, depth + 1, tail)?;
+                    if let Some(old) = old {
+                        self.slots.insert(parameter, old);
+                    } else {
+                        self.slots.remove(&parameter);
+                    }
+                } else {
+                    self.i(Instruction::Unreachable);
+                }
+                for _ in arms {
+                    self.i(Instruction::End);
+                }
             }
             Node::Record(fs) => {
                 let p = self.alloc(8 + fs.len() * 16)?;
@@ -257,7 +351,7 @@ impl Builder<'_> {
                 self.expr(value, depth + 1)?;
                 self.i(Instruction::LocalSet(slot));
                 let saved = self.slots.insert(local, slot);
-                self.expr(body, depth + 1)?;
+                self.expr_context(body, depth + 1, tail)?;
                 if let Some(saved) = saved {
                     self.slots.insert(local, saved);
                 } else {
@@ -269,9 +363,9 @@ impl Builder<'_> {
                 self.i(Instruction::I64Eqz);
                 self.i(Instruction::I32Eqz);
                 self.i(Instruction::If(BlockType::Result(ValType::I64)));
-                self.expr(a, depth + 1)?;
+                self.expr_context(a, depth + 1, tail)?;
                 self.i(Instruction::Else);
-                self.expr(b, depth + 1)?;
+                self.expr_context(b, depth + 1, tail)?;
                 self.i(Instruction::End);
             }
             Node::Quote(_) => {
@@ -283,7 +377,170 @@ impl Builder<'_> {
         }
         Ok(())
     }
+    fn array_primitive(&mut self, p: Primitive) -> Result<(), Failure> {
+        if p == Primitive::ArrayLen {
+            self.i(Instruction::LocalGet(1));
+            self.i(Instruction::I32WrapI64);
+            self.i(Instruction::I32Load(mem(0)));
+            self.i(Instruction::I64ExtendI32U);
+            return Ok(());
+        }
+        let array = self.temp(ValType::I32);
+        let length = self.temp(ValType::I32);
+        self.i(Instruction::LocalGet(1));
+        self.i(Instruction::I32WrapI64);
+        self.i(Instruction::I64Load(mem(8)));
+        self.i(Instruction::I32WrapI64);
+        self.i(Instruction::LocalTee(array));
+        self.i(Instruction::I32Load(mem(0)));
+        self.i(Instruction::LocalSet(length));
+        match p {
+            Primitive::ArrayAt => {
+                let index = self.temp(ValType::I64);
+                let out = self.alloc(16)?;
+                self.i(Instruction::LocalGet(1));
+                self.i(Instruction::I32WrapI64);
+                self.i(Instruction::I64Load(mem(16)));
+                self.i(Instruction::LocalTee(index));
+                self.i(Instruction::LocalGet(length));
+                self.i(Instruction::I64ExtendI32U);
+                // Unsigned comparison also refuses every negative index.
+                self.i(Instruction::I64GeU);
+                self.i(Instruction::If(BlockType::Empty));
+                self.i(Instruction::LocalGet(out));
+                self.ops.push(Op::Label("None".into()));
+                self.i(Instruction::I32Store(mem(0)));
+                self.i(Instruction::Else);
+                self.i(Instruction::LocalGet(out));
+                self.ops.push(Op::Label("Some".into()));
+                self.i(Instruction::I32Store(mem(0)));
+                self.i(Instruction::LocalGet(out));
+                self.i(Instruction::LocalGet(array));
+                self.i(Instruction::LocalGet(index));
+                self.i(Instruction::I32WrapI64);
+                self.i(Instruction::I32Const(8));
+                self.i(Instruction::I32Mul);
+                self.i(Instruction::I32Add);
+                self.i(Instruction::I64Load(mem(8)));
+                self.i(Instruction::I64Store(mem(8)));
+                self.i(Instruction::End);
+                self.i(Instruction::LocalGet(out));
+                self.i(Instruction::I64ExtendI32U);
+            }
+            Primitive::ArrayPush => {
+                let out = self.temp(ValType::I32);
+                self.i(Instruction::LocalGet(length));
+                self.i(Instruction::I32Const(8));
+                self.i(Instruction::I32Mul);
+                self.i(Instruction::I32Const(16));
+                self.i(Instruction::I32Add);
+                self.i(Instruction::Call(ALLOC));
+                self.i(Instruction::LocalSet(out));
+                self.i(Instruction::LocalGet(out));
+                self.i(Instruction::LocalGet(length));
+                self.i(Instruction::I32Const(1));
+                self.i(Instruction::I32Add);
+                self.i(Instruction::I32Store(mem(0)));
+                self.i(Instruction::LocalGet(out));
+                self.i(Instruction::I32Const(8));
+                self.i(Instruction::I32Add);
+                self.i(Instruction::LocalGet(array));
+                self.i(Instruction::I32Const(8));
+                self.i(Instruction::I32Add);
+                self.i(Instruction::LocalGet(length));
+                self.i(Instruction::I32Const(8));
+                self.i(Instruction::I32Mul);
+                self.i(Instruction::MemoryCopy {
+                    src_mem: 0,
+                    dst_mem: 0,
+                });
+                self.i(Instruction::LocalGet(out));
+                self.i(Instruction::LocalGet(length));
+                self.i(Instruction::I32Const(8));
+                self.i(Instruction::I32Mul);
+                self.i(Instruction::I32Add);
+                self.i(Instruction::LocalGet(1));
+                self.i(Instruction::I32WrapI64);
+                self.i(Instruction::I64Load(mem(16)));
+                self.i(Instruction::I64Store(mem(8)));
+                self.i(Instruction::LocalGet(out));
+                self.i(Instruction::I64ExtendI32U);
+            }
+            Primitive::ArrayFold => {
+                let function = self.temp(ValType::I64);
+                let result = self.temp(ValType::I64);
+                let index = self.temp(ValType::I32);
+                let pair = self.temp(ValType::I32);
+                self.i(Instruction::LocalGet(1));
+                self.i(Instruction::I32WrapI64);
+                self.i(Instruction::I64Load(mem(16)));
+                self.i(Instruction::LocalSet(function));
+                self.i(Instruction::LocalGet(1));
+                self.i(Instruction::I32WrapI64);
+                self.i(Instruction::I64Load(mem(24)));
+                self.i(Instruction::LocalSet(result));
+                self.i(Instruction::Block(BlockType::Empty));
+                self.i(Instruction::Loop(BlockType::Empty));
+                self.i(Instruction::LocalGet(index));
+                self.i(Instruction::LocalGet(length));
+                self.i(Instruction::I32GeU);
+                self.i(Instruction::BrIf(1));
+                // The argument pair may escape through the accumulator/callback;
+                // allocate a distinct pair instead of mutating an aliased one.
+                self.i(Instruction::I32Const(24));
+                self.i(Instruction::Call(ALLOC));
+                self.i(Instruction::LocalSet(pair));
+                self.i(Instruction::LocalGet(pair));
+                self.i(Instruction::I32Const(2));
+                self.i(Instruction::I32Store(mem(0)));
+                self.i(Instruction::LocalGet(pair));
+                self.i(Instruction::LocalGet(result));
+                self.i(Instruction::I64Store(mem(8)));
+                self.i(Instruction::LocalGet(pair));
+                self.i(Instruction::LocalGet(array));
+                self.i(Instruction::LocalGet(index));
+                self.i(Instruction::I32Const(8));
+                self.i(Instruction::I32Mul);
+                self.i(Instruction::I32Add);
+                self.i(Instruction::I64Load(mem(8)));
+                self.i(Instruction::I64Store(mem(16)));
+                self.i(Instruction::LocalGet(function));
+                self.i(Instruction::I32WrapI64);
+                self.i(Instruction::LocalGet(pair));
+                self.i(Instruction::I64ExtendI32U);
+                self.i(Instruction::LocalGet(function));
+                self.i(Instruction::I32WrapI64);
+                self.i(Instruction::I32Load(mem(0)));
+                self.i(Instruction::CallIndirect {
+                    type_index: CLOSURE_TYPE,
+                    table_index: 0,
+                });
+                self.i(Instruction::LocalSet(result));
+                self.i(Instruction::LocalGet(index));
+                self.i(Instruction::I32Const(1));
+                self.i(Instruction::I32Add);
+                self.i(Instruction::LocalSet(index));
+                self.i(Instruction::Br(0));
+                self.i(Instruction::End);
+                self.i(Instruction::End);
+                self.i(Instruction::LocalGet(result));
+            }
+            _ => {
+                return Err(Failure::invariant(
+                    self.site,
+                    "invalid array primitive dispatch",
+                ));
+            }
+        }
+        Ok(())
+    }
     fn primitive_body(&mut self, p: Primitive) -> Result<(), Failure> {
+        if matches!(
+            p,
+            Primitive::ArrayLen | Primitive::ArrayAt | Primitive::ArrayPush | Primitive::ArrayFold
+        ) {
+            return self.array_primitive(p);
+        }
         if !matches!(
             p,
             Primitive::Add | Primitive::Sub | Primitive::Mul | Primitive::Equal | Primitive::Less
@@ -443,7 +700,11 @@ pub(super) fn emit(
 ) -> Result<Vec<u8>, Failure> {
     let mut pending = exports.values().map(|g| g.term).collect::<Vec<_>>();
     let mut seen = HashSet::new();
-    let mut live = BTreeSet::new();
+    // Final indices follow deterministic traversal from sorted exports, not
+    // allocation-era arena/symbol numbers. Fragments remain symbolic.
+    session.labels.clear();
+    let mut live = Vec::new();
+    let mut live_seen = HashSet::new();
     let mut function_ids = Vec::new();
     while let Some(id) = pending.pop() {
         budget.tick(site)?;
@@ -452,7 +713,9 @@ pub(super) fn emit(
         }
         match &session.terms.nodes[id].node {
             Node::Global(s) => {
-                live.insert(*s);
+                if live_seen.insert(*s) {
+                    live.push(*s);
+                }
                 pending.push(
                     globals
                         .get(s)
@@ -460,7 +723,9 @@ pub(super) fn emit(
                         .term,
                 );
             }
-            Node::Function { .. } | Node::Primitive(_) => function_ids.push(id),
+            Node::Function { .. } | Node::RecursiveFunction { .. } | Node::Primitive(_) => {
+                function_ids.push(id)
+            }
             Node::Quote(_) => {
                 return Err(Failure::unsupported(
                     site,
@@ -471,7 +736,6 @@ pub(super) fn emit(
         }
         pending.extend(session.terms.children(id));
     }
-    function_ids.sort_unstable();
     let function_slots = function_ids
         .iter()
         .enumerate()
@@ -488,9 +752,16 @@ pub(super) fn emit(
             captures.insert(*id, fragment.captures.clone());
             continue;
         }
-        let free = if let Node::Function { parameter, body } = session.terms.nodes[*id].node {
+        let free = if let Node::Function { parameter, body }
+        | Node::RecursiveFunction {
+            parameter, body, ..
+        } = session.terms.nodes[*id].node
+        {
             let mut free = session.terms.free_locals(body, budget, site)?;
             free.remove(&parameter);
+            if let Node::RecursiveFunction { recursive, .. } = session.terms.nodes[*id].node {
+                free.remove(&recursive);
+            }
             free.into_iter().collect()
         } else {
             vec![]
@@ -534,9 +805,20 @@ pub(super) fn emit(
                 builder.slots.insert(*slot, local);
             }
             match session.terms.nodes[*id].node {
-                Node::Function { parameter, body } => {
+                Node::Function { parameter, body }
+                | Node::RecursiveFunction {
+                    parameter, body, ..
+                } => {
                     builder.slots.insert(parameter, 1);
-                    builder.expr(body, 0)?;
+                    if let Node::RecursiveFunction { recursive, .. } = session.terms.nodes[*id].node
+                    {
+                        let slot = builder.temp(ValType::I64);
+                        builder.i(Instruction::LocalGet(0));
+                        builder.i(Instruction::I64ExtendI32U);
+                        builder.i(Instruction::LocalSet(slot));
+                        builder.slots.insert(recursive, slot);
+                    }
+                    builder.expr_context(body, 0, true)?;
                 }
                 Node::Primitive(p) => builder.primitive_body(p)?,
                 _ => return Err(Failure::invariant(site, "invalid function plan")),
@@ -594,7 +876,13 @@ pub(super) fn emit(
             ));
         }
         stack.push((s, true));
-        for child in session.terms.globals(globals[&s].term, budget, site)? {
+        let mut children = session
+            .terms
+            .globals(globals[&s].term, budget, site)?
+            .into_iter()
+            .collect::<Vec<_>>();
+        children.sort_by_key(|child| global_indices[child]);
+        for child in children {
             if !done.contains(&child) {
                 stack.push((child, false));
             }

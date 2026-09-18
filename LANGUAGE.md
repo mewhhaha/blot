@@ -29,10 +29,12 @@ and the compiler is a compiler or specification bug.
 The opt-in `staged-prototype` laboratory described in
 [`spec/STAGED_PROTOTYPE.md`](spec/STAGED_PROTOTYPE.md) tests a proposed pure
 staged core using Baba's syntax. Its `@staged.*` operations and uniform-word ABI
-are not production language primitives or an alternative accepted Blot mode.
-Normal compilation never selects it, and unsupported effects, ownership and
-other source forms are refused rather than erased or delegated. This document
-remains authoritative for production source meaning.
+are not production language primitives or an alternative accepted Blot mode. Its
+recursive, collection and scoped-generation operations remain experimental,
+including definition-local delayed type queries. Normal compilation never
+selects it, and unsupported effects, ownership and other source forms are
+refused rather than erased or delegated. This document remains authoritative for
+production source meaning.
 
 ## 1. Design model
 

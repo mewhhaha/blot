@@ -4,9 +4,9 @@ This is the first executable **pure fragment** of the
 [staged compiler proposal](../../docs/staged-compiler-proposal.md). It
 implements part of M1 and a narrow M2 vertical slice. It is **not** a
 replacement for the production compiler, does not compile `gdev`, and does not
-establish 100 ms compilation for that application. The full
-inference/effect/ownership design, open typed generation, general recursion, and
-migration remain unfinished.
+establish 100 ms compilation for that application. The full effect/ownership and
+module design, generalized dependent obligations, production ABI and migration
+remain unfinished.
 
 The implementation is Rust in the separate `experiments/staged-core/native`
 crate. Production Cargo settings and entry points are unchanged. Normal Blot
@@ -28,37 +28,69 @@ node experiments/staged-core/verify.mjs experiments/staged-core/native/target/re
 ```
 
 The optional third argument is a **different** edited source file. One session
-compiles the original, then the edited contents. Both operations parse source,
+compiles the original, then the edited contents. Both operations process source,
 validate dependencies, check demanded definitions, execute required static code,
 assemble the whole Wasm module and structurally validate it. Outputs are the
 specified file and `<output>.edited.wasm`. Identical edit buffers are rejected
 by the CLI. The session API also supports unchanged requests as a separate
-control; it still reparses and assembles, rather than returning a cached whole
-artifact.
+control; it still lowers a current AST and assembles, rather than returning a
+cached whole artifact. A prior successful syntax snapshot may reuse unchanged
+Baba grammar decisions even when token widths or trivia counts change; lexical,
+layout, delimiter and semantic validation remain mandatory.
 
-Each JSONL line reports initialization separately from `compilationMs`. Source
-reads, output writes and printing are outside that interval. This is a **native
-Rust laboratory**, not the Deno-hosted production compiler benchmark. Do not
-compare its small-fixture latency with the historical application measurements.
-The verification script executes the emitted Wasm under Node; it is a caller and
-observation harness, not a checker. It tests output agreement across genuine
-edits and fresh sessions, not just Wasm structural validity.
+Each JSONL line reports initialization separately from `compilationMs` and
+includes observed completed-phase intervals in `phasesMs`. These are native-host
+measurements, not semantic inputs or a clock available to source programs.
+Source reads, output writes and printing are outside that interval. This is a
+**native Rust laboratory**, not the Deno-hosted production compiler benchmark.
+Do not compare its small-fixture latency with the historical application
+measurements. The verification script executes the emitted Wasm under Node; it
+is a caller and observation harness, not a checker. It tests output agreement
+across genuine edits and fresh sessions, not just Wasm structural validity.
+
+## Recursive generation and deferred type queries
+
+The next executable slice adds named recursion, immutable arrays and tagged
+variants at both levels, computed record fields, scoped code builders and
+inference-blocked static demands. See
+[EXPANSION_RESULTS.md](EXPANSION_RESULTS.md) for its evidence and limits. The
+original result record below remains historical.
+
+`collections.blot` reflects a schema into arrays of its fields, generates a
+checked accessor, evaluates a recursive sum at compile time, and emits runtime
+array/variant processing. `run(x)` returns `2*x + 60`. Editing the array's final
+literal changes the result and checks one named definition without rerunning
+static calls.
+
+`scoped-code.blot` builds nested, typed expressions using explicit code binders,
+field projection, lifting and conditionals. Its `typeof` query waits for the
+function signature rather than executing a runtime argument. `run(x)` returns
+`x + 5` when `x > 10`, otherwise `10`. Editing the generator's constant reruns
+the affected generator and produces a changed executable; a fresh compile
+agrees.
+
+Use the same CLI with either file. The runtime requires Wasm tail-call support.
+The tests execute 100,000 runtime tail transfers and a 10,000-step static tail
+recursion without growing active call frames per iteration. Total allocations
+remain bounded by the existing arena/heap limits, not constant-space guarantees.
 
 ## Implemented pieces
 
 - Rank-one let-polymorphic inference, higher-order functions, tuples, structural
-  records with inferred open rows, annotations, and an occurs check. Inference
-  cells are mutable and request-local; published type schemes and typed core are
-  immutable, structurally interned graphs. There are no implicit prelude names.
+  records and variants with inferred open rows, arrays, named recursion,
+  annotations, and an occurs check. Inference cells are mutable and
+  request-local; published type schemes and typed core are immutable,
+  structurally interned graphs. There are no implicit prelude names.
 - Explicit required static execution over checked core nodes, with immutable
-  values, lexical closures, conditionals, and bounded `@staged.iterate`. Pure
-  calls memoize exact value handles plus observed implementation dependencies.
-  Failed and generative calls are not memoized. Known ordinary arguments do not
-  cause implicit compile-time execution or specialization.
-- First-class computed record/function types, closed typed quotation/splicing,
-  and a typed field-accessor generator. A generator returns an internally
-  checked core object, not source text that is parsed or inferred again at each
-  use.
+  values, lexical closures, conditionals, bounded `@staged.iterate` and named
+  recursion with explicit tail execution. Pure calls memoize exact value handles
+  plus observed implementation dependencies. Failed and generative calls are not
+  memoized. Known ordinary arguments do not cause implicit compile-time
+  execution or specialization.
+- First-class computed record/function/array types, field reflection, closed
+  quotation/splicing, scoped typed-code builders and a field-accessor generator.
+  A generator returns an internally checked core object, not source text that is
+  parsed or inferred again at each use.
 - Separately cached named definitions. Ordinary callers depend on an interface
   and resolved symbol; static execution additionally observes actual transitive
   implementations. Changed results stop propagating when the relevant immutable
@@ -94,9 +126,9 @@ nodes per layer (record plus row). Type import/freeze and static-record emission
 retain graph sharing instead of expanding all paths.
 
 These are executable work contracts for this fragment, not application-wide
-complexity theorems. Full parsing, dependency comparison, source-slice copying,
-export checking, global initialization, helpers, relocation, module assembly,
-and Wasm validation still cost work on an edit.
+complexity theorems. Full frontend processing, dependency comparison,
+source-slice copying, export checking, global initialization, helpers,
+relocation, module assembly, and Wasm validation still cost work on an edit.
 
 ## Validation commands
 
@@ -123,6 +155,15 @@ retaining each call's temporary closure/aggregate allocations.
 
 ## Reproducible synthetic measurements
 
+The expanded semantics and 162 KB public workload are recorded in
+[EXPANSION_RESULTS.md](EXPANSION_RESULTS.md) and
+[expansion-samples.jsonl](expansion-samples.jsonl). Reproduce with
+`node experiments/staged-core/measure-expansion.mjs experiments/staged-core/native/target/release/staged-prototype`.
+The final large-case edited median is 99.316 ms with a 94.504–182.450 ms range;
+cold median is 207.039 ms. This is neither a worst-case latency guarantee nor a
+`gdev` or production comparison. Every measured edit changes token width and
+executable behavior; edited/fresh Wasm is byte-identical.
+
 [RESULTS.md](RESULTS.md) records final local validation, rejected integration
 attempts, source/binary identities and twelve synthetic scaling observations.
 [samples.jsonl](samples.jsonl) contains the complete records. Reproduce them
@@ -134,25 +175,23 @@ application goal.
 
 ## Limits and next implementation work
 
-This fragment has **no** effect rows, resource ownership, arrays, variants,
-recursive source groups, module/import graph, higher-rank inference, subtyping,
+This fragment has **no** effect rows, resource ownership, module/import graph,
+mutually recursive source groups, higher-rank inference, algebraic subtyping,
 refinement proofs, or generic constraint dictionaries. Nonempty effects,
 qualified/deferred parameters, unsupported syntax and production intrinsics are
-refused. Empty effects and the inferred-empty placeholder are the only admitted
-annotation cases. `Code` is an opaque value carrying a typed closed core root,
-not yet an indexed surface `Code<T>` API. Quotation is closed over local slots;
-implicit capture of static locals and nested dynamic splicing are refused.
-Arbitrary blocked type programs are not yet represented as suspended
-obligations.
+refused. No production checking is bypassed to accept these forms.
 
-Type construction and finite iteration exercise forward computation but are not
-an implementation of the proposed general-purpose compile-time engine. The
-current evaluator is a bounded checked-core interpreter, not a bytecode/JIT
-engine. Future extensions must specify scoping, recursion, effects, ownership,
-and obligations before broadening acceptance.
+`Code` remains opaque on the surface; private constructors enforce typing and
+scope. Direct quotation is closed over local slots, while explicit code builders
+support nested binders. Dynamic splice inside a static generator is unsupported.
+Blocked type observations/static demands are resolved within the current named
+definition, not exported as suspended dependent interfaces. Signatures are
+required when ordinary constraints cannot settle them.
 
-The next slice should add scoped typed-generation binders and explicit blocked
-static obligations, then effects/ownership and richer schemas. Keep checking the
-same work contracts while broadening supported programs. Only after this core
-handles representative application semantics should a direct application-level
-latency comparison or production migration be considered.
+The evaluator is a bounded checked-core interpreter, not a bytecode/JIT engine.
+There is no incremental arena garbage collector, module dependency graph or
+production calling convention. Whole-module input processing/AST lowering and
+assembly still occur on edits, even when Baba grammar topology is reusable. The
+next integration target is module boundaries and effect/ownership semantics; the
+private application cannot be substituted by a smaller public fixture when
+evaluating the 100 ms goal.

@@ -348,6 +348,22 @@ shorter chains retain the ordinary fixity tree.
 An incremental frontend result must equal a fresh result, including diagnostics,
 spans, compact edges, and resolved identities.
 
+A prior successful Baba tree may be reused when the significant terminal and
+lexical-identity sequence is unchanged. Reuse must relocate both source spans
+and token-edge indices when widths or trivia counts change. Lexical acceptance,
+layout and delimiter checks remain mandatory. Unanchored or zero-width nodes may
+conservatively force the normal island executor, as must changes to the
+significant terminal sequence. This is syntax reuse only: changed spelling,
+values, fixity inputs and mapped source locations still require fresh AST
+lowering and normal semantic invalidation. A syntax correspondence map cannot
+establish checked-fact reuse.
+
+The rebinding validator may share inherited immutable binding-name sets across
+lexical layers. Writes must detach aliases. Entering a function still creates a
+distinct rebinding frame; branch-local names and later writes cannot leak into
+an earlier snapshot. Sharing removes copies of growing visible-name prefixes,
+not the lineage or stable-type checks that consume the resulting bindings.
+
 ## 5. Demand facts
 
 After resolution and surface elaboration, the compiler builds the lexical

@@ -8,14 +8,20 @@ Rust/Wasm compiler and the normative contracts in `LANGUAGE.md` and `spec/`
 remain authoritative. The existing optimization experiments remain measurable
 changes in their own right.
 
-An initial opt-in **pure M1 / narrow executable M2 slice** now lives in
-`compiler/src/staged/`. It implements rank-one and open-record inference,
-explicit static execution of checked core, computed schemas and closed typed
-accessor/quotation generation, nominal fresh types, reusable runtime closures,
-and dependency-validated real edits. The native CLI emits runnable, validated
-Wasm under a deliberately experimental scalar ABI. This does not implement the
-full M1 feature target: effects/ownership, general recursion, variants, scoped
-open quotation and suspended static obligations remain future work.
+An opt-in **pure M1 / executable M2 slice** now lives in `compiler/src/staged/`.
+It implements rank-one and open-record/variant inference, separately checked
+named recursion, immutable collections and field reflection, explicit static
+execution of checked core, scoped typed-code construction, nominal fresh types,
+reusable runtime closures and dependency-validated real edits. Definition-local
+blocked static demands now wait for inference and wake when their dependencies
+settle. Typed static tail calls use an explicit loop; runtime tail calls remain
+tail calls in Wasm.
+
+This is not the complete architecture. Effects/ownership, module graphs,
+mutually recursive groups, indexed surface Code types, and publishing suspended
+obligations in generalized interfaces remain unimplemented. The native CLI emits
+runnable, validated Wasm under an experimental scalar ABI; it is not a
+production replacement or a 100 ms application result.
 
 The [experiment README](../experiments/staged-core/README.md) and
 [laboratory contract](../spec/STAGED_PROTOTYPE.md) distinguish implemented

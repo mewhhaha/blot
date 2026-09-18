@@ -140,11 +140,19 @@ impl Budget {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Work {
     pub parsed_expressions: usize,
+    pub frontend_parser_executed: bool,
+    pub frontend_reused_nodes: usize,
+    pub frontend_storage_bytes: usize,
     pub checked_definitions: usize,
     pub reused_definitions: usize,
     pub unification_steps: usize,
     pub static_steps: usize,
     pub static_calls: usize,
+    pub static_tail_calls: usize,
+    pub static_obligations: usize,
+    pub static_obligation_attempts: usize,
+    pub resolved_static_obligations: usize,
+    pub static_obligation_wakeups: usize,
     pub static_cache_hits: usize,
     pub fresh_identities: usize,
     pub emitted_functions: usize,
@@ -172,7 +180,8 @@ struct DefinitionCache {
 }
 
 /// A session owns immutable interners and dependency-validated definition/static
-/// queries. Source is reparsed on every request; parsing is never hidden in setup.
+/// queries. Baba may reuse its own syntax state; semantic checks and emission
+/// still observe every request. No frontend work is hidden in setup.
 /// `reset` is an explicit retention boundary. Failed requests return no artifact.
 #[derive(Default)]
 pub struct PrototypeSession {
@@ -185,8 +194,10 @@ pub struct PrototypeSession {
     fragments: HashMap<TermId, wasm::Fragment>,
     labels: BTreeMap<String, u32>,
     next_nominal: u64,
+    next_code_local: u32,
     symbol_bytes: usize,
     limits: Limits,
+    frontend: Option<crate::frontend::FrontendState>,
 }
 impl PrototypeSession {
     pub fn with_limits(limits: Limits) -> Self {
@@ -219,7 +230,8 @@ impl PrototypeSession {
                 continue;
             }
             let children = match &self.values.nodes[id] {
-                Value::Tuple(xs) => xs.clone(),
+                Value::Tuple(xs) | Value::Array(xs) => xs.clone(),
+                Value::Variant(_, payload) => payload.iter().copied().collect(),
                 Value::Record(fs) => fs.values().copied().collect(),
                 _ => vec![],
             };
@@ -238,6 +250,27 @@ impl PrototypeSession {
                 Value::Tuple(xs) => self
                     .types
                     .intern(Type::Tuple(xs.iter().map(|v| memo[v]).collect())),
+                Value::Array(xs) => {
+                    let children = xs.iter().map(|v| memo[v]).collect::<Vec<_>>();
+                    let mut element = self.types.intern(Type::Bound(0, types::Kind::Value));
+                    for (index, ty) in children.into_iter().enumerate() {
+                        element = if index == 0 {
+                            ty
+                        } else {
+                            self.join_value_types(element, ty, budget, site, 0)?
+                        };
+                    }
+                    self.types.intern(Type::Array(element))
+                }
+                Value::Variant(name, payload) => {
+                    let ty = self
+                        .types
+                        .intern(Type::Tuple(payload.iter().map(|v| memo[v]).collect()));
+                    let row = self
+                        .types
+                        .intern(Type::Row(BTreeMap::from([(name.clone(), ty)]), None));
+                    self.types.intern(Type::Variant(row))
+                }
                 Value::Record(fs) => {
                     let row = self.types.intern(Type::Row(
                         fs.iter().map(|(n, v)| (n.clone(), memo[v])).collect(),
@@ -258,8 +291,70 @@ impl PrototypeSession {
         Ok(memo[&id])
     }
 
+    // Static arrays retain a homogeneous type. Variant members join by label;
+    // payload arities remain distinct and all common payloads are joined exactly.
+    fn join_value_types(
+        &mut self,
+        a: TypeId,
+        b: TypeId,
+        budget: &Budget,
+        site: Site,
+        depth: usize,
+    ) -> Result<TypeId, Failure> {
+        budget.depth(site, depth)?;
+        budget.tick(site)?;
+        if a == b {
+            return Ok(a);
+        }
+        let ty = match (self.types.nodes[a].clone(), self.types.nodes[b].clone()) {
+            (Type::Bound(_, types::Kind::Value), _) => return Ok(b),
+            (_, Type::Bound(_, types::Kind::Value)) => return Ok(a),
+            (Type::Variant(ar), Type::Variant(br)) | (Type::Record(ar), Type::Record(br)) => {
+                let is_variant = matches!(self.types.nodes[a], Type::Variant(_));
+                let (Type::Row(mut af, None), Type::Row(bf, None)) =
+                    (self.types.nodes[ar].clone(), self.types.nodes[br].clone())
+                else {
+                    return Err(Failure::source(site, "open static aggregate row"));
+                };
+                if !is_variant && af.keys().ne(bf.keys()) {
+                    return Err(Failure::source(site, "static array record fields differ"));
+                }
+                for (name, b) in bf {
+                    if let Some(a) = af.get(&name).copied() {
+                        af.insert(name, self.join_value_types(a, b, budget, site, depth + 1)?);
+                    } else {
+                        af.insert(name, b);
+                    }
+                }
+                let row = self.types.intern(Type::Row(af, None));
+                if is_variant {
+                    Type::Variant(row)
+                } else {
+                    Type::Record(row)
+                }
+            }
+            (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => Type::Tuple(
+                xs.into_iter()
+                    .zip(ys)
+                    .map(|(a, b)| self.join_value_types(a, b, budget, site, depth + 1))
+                    .collect::<Result<_, _>>()?,
+            ),
+            (Type::Array(a), Type::Array(b)) => {
+                Type::Array(self.join_value_types(a, b, budget, site, depth + 1)?)
+            }
+            _ => {
+                return Err(Failure::source(
+                    site,
+                    "incompatible static array element types",
+                ));
+            }
+        };
+        Ok(self.types.intern(ty))
+    }
+
     fn charged_storage(&self) -> usize {
-        self.types.storage_bytes
+        self.frontend.as_ref().map_or(0, |f| f.observations().2)
+            + self.types.storage_bytes
             + self.terms.storage_bytes
             + self.values.storage_bytes
             + self.symbol_bytes
@@ -282,6 +377,16 @@ impl PrototypeSession {
     }
 
     pub fn compile(&mut self, source: &str) -> Result<Artifact, Failure> {
+        self.compile_observed(source, |_| {})
+    }
+
+    /// Optional host observations of completed phases, not semantic cache inputs.
+    /// The library has no clock or ambient host authority of its own.
+    pub fn compile_observed(
+        &mut self,
+        source: &str,
+        mut completed_phase: impl FnMut(&'static str),
+    ) -> Result<Artifact, Failure> {
         let units = source.encode_utf16().collect::<Vec<_>>();
         let site = Site {
             start: 0,
@@ -301,8 +406,8 @@ impl PrototypeSession {
         }
         let budget = Budget::new(&self.limits);
         let mut work = Work::default();
-        let lowered =
-            crate::source::lower_incremental(&units, None, None).map_err(|error| match error {
+        let lowered = crate::source::lower_incremental(&units, self.frontend.as_ref(), None)
+            .map_err(|error| match error {
                 crate::source::SourceError::Diagnostics(ds) => {
                     ds.first().map(Failure::from_diagnostic).unwrap_or_else(|| {
                         Failure::invariant(site, "frontend failed without a diagnostic")
@@ -311,6 +416,10 @@ impl PrototypeSession {
                 crate::source::SourceError::Lowering(message) => Failure::invariant(site, message),
             })?;
         let module = lowered.module;
+        work.frontend_parser_executed = lowered.frontend.observations().0;
+        work.frontend_reused_nodes = lowered.frontend.observations().1;
+        work.frontend_storage_bytes = lowered.frontend.observations().2;
+        completed_phase("frontend");
         work.parsed_expressions = module.arena.expressions.len();
         if module.parameter.is_some() {
             return Err(Failure::unsupported(
@@ -328,12 +437,12 @@ impl PrototypeSession {
             match &module.arena.declarations[declaration.0 as usize] {
                 Declaration::Signature {
                     kind,
-                    recursive,
+                    recursive: _,
                     name,
                     value,
                     span,
                 } => {
-                    if *recursive || *kind == DeclarationKind::Effect {
+                    if *kind == DeclarationKind::Effect {
                         return Err(Failure::unsupported(
                             (*span).into(),
                             "recursive/effect signatures are not in the prototype fragment",
@@ -402,6 +511,7 @@ impl PrototypeSession {
                                 globals: &globals,
                                 expression: *value,
                                 annotation: annotation.map(|(e, _)| e),
+                                binding_name: Some(name),
                             },
                             &budget,
                             &mut work,
@@ -456,6 +566,7 @@ impl PrototypeSession {
                     globals: &globals,
                     expression: *value,
                     annotation: None,
+                    binding_name: None,
                 },
                 &budget,
                 &mut work,
@@ -466,7 +577,9 @@ impl PrototypeSession {
             .iter()
             .map(|(n, s)| (n.clone(), self.types.display(globals[s].ty)))
             .collect();
+        completed_phase("checking-and-staging");
         let wasm = wasm::emit(self, &globals, &exports, &budget, &mut work, site)?;
+        completed_phase("lowering-emission-validation");
         self.definitions.retain(|s, _| live.contains(s));
         // Cache entries retain handles, never entire mutable evaluator scopes.
         if self.static_cache.len() > 1024 {
@@ -476,7 +589,9 @@ impl PrototypeSession {
         work.retained_types = self.types.nodes.len();
         work.retained_terms = self.terms.nodes.len();
         work.retained_values = self.values.nodes.len();
-        work.charged_storage_bytes = self.charged_storage();
+        work.charged_storage_bytes = self.charged_storage()
+            - self.frontend.as_ref().map_or(0, |f| f.observations().2)
+            + work.frontend_storage_bytes;
         if work.charged_storage_bytes > self.limits.retained_storage_bytes
             || work.retained_types + work.retained_terms + work.retained_values
                 > self.limits.retained_nodes
@@ -486,6 +601,10 @@ impl PrototypeSession {
                 "experimental retained-node limit; reset the session",
             ));
         }
+        // Only replace the last successful syntax snapshot after the full request
+        // and retained-storage check succeed. A failed edit supplies no authority.
+        self.frontend = Some(lowered.frontend);
+        completed_phase("retention-accounting");
         Ok(Artifact {
             wasm,
             interfaces,

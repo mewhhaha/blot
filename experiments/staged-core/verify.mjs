@@ -62,6 +62,10 @@ async function evaluate(source, expected, inputs = [-17n, 0n, 42n, 65535n]) {
 async function compareEdit(name, source, edit, before, after) {
   const warm = success(source, edit);
   const fresh = success(edit);
+  assert.deepEqual(
+    readFileSync(`${warm.output}.edited.wasm`),
+    readFileSync(fresh.output),
+  );
   const a = await load(warm.output);
   const b = await load(`${warm.output}.edited.wasm`);
   const c = await load(fresh.output);
@@ -234,6 +238,139 @@ return { .run = fn (x: Int) -> Int => compute x; .expected = fn () -> Int => exp
     assert.equal(failure.status, 1);
     assert.equal(JSON.parse(failure.stderr.trim()).class, "Source");
   }
+  const scoped = readFileSync(join(here, "scoped-code.blot"), "utf8");
+  await compareEdit(
+    "scoped typed generation and delayed type observations",
+    scoped,
+    scoped.replace("make 5", "make 8"),
+    (x) => {
+      if (x > 10n) return x + 5n;
+      return 10n;
+    },
+    (x) => {
+      if (x > 10n) return x + 8n;
+      return 10n;
+    },
+  );
+  await evaluate(
+    `${pre}const f = @staged.splice (@staged.code_lambda (Int, fn x => @staged.code_lambda (Int, fn y => @staged.code_apply (
+    @staged.quote (fn (a,b) => @staged.sub (a,b)), @staged.code_tuple [x,y]
+  ))))
+return { .run = fn (x: Int) -> Int => f x 3; }
+`,
+    (x) => x - 3n,
+  );
+  await evaluate(
+    `${pre}const build = @staged.static (fn amount => @staged.code_lambda (Int, fn x => @staged.code_field (
+    @staged.code_record [("first", x), ("second", @staged.code_lift amount)], "first"
+  )))
+const f = @staged.splice (build 9)${exported}`,
+    (x) => x,
+  );
+  await evaluate(
+    `${pre}const rec diverge = fn n => diverge n
+const f = fn (x: Int) -> Int => do:
+  let T = @staged.typeof (@staged.add (diverge x, 0))
+  let value: T = @staged.static 3
+  return @staged.add (value, x)${exported}`,
+    (x) => x + 3n,
+  );
+  const generatedGlobal = `${pre}const amount = 2
+const f = @staged.splice (@staged.code_lambda (Int, fn x => @staged.code_apply (
+  @staged.quote (fn a => @staged.add (a, amount)), x
+)))${exported}`;
+  await compareEdit(
+    "generated code relocates current runtime globals",
+    generatedGlobal,
+    generatedGlobal.replace(
+      "const amount = 2",
+      "const inserted = 19\nconst amount = 4",
+    ),
+    (x) => x + 2n,
+    (x) => x + 4n,
+  );
+
+  await evaluate(
+    `${pre}const rec count = fn (n, sum) => do:
+  if @staged.lt (n, 1):
+    return sum
+  else:
+    return count (@staged.sub (n, 1), @staged.add (sum, n))
+const fixed = @staged.static (count (10000, 0))
+const f = fn x => @staged.add (x, fixed)${exported}`,
+    (x) => x + 50005000n,
+  );
+  await evaluate(
+    `${pre}const f = fn x => case x of
+  y => @staged.add (y, 1)${exported}`,
+    (x) => x + 1n,
+  );
+
+  const collections = readFileSync(join(here, "collections.blot"), "utf8");
+  await compareEdit(
+    "recursive schemas and immutable arrays",
+    collections,
+    collections.replace("[x, 2, 3]", "[x, 2, 4]"),
+    (x) => x * 2n + 60n,
+    (x) => x * 2n + 61n,
+  );
+  await evaluate(
+    `${pre}
+const rec count = fn n => do:
+  if @staged.lt (n, 1):
+    return 7
+  else:
+    return count (@staged.sub (n, 1))
+const f = fn x => count x${exported}`,
+    () => 7n,
+    [0n, 1n, 100_000n],
+  );
+  // Non-tail calls must keep their pending arithmetic after returning.
+  await evaluate(
+    `${pre}
+const rec fact = fn n => do:
+  if @staged.lt (n, 2):
+    return 1
+  else:
+    return @staged.mul (n, fact (@staged.sub (n, 1)))
+const f = fn x => fact x${exported}`,
+    (x) => {
+      let out = 1n;
+      for (let n = 2n; n <= x; n++) out *= n;
+      return out;
+    },
+    [0n, 1n, 8n, 12n],
+  );
+  await evaluate(
+    `${pre}
+const f = fn x => case @staged.array_at ([11, 22], x) of
+  #Some n => n
+  #None => -1
+${exported}`,
+    (x) => {
+      if (x === 0n) return 11n;
+      if (x === 1n) return 22n;
+      return -1n;
+    },
+    [-1n, 0n, 1n, 2n, 1n << 40n],
+  );
+  // Pushing must not mutate the old array, and fold argument pairs can escape.
+  await evaluate(
+    `${pre}
+const first = [1, 2]
+const second = @staged.array_push (first, 99)
+const f = fn x => @staged.add (x, @staged.array_len first)${exported}`,
+    (x) => x + 2n,
+  );
+  await evaluate(
+    `${pre}
+const f = fn x => do:
+  let capture = fn (earlier, value) => fn n => @staged.add (earlier n, value)
+  let closure = @staged.array_fold ([1, 2, 3], capture, fn n => n)
+  return closure x
+${exported}`,
+    (x) => x + 6n,
+  );
   const unsupported = invoke('open import "blot:prelude"\nreturn {}\n');
   assert.equal(unsupported.status, 1);
   assert.equal(JSON.parse(unsupported.stderr.trim()).class, "Unsupported");

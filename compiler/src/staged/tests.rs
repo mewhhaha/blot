@@ -445,3 +445,494 @@ fn frontend_failure_classification_and_spans_survive_the_research_boundary() {
         assert_eq!(converted.site, Site { start: 7, end: 13 });
     }
 }
+
+#[test]
+fn recursive_functions_are_checked_once_and_static_recursion_executes_typed_core() {
+    let source = format!(
+        "{PRE}const rec factorial = fn n => do:\n  if @staged.lt (n, 2):\n    return 1\n  else:\n    return @staged.mul (n, factorial (@staged.sub (n, 1)))\nconst value = @staged.static (factorial 8)\nreturn {{ .run = fn (x: Int) -> Int => @staged.add (x, value); }}\n"
+    );
+    let mut session = PrototypeSession::default();
+    let artifact = session.compile(&source).unwrap();
+    assert_eq!(artifact.interfaces["factorial"], "(Int64 -> Int64)");
+    assert!(session.values.nodes.contains(&Value::Int(40320)));
+    let edited = session
+        .compile(&source.replace("factorial 8", "factorial 7"))
+        .unwrap();
+    assert_eq!(edited.work.checked_definitions, 1);
+    assert!(edited.work.static_cache_hits > 0);
+    assert_ne!(artifact.wasm, edited.wasm);
+}
+
+#[test]
+fn recursive_static_divergence_is_a_limit_and_does_not_cache_failure() {
+    let source = "const rec forever = fn x => forever x\nconst result = @staged.static (forever 0)\nreturn {}\n";
+    let mut session = PrototypeSession::default();
+    let failure = session.compile(source).unwrap_err();
+    assert_eq!(failure.class, FailureClass::Limit);
+    assert!(session.static_cache.is_empty());
+    assert_eq!(
+        failure,
+        PrototypeSession::default().compile(source).unwrap_err()
+    );
+    assert!(session.compile("return {}\n").is_ok());
+}
+
+#[test]
+fn recursive_static_calls_observe_transitive_implementation_edits() {
+    let source = format!(
+        "{PRE}const step = fn x => @staged.add (x, 1)\nconst rec f = fn n => do:\n  if @staged.lt (n, 1):\n    return 0\n  else:\n    return step (f (@staged.sub (n, 1)))\nconst value = @staged.static (f 6)\nreturn {{ .run = fn (x: Int) -> Int => @staged.add (x, value); }}\n"
+    );
+    let mut session = PrototypeSession::default();
+    let before = session.compile(&source).unwrap();
+    let source = source.replace("(x, 1)", "(x, 2)");
+    let after = session.compile(&source).unwrap();
+    assert_eq!(after.work.checked_definitions, 2);
+    assert_ne!(before.wasm, after.wasm);
+    assert!(session.values.nodes.contains(&Value::Int(12)));
+}
+
+#[test]
+fn immutable_array_fold_and_variant_cases_work_in_both_phases() {
+    let source = format!(
+        "{PRE}const values = @staged.static [#Some 2, #None, #Some 4]\nconst step = fn (sum, value) => case value of\n  #Some x => @staged.add (sum, x)\n  #None => sum\nconst total = @staged.static (@staged.array_fold (values, step, 0))\nreturn {{ .run = fn (x: Int) -> Int => @staged.array_fold ([#Some x, #None], step, total); }}\n"
+    );
+    let mut session = PrototypeSession::default();
+    let artifact = session.compile(&source).unwrap();
+    assert!(session.values.nodes.contains(&Value::Int(6)));
+    assert!(artifact.interfaces["values"].contains("Variant"));
+    assert_eq!(artifact.interfaces["total"], "Int64");
+}
+
+#[test]
+fn variants_enforce_payload_arity_and_exhaustiveness_without_dropping_unknown_cases() {
+    for source in [
+        "const f = fn x => case x of\n  #Some n => n\nconst bad = f #None\nreturn {}\n",
+        "const f = fn x => case x of\n  #Some => 1\nconst bad = f (#Some ())\nreturn {}\n",
+        "const f = fn x => case x of\n  #Some a => a\n  #Some b => b\nreturn {}\n",
+        "const f = fn x => case x of\n  _ => 0\n  #Some n => n\nreturn {}\n",
+    ] {
+        let err = PrototypeSession::default().compile(source).unwrap_err();
+        assert_eq!(err.class, FailureClass::Source, "{err:?}");
+    }
+    compile(
+        "const Int = @staged.int\nconst f = fn x => case x of\n  #Some n => n\n  _ => 0\nreturn { .run = fn (x: Int) -> Int => f (#Other x); }\n",
+    );
+}
+
+#[test]
+fn array_inference_is_homogeneous_and_empty_arrays_generalize() {
+    compile(&format!(
+        "{PRE}const empty = []\nconst a = @staged.array_push (empty, 3)\nconst b = @staged.array_push (empty, @staged.true)\nreturn {{ .run = fn (x: Int) -> Int => @staged.add (x, @staged.array_len b); }}\n"
+    ));
+    let err = PrototypeSession::default()
+        .compile("const bad = [1, @staged.true]\nreturn {}\n")
+        .unwrap_err();
+    assert_eq!(err.class, FailureClass::Source);
+    let a = compile("const n = @staged.static (@staged.array_at ([1, 2], -1))\nreturn {}\n");
+    assert!(a.interfaces["n"].contains("None"));
+}
+
+#[test]
+fn type_reflection_and_collection_processing_build_checked_schemas() {
+    let source = format!(
+        "{PRE}const A = @staged.static (@staged.record {{ .a = Int; .b = Int; }})\nconst convert = @staged.static (fn schema => @staged.record_fields (@staged.array_fold (@staged.fields schema, fn (fields, pair) => do:\n  let (name, T) = pair\n  return @staged.array_push (fields, (name, @staged.array_type T))\n, [])))\nconst B = @staged.static (convert A)\nconst get = @staged.splice (@staged.getter (B, \"a\"))\nreturn {{ .run = fn (x: Int) -> Int => @staged.array_len (get {{ .a = [x, 2]; .b = []; }}); }}\n"
+    );
+    // Destructured local bindings are not yet admitted. Use a tuple-pattern
+    // callback to exercise the same field-processing operation.
+    let source = source.replace("fn (fields, pair) => do:\n  let (name, T) = pair\n  return @staged.array_push (fields, (name, @staged.array_type T))\n", "fn (fields, (name, T)) => @staged.array_push (fields, (name, @staged.array_type T))");
+    let mut session = PrototypeSession::default();
+    let before = session.compile(&source).unwrap();
+    assert!(before.interfaces["get"].contains("a: [Int64]"));
+    let after = session
+        .compile(&source.replace("[x, 2]", "[x, 2, 3]"))
+        .unwrap();
+    assert_eq!(after.work.static_calls, 0);
+    assert_ne!(before.wasm, after.wasm);
+}
+
+#[test]
+fn generated_schema_fields_reject_duplicates_and_wrong_inputs() {
+    for source in [
+        "const T = @staged.static (@staged.record_fields [(\"x\", @staged.int), (\"x\", @staged.bool)])\nreturn {}\n",
+        "const T = @staged.static (@staged.fields @staged.int)\nreturn {}\n",
+        "const T = @staged.static (@staged.record_fields [(\"x\", 1)])\nreturn {}\n",
+    ] {
+        let err = PrototypeSession::default().compile(source).unwrap_err();
+        assert_eq!(err.class, FailureClass::Source);
+    }
+}
+
+const GENERATED: &str = r#"const Int = @staged.int
+const make = @staged.static (fn amount => @staged.code_lambda (Int, fn x => @staged.code_apply (
+  @staged.quote (fn (a, b) => @staged.add (a, b)),
+  @staged.code_tuple [x, @staged.code_lift amount]
+)))
+const add = @staged.splice (make 4)
+return { .run = fn (x: Int) -> Int => add x; }
+"#;
+
+#[test]
+fn generated_binders_allow_explicit_lifting_without_implicit_capture() {
+    let mut session = PrototypeSession::default();
+    let artifact = session.compile(GENERATED).unwrap();
+    assert_eq!(artifact.interfaces["add"], "(Int64 -> Int64)");
+    let edited = GENERATED.replace("make 4", "make 5");
+    let after = session.compile(&edited).unwrap();
+    assert_eq!(after.work.checked_definitions, 1);
+    assert_ne!(artifact.wasm, after.wasm);
+    assert!(after.work.reused_functions > 0);
+}
+
+#[test]
+fn nested_generated_binders_are_distinct_and_outer_capture_remains_scoped() {
+    let source = r#"const Int = @staged.int
+const generated = @staged.splice (@staged.code_lambda (Int, fn x => @staged.code_lambda (Int, fn y => @staged.code_apply (
+  @staged.quote (fn (a,b) => @staged.sub (a,b)), @staged.code_tuple [x,y]
+))))
+return { .run = fn (x: Int) -> Int => generated x 3; }
+"#;
+    let mut session = PrototypeSession::default();
+    let a = session.compile(source).unwrap();
+    assert_eq!(a.interfaces["generated"], "(Int64 -> (Int64 -> Int64))");
+    assert_eq!(session.next_code_local, 2);
+    let b = session.compile(source).unwrap();
+    assert_eq!(b.work.static_calls, 0);
+    assert_eq!(session.next_code_local, 2);
+}
+
+#[test]
+fn typed_code_constructors_reject_mismatches_before_emission() {
+    for source in [
+        "const bad = @staged.splice (@staged.code_apply (@staged.code_lift 1, @staged.code_lift 2))\nreturn {}\n",
+        "const bad = @staged.splice (@staged.code_if (@staged.code_lift 1, @staged.code_lift 2, @staged.code_lift 3))\nreturn {}\n",
+        "const bad = @staged.splice (@staged.code_if (@staged.code_lift @staged.true, @staged.code_lift 2, @staged.code_lift @staged.false))\nreturn {}\n",
+        "const bad = @staged.static (@staged.code_record [(\"a\", @staged.code_lift 1), (\"a\", @staged.code_lift 2)])\nreturn {}\n",
+        "const bad = @staged.static (@staged.code_lift @staged.int)\nreturn {}\n",
+        "const bad = @staged.static (@staged.code_field (@staged.code_lift { .a = 1; }, \"b\"))\nreturn {}\n",
+    ] {
+        let e = PrototypeSession::default().compile(source).unwrap_err();
+        assert_eq!(e.class, FailureClass::Source, "{e:?}");
+    }
+}
+
+#[test]
+fn escaped_generated_code_locals_cannot_cross_the_splice_bridge() {
+    let mut session = PrototypeSession::default();
+    let term = session.terms.intern(core::Node::Local(1 << 31), types::INT);
+    let value = session.values.intern(Value::Code(term));
+    let value_term = session
+        .terms
+        .intern(core::Node::Constant(value), types::CODE);
+    let symbol = session.symbol("escape", 0);
+    let source = "return { .run = @staged.splice escape; }\n";
+    let units = source.encode_utf16().collect::<Vec<_>>();
+    let module = crate::source::lower_incremental(&units, None, None)
+        .unwrap()
+        .module;
+    let Expression::Shape { ref members, .. } = module.arena.expressions[module.result.0 as usize]
+    else {
+        panic!()
+    };
+    let crate::ast::ShapeMember::Field { value, .. } = members[0] else {
+        panic!()
+    };
+    let result = check::definition(
+        &mut session,
+        check::Input {
+            module: &module,
+            names: &BTreeMap::from([("escape".into(), symbol)]),
+            globals: &BTreeMap::from([(
+                symbol,
+                Global {
+                    term: value_term,
+                    ty: types::CODE,
+                },
+            )]),
+            expression: value,
+            annotation: None,
+            binding_name: None,
+        },
+        &Budget::new(&Limits::default()),
+        &mut Work::default(),
+    );
+    let e = result.unwrap_err();
+    assert_eq!(e.class, FailureClass::Source);
+    assert!(e.message.contains("escaping"));
+}
+
+#[test]
+fn typeof_waits_for_inference_without_executing_the_runtime_subject() {
+    let source = r#"const Int = @staged.int
+const rec diverge = fn n => diverge n
+const f = fn x => do:
+  let T = @staged.typeof (diverge x)
+  let value = @staged.static 3
+  return @staged.add (value, x)
+return { .run = fn (x: Int) -> Int => f x; }
+"#;
+    // A diverging function's result is unconstrained here, so its result type
+    // cannot be manufactured from the later constraint on its argument.
+    assert!(
+        PrototypeSession::default()
+            .compile(source)
+            .unwrap_err()
+            .message
+            .contains("blocked")
+    );
+    let source = source.replace(
+        "@staged.typeof (diverge x)",
+        "@staged.typeof (@staged.add (diverge x, 0))",
+    );
+    let artifact = compile(&source);
+    assert_eq!(artifact.work.static_calls, 0);
+    assert_eq!(
+        artifact.work.static_obligations,
+        artifact.work.resolved_static_obligations
+    );
+}
+
+#[test]
+fn a_late_annotation_wakes_a_typeof_and_its_static_consumer_once() {
+    let source = r#"const Int = @staged.int
+const f: Int -> Bool
+const f = fn x => @staged.static (@staged.type_equal (@staged.typeof x, Int))
+const Bool = @staged.bool
+return {}
+"#;
+    // Bind Bool before the signature; there are no implicit prelude bindings.
+    let source = source
+        .replace("const Int = @staged.int\n", PRE)
+        .replace("\nconst Bool = @staged.bool\nreturn", "\nreturn");
+    let mut session = PrototypeSession::default();
+    let a = session.compile(&source).unwrap();
+    assert_eq!(a.interfaces["f"], "(Int64 -> Bool)");
+    assert!(a.work.static_obligation_wakeups >= 1);
+    assert_eq!(
+        a.work.static_obligations,
+        a.work.resolved_static_obligations
+    );
+    assert!(session.values.nodes.contains(&Value::Bool(true)));
+    let b = session
+        .compile(&source.replace("f: Int -> Bool", "f: Bool -> Bool"))
+        .unwrap();
+    assert!(session.values.nodes.contains(&Value::Bool(false)));
+    assert_eq!(b.work.checked_definitions, 1);
+}
+
+#[test]
+fn unresolved_static_obligations_require_evidence_instead_of_inverting_type_programs() {
+    let bad = "const f = fn x => @staged.typeof x\nreturn {}\n";
+    let mut session = PrototypeSession::default();
+    let failure = session.compile(bad).unwrap_err();
+    assert_eq!(failure.class, FailureClass::Source);
+    assert!(failure.message.contains("blocked"));
+    let fixed = "const Int = @staged.int\nconst f = fn x => @staged.static (@staged.type_equal (@staged.typeof x, Int))\nconst g = fn (x: Int) -> Int => @staged.add (x, 1)\nreturn {}\n";
+    // An unrelated annotation must not solve f's own unknown argument.
+    assert!(
+        session
+            .compile(fixed)
+            .unwrap_err()
+            .message
+            .contains("blocked")
+    );
+    assert!(session.compile("return {}\n").is_ok());
+}
+
+#[test]
+fn a_local_pending_result_is_not_generalized_away_from_its_obligation() {
+    let bad = "const f = fn x => do:\n  let a = @staged.static 1\n  let b = @staged.add (a, 1)\n  if a:\n    return b\n  else:\n    return 0\nreturn {}\n";
+    let failure = PrototypeSession::default().compile(bad).unwrap_err();
+    assert_eq!(failure.class, FailureClass::Source);
+}
+
+#[test]
+fn local_type_aliases_share_pending_holes_and_do_not_lose_their_evidence() {
+    let source = r#"const Int = @staged.int
+const f: Int -> Int
+const f = fn x => do:
+  let T = @staged.typeof x
+  let y: T = x
+  return @staged.add (y, 3)
+return { .run = f; }
+"#;
+    let a = compile(source);
+    assert_eq!(a.interfaces["f"], "(Int64 -> Int64)");
+    assert_eq!(
+        a.work.static_obligations,
+        a.work.resolved_static_obligations
+    );
+    let bad = source.replace("let y: T = x", "let y: T = @staged.true");
+    assert_eq!(
+        PrototypeSession::default().compile(&bad).unwrap_err().class,
+        FailureClass::Source
+    );
+}
+
+#[test]
+fn generated_code_uses_current_global_implementations_after_relocation() {
+    let source = r#"const Int = @staged.int
+const value = 2
+const generated = @staged.splice (@staged.code_lambda (Int, fn x => @staged.code_apply (
+  @staged.quote (fn a => @staged.add (a, value)), x
+)))
+return { .run = fn (x: Int) -> Int => generated x; }
+"#;
+    let mut session = PrototypeSession::default();
+    let before = session.compile(source).unwrap();
+    let changed = source.replace("const value = 2", "const inserted = 19\nconst value = 4");
+    let after = session.compile(&changed).unwrap();
+    let fresh = compile(&changed);
+    // Within-session compact IDs may differ, so output equivalence is also
+    // exercised by verify.mjs; the key work promise is no generator replay.
+    assert_ne!(before.wasm, after.wasm);
+    assert_eq!(after.interfaces, fresh.interfaces);
+    assert_eq!(after.work.static_calls, 0);
+    assert!(after.work.reused_functions > 0);
+}
+
+#[test]
+fn recursive_bindings_remain_monomorphic_within_their_own_body() {
+    let bad = "const rec f = fn x => f [x]\nreturn {}\n";
+    assert_eq!(
+        PrototypeSession::default().compile(bad).unwrap_err().class,
+        FailureClass::Source
+    );
+    let source = format!(
+        "{PRE}const rec f = fn (n, x) => do:\n  if @staged.lt (n, 1):\n    return x\n  else:\n    return f (@staged.sub (n, 1), x)\nconst a = f (2, 7)\nconst b = f (3, @staged.true)\nreturn {{ .run = fn (x: Int) -> Int => @staged.add (x, a); }}\n"
+    );
+    compile(&source);
+}
+
+#[test]
+fn static_tail_calls_do_not_spend_depth_per_iteration_or_cache_fresh_identities() {
+    let source = r#"const Int = @staged.int
+const rec count = fn (n, sum) => do:
+  if @staged.lt (n, 1):
+    return sum
+  else:
+    return count (@staged.sub (n, 1), @staged.add (sum, n))
+const answer = @staged.static (count (10000, 0))
+return { .run = fn (x: Int) -> Int => @staged.add (x, answer); }
+"#;
+    let mut session = PrototypeSession::default();
+    let a = session.compile(source).unwrap();
+    assert!(a.work.static_tail_calls >= 10000);
+    assert!(session.values.nodes.contains(&Value::Int(50005000)));
+    let source = "const fresh = @staged.static (do:\n  const rec f = fn n => do:\n    if @staged.lt (n, 1):\n      return @staged.fresh ()\n    else:\n      return f (@staged.sub (n, 1))\n  return f\n)\nconst A = @staged.static (fresh 10)\nconst B = @staged.static (fresh 10)\nreturn {}\n";
+    let a = compile(source);
+    assert_eq!(a.work.fresh_identities, 2);
+}
+
+#[test]
+fn wildcard_only_cases_do_not_require_variant_subjects() {
+    compile(
+        "const Int = @staged.int\nconst f = fn x => case x of\n  y => @staged.add (y, 1)\nreturn { .run = fn (x: Int) -> Int => f x; }\n",
+    );
+}
+
+#[test]
+fn blocked_queries_only_wake_for_changed_dependencies_not_every_local_binding() {
+    let mut baseline_wakeups = None;
+    for count in [0, 40] {
+        let mut source = String::from(
+            "const Int = @staged.int\nconst f: Int -> Int\nconst f = fn x => do:\n  let T = @staged.typeof x\n",
+        );
+        for i in 0..count {
+            source.push_str(&format!("  let unused{i} = @staged.static {i}\n"));
+        }
+        source.push_str("  let y: T = x\n  return @staged.add (y, 2)\nreturn { .run = f; }\n");
+        let a = compile(&source);
+        assert_eq!(
+            a.work.static_obligations,
+            a.work.resolved_static_obligations
+        );
+        if let Some(wakeups) = baseline_wakeups {
+            assert_eq!(a.work.static_obligation_wakeups, wakeups);
+        } else {
+            baseline_wakeups = Some(a.work.static_obligation_wakeups);
+        }
+        // One initial attempt plus only explicit dependency-driven wakeups.
+        assert_eq!(
+            a.work.static_obligation_attempts,
+            a.work.static_obligations + a.work.static_obligation_wakeups
+        );
+    }
+}
+
+#[test]
+fn baba_syntax_reuse_does_not_reuse_changed_literal_meaning() {
+    let mut session = PrototypeSession::default();
+    let first = session.compile(DEMO).unwrap();
+    assert!(first.work.frontend_parser_executed);
+    let changed = DEMO.replace("makeAdder 10", "makeAdder 20");
+    let edited = session.compile(&changed).unwrap();
+    assert!(!edited.work.frontend_parser_executed);
+    assert!(edited.work.frontend_reused_nodes > 0);
+    assert_eq!(edited.work.checked_definitions, 1);
+    assert_ne!(first.wasm, edited.wasm);
+    assert_eq!(edited.wasm, compile(&changed).wasm);
+    assert!(edited.work.frontend_storage_bytes > 0);
+    assert!(edited.work.charged_storage_bytes >= edited.work.frontend_storage_bytes);
+    session.reset();
+    assert!(session.frontend.is_none());
+    assert!(
+        session
+            .compile(&changed)
+            .unwrap()
+            .work
+            .frontend_parser_executed
+    );
+}
+
+#[test]
+fn failed_frontend_and_type_edits_preserve_fresh_agreement_after_recovery() {
+    let mut session = PrototypeSession::default();
+    session.compile(DEMO).unwrap();
+    let before = session.frontend.as_ref().unwrap() as *const _;
+    for bad in [
+        DEMO.replace("makeAdder 10", "makeAdder )"),
+        DEMO.replace("makeAdder 10", "makeAdder ()"),
+    ] {
+        let error = session.compile(&bad).unwrap_err();
+        assert_eq!(
+            error,
+            PrototypeSession::default().compile(&bad).unwrap_err()
+        );
+        assert_eq!(before, session.frontend.as_ref().unwrap() as *const _);
+    }
+    let changed = format!(
+        "const inserted = 7\n{}",
+        DEMO.replace("makeAdder 10", "makeAdder 101")
+    );
+    assert_eq!(
+        session.compile(&changed).unwrap().wasm,
+        compile(&changed).wasm
+    );
+}
+
+#[test]
+fn optional_phase_observation_does_not_change_compilation_or_failure() {
+    let mut phases = Vec::new();
+    let observed = PrototypeSession::default()
+        .compile_observed(DEMO, |p| phases.push(p))
+        .unwrap();
+    let ordinary = compile(DEMO);
+    assert_eq!(observed.wasm, ordinary.wasm);
+    assert_eq!(observed.interfaces, ordinary.interfaces);
+    assert_eq!(
+        phases,
+        [
+            "frontend",
+            "checking-and-staging",
+            "lowering-emission-validation",
+            "retention-accounting"
+        ]
+    );
+    let bad = "const bad = @staged.splice 1\nreturn {}\n";
+    assert_eq!(
+        PrototypeSession::default()
+            .compile_observed(bad, |_| {})
+            .unwrap_err(),
+        PrototypeSession::default().compile(bad).unwrap_err()
+    );
+}

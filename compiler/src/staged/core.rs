@@ -19,10 +19,27 @@ pub(super) enum Primitive {
     Fresh,
     Iterate,
     Arrow,
+    ArrayType,
+    ArrayLen,
+    ArrayAt,
+    ArrayPush,
+    ArrayFold,
+    TypeFields,
+    RecordFields,
+    TypeEqual,
+    CodeLambda,
+    CodeApply,
+    CodeLift,
+    CodeIf,
+    CodeField,
+    CodeTuple,
+    CodeRecord,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Node {
+    /// Checker-only hole. Freezing rejects this variant before publishing core.
+    Blocked(usize),
     Constant(ValueId),
     Primitive(Primitive),
     Local(Local),
@@ -31,7 +48,19 @@ pub(super) enum Node {
         parameter: Local,
         body: TermId,
     },
+    RecursiveFunction {
+        recursive: Local,
+        parameter: Local,
+        body: TermId,
+    },
     Call(TermId, TermId),
+    Array(Vec<TermId>),
+    Variant(String, Option<TermId>),
+    Case {
+        target: TermId,
+        arms: Vec<(String, Option<Local>, TermId)>,
+        fallback: Option<(Local, TermId)>,
+    },
     Tuple(Vec<TermId>),
     Record(Vec<(String, TermId)>),
     Project(TermId, usize),
@@ -59,6 +88,11 @@ pub(super) struct Terms {
 }
 impl Terms {
     pub fn intern(&mut self, node: Node, ty: TypeId) -> TermId {
+        if let Node::Instance(id) = node
+            && self.nodes[id].ty == ty
+        {
+            return id;
+        }
         let term = Term { ty, node };
         if let Some(id) = self.index.get(&term) {
             return *id;
@@ -67,8 +101,11 @@ impl Terms {
             * (std::mem::size_of::<Term>()
                 + match &term.node {
                     Node::Record(fs) => fs.iter().map(|(name, _)| name.len() + 32).sum(),
-                    Node::Field(_, name) => name.len(),
-                    Node::Tuple(xs) => xs.len() * std::mem::size_of::<TermId>(),
+                    Node::Field(_, name) | Node::Variant(name, _) => name.len(),
+                    Node::Case { arms, .. } => {
+                        arms.iter().map(|(name, _, _)| name.len() + 32).sum()
+                    }
+                    Node::Tuple(xs) | Node::Array(xs) => xs.len() * std::mem::size_of::<TermId>(),
                     _ => 0,
                 });
         let id = self.nodes.len();
@@ -79,6 +116,7 @@ impl Terms {
     pub fn children(&self, id: TermId) -> Vec<TermId> {
         match &self.nodes[id].node {
             Node::Function { body, .. }
+            | Node::RecursiveFunction { body, .. }
             | Node::Project(body, _)
             | Node::Field(body, _)
             | Node::Quote(body)
@@ -86,7 +124,16 @@ impl Terms {
             Node::Call(a, b) => vec![*a, *b],
             Node::If(a, b, c) => vec![*a, *b, *c],
             Node::Let { value, body, .. } => vec![*value, *body],
-            Node::Tuple(xs) => xs.clone(),
+            Node::Tuple(xs) | Node::Array(xs) => xs.clone(),
+            Node::Variant(_, value) => value.iter().copied().collect(),
+            Node::Case {
+                target,
+                arms,
+                fallback,
+            } => std::iter::once(*target)
+                .chain(arms.iter().map(|(_, _, body)| *body))
+                .chain(fallback.iter().map(|(_, body)| *body))
+                .collect(),
             Node::Record(fs) => fs.iter().map(|(_, v)| *v).collect(),
             _ => vec![],
         }
@@ -119,6 +166,34 @@ impl Terms {
                 Node::Function { parameter, body } => {
                     vars = memo[&body].clone();
                     vars.remove(&parameter);
+                }
+                Node::RecursiveFunction {
+                    recursive,
+                    parameter,
+                    body,
+                } => {
+                    vars = memo[&body].clone();
+                    vars.remove(&parameter);
+                    vars.remove(&recursive);
+                }
+                Node::Case {
+                    target,
+                    ref arms,
+                    ref fallback,
+                } => {
+                    vars = memo[&target].clone();
+                    for (_, parameter, body) in arms {
+                        let mut arm = memo[body].clone();
+                        if let Some(parameter) = parameter {
+                            arm.remove(parameter);
+                        }
+                        vars.extend(arm);
+                    }
+                    if let Some((parameter, body)) = fallback {
+                        let mut arm = memo[body].clone();
+                        arm.remove(parameter);
+                        vars.extend(arm);
+                    }
                 }
                 Node::Let { local, value, body } => {
                     vars = memo[&body].clone();
@@ -167,6 +242,8 @@ pub(super) enum Value {
     Type(TypeId),
     Code(TermId),
     Tuple(Vec<ValueId>),
+    Array(Vec<ValueId>),
+    Variant(String, Option<ValueId>),
     Record(BTreeMap<String, ValueId>),
     Closure {
         function: TermId,
@@ -188,9 +265,9 @@ impl Values {
         self.storage_bytes += 2
             * (std::mem::size_of::<Value>()
                 + match &value {
-                    Value::Text(text) => text.len(),
+                    Value::Text(text) | Value::Variant(text, _) => text.len(),
                     Value::Record(fs) => fs.keys().map(|name| name.len() + 32).sum(),
-                    Value::Tuple(xs) | Value::Primitive(_, xs) => {
+                    Value::Tuple(xs) | Value::Array(xs) | Value::Primitive(_, xs) => {
                         xs.len() * std::mem::size_of::<ValueId>()
                     }
                     Value::Closure { captures, .. } => captures.len() * 32,

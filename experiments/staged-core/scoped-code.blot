@@ -1,0 +1,35 @@
+const Int = @staged.int
+const Bool = @staged.bool
+const Pair = @staged.static (@staged.record { .left = Int; .right = Int; })
+const make =
+  @staged.static (fn amount => @staged.code_lambda (
+    Pair,
+    fn pair => do:
+      let left = @staged.code_field (pair, "left")
+      let right = @staged.code_field (pair, "right")
+      let adjusted =
+        @staged.code_apply (
+          @staged.quote (fn (a, b) => @staged.add (a, b)),
+          @staged.code_tuple [left, @staged.code_lift amount]
+        )
+      return @staged.code_if (
+        @staged.code_apply (
+          @staged.quote (fn (a, b) => @staged.lt (a, b)),
+          @staged.code_tuple [right, left]
+        ),
+        adjusted,
+        right
+      )
+  ))
+const generated = @staged.splice (make 5)
+const known: Int -> Bool
+const known =
+  fn x => @staged.static (@staged.type_equal (@staged.typeof x, Int))
+const work = fn (x: Int) -> Int => do:
+  let T = @staged.typeof x
+  let y: T = x
+  if known y:
+    return generated { .left = y; .right = 10; }
+  else:
+    return 0
+return { .run = work; }

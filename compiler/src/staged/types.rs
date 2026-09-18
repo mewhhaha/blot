@@ -25,6 +25,8 @@ pub(super) enum Type {
     Function(TypeId, TypeId),
     Tuple(Vec<TypeId>),
     Record(TypeId),
+    Array(TypeId),
+    Variant(TypeId),
     Row(BTreeMap<String, TypeId>, Option<TypeId>),
 }
 
@@ -72,7 +74,7 @@ impl Types {
         let closed = match &ty {
             Type::Bound(..) => false,
             Type::Function(a, b) => self.closed[*a] && self.closed[*b],
-            Type::Record(row) => self.closed[*row],
+            Type::Record(row) | Type::Array(row) | Type::Variant(row) => self.closed[*row],
             Type::Tuple(items) => items.iter().all(|t| self.closed[*t]),
             Type::Row(fields, tail) => {
                 fields.values().all(|t| self.closed[*t]) && tail.is_none_or(|t| self.closed[t])
@@ -123,6 +125,8 @@ impl Types {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
+                Type::Array(t) => format!("[{}]", go(store, *t, fuel)),
+                Type::Variant(r) => format!("Variant[{}]", go(store, *r, fuel)),
                 Type::Record(r) => format!("{{{}}}", go(store, *r, fuel)),
                 Type::Row(fs, tail) => {
                     let mut out = fs
@@ -147,6 +151,8 @@ enum Cell {
     Function(InferId, InferId),
     Tuple(Vec<InferId>),
     Record(InferId),
+    Array(InferId),
+    Variant(InferId),
     Row(BTreeMap<String, InferId>, Option<InferId>),
 }
 
@@ -154,6 +160,7 @@ pub(super) struct Inference {
     cells: Vec<Cell>,
     budget: Budget,
     pub steps: usize,
+    pub changed: Vec<InferId>,
 }
 
 impl Inference {
@@ -162,6 +169,7 @@ impl Inference {
             cells: Vec::new(),
             budget,
             steps: 0,
+            changed: Vec::new(),
         }
     }
     fn add(&mut self, cell: Cell) -> InferId {
@@ -190,6 +198,18 @@ impl Inference {
         let row = self.add(Cell::Row(fields, tail));
         self.add(Cell::Record(row))
     }
+    pub fn array(&mut self, element: InferId) -> InferId {
+        self.add(Cell::Array(element))
+    }
+    pub fn variant(&mut self, fields: BTreeMap<String, InferId>, open: bool) -> InferId {
+        let tail = if open {
+            Some(self.fresh(Kind::Row))
+        } else {
+            None
+        };
+        let row = self.add(Cell::Row(fields, tail));
+        self.add(Cell::Variant(row))
+    }
     fn root(&mut self, mut id: InferId) -> InferId {
         let start = id;
         while let Cell::Var(_, Some(next)) = self.cells[id] {
@@ -209,7 +229,7 @@ impl Inference {
     }
     fn children(&self, id: InferId) -> Vec<InferId> {
         match &self.cells[id] {
-            Cell::Var(_, Some(t)) | Cell::Record(t) => vec![*t],
+            Cell::Var(_, Some(t)) | Cell::Record(t) | Cell::Array(t) | Cell::Variant(t) => vec![*t],
             Cell::Function(a, b) => vec![*a, *b],
             Cell::Tuple(xs) => xs.clone(),
             Cell::Row(fs, tail) => fs.values().copied().chain(tail.iter().copied()).collect(),
@@ -241,6 +261,7 @@ impl Inference {
         }
         let kind = self.kind(var);
         self.cells[var] = Cell::Var(kind, Some(to));
+        self.changed.push(var);
         Ok(())
     }
     fn row(
@@ -286,7 +307,9 @@ impl Inference {
                 (_, Cell::Var(_, None)) => self.bind(b, a, site)?,
                 (Cell::Atom(a), Cell::Atom(b)) if a == b => {}
                 (Cell::Function(a, b), Cell::Function(c, d)) => pending.extend([(a, c), (b, d)]),
-                (Cell::Record(a), Cell::Record(b)) => pending.push((a, b)),
+                (Cell::Record(a), Cell::Record(b))
+                | (Cell::Array(a), Cell::Array(b))
+                | (Cell::Variant(a), Cell::Variant(b)) => pending.push((a, b)),
                 (Cell::Tuple(a), Cell::Tuple(b)) if a.len() == b.len() => {
                     pending.extend(a.into_iter().zip(b))
                 }
@@ -367,6 +390,14 @@ impl Inference {
                     let b = go(this, b, qs, memo, site, depth + 1)?;
                     this.function(a, b)
                 }
+                Cell::Array(r) => {
+                    let r = go(this, r, qs, memo, site, depth + 1)?;
+                    this.add(Cell::Array(r))
+                }
+                Cell::Variant(r) => {
+                    let r = go(this, r, qs, memo, site, depth + 1)?;
+                    this.add(Cell::Variant(r))
+                }
                 Cell::Record(r) => {
                     let r = go(this, r, qs, memo, site, depth + 1)?;
                     this.add(Cell::Record(r))
@@ -414,6 +445,14 @@ impl Inference {
                     let a = go(this, store, *a, memo, site, depth + 1)?;
                     let b = go(this, store, *b, memo, site, depth + 1)?;
                     this.function(a, b)
+                }
+                Type::Array(r) => {
+                    let r = go(this, store, *r, memo, site, depth + 1)?;
+                    this.add(Cell::Array(r))
+                }
+                Type::Variant(r) => {
+                    let r = go(this, store, *r, memo, site, depth + 1)?;
+                    this.add(Cell::Variant(r))
                 }
                 Type::Record(r) => {
                     let r = go(this, store, *r, memo, site, depth + 1)?;
@@ -485,6 +524,8 @@ impl Inference {
                         .map(|x| go(this, store, x, bs, memo, site, depth + 1))
                         .collect::<Result<_, _>>()?,
                 ),
+                Cell::Array(r) => Type::Array(go(this, store, r, bs, memo, site, depth + 1)?),
+                Cell::Variant(r) => Type::Variant(go(this, store, r, bs, memo, site, depth + 1)?),
                 Cell::Record(r) => Type::Record(go(this, store, r, bs, memo, site, depth + 1)?),
                 Cell::Row(..) => {
                     let (fs, tail) = this.row(id, site)?;
