@@ -21,7 +21,7 @@ const Response =
 
 let not_found = fn () => { .status = 404; .body = "not found"; }
 
-let route :: Request -> Response
+let route: Request -> Response
 let route = fn request => case (request.method, request.path) of
   (#Get, "/health") => { .status = 200; .body = "healthy"; }
   (#Post, "/users") => { .status = 201; .body = "created"; }
@@ -39,7 +39,7 @@ let route = fn request => case (request.method, request.path) of
 
   (#Post, _) => not_found ()
 
-let requests :: [Request]
+let requests: [Request]
 let requests =
   [
     { .method = #Get; .path = "/health"; },

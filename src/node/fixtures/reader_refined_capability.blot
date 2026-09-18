@@ -4,7 +4,7 @@ const R = import "../../../examples/lib/reader.blot"
 const Percent = refine (Int, fn value => value >= 0 && value <= 100)
 const Policy = { .percent = Percent; }
 
-const percentage :: R.Reader (Policy, Int)
+const percentage: R.Reader (Policy, Int)
 const percentage = fn environment => environment.percent
 
 // The environment shape is present, but the field inhabitant is outside the

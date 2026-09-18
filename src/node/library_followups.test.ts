@@ -51,7 +51,7 @@ test("inferred recursive sums preserve tail calls and evaluator/Wasm agreement",
     await compiler.checkSource(
       mixed,
       `open import "blot:prelude"
-const choose = fn (flag :: Bool, integer :: Int, float :: F64) => case flag of
+const choose = fn (flag: Bool, integer: Int, float: F64) => case flag of
   #True => integer
   #False => float
 return { .choose; }
@@ -141,7 +141,7 @@ test("loop returns preserve scalar and record payload representations", async ()
     await compiler.checkSource(
       path,
       `open import "blot:prelude"
-const compare = fn (limit :: Int, y :: Int) -> Int => do:
+const compare = fn (limit: Int, y: Int) -> Int => do:
   for x in Iter.range (0, limit):
     if x < y:
       return -1
@@ -244,7 +244,7 @@ const unwrap = fn wrapped => case wrapped of
     await assert.rejects(
       compiler.checkSource(
         "/tmp/blot-nested-payload-mismatch.blot",
-        `${prefix}const result :: Int
+        `${prefix}const result: Int
 const result = unwrap (#Wrap { .value = "wrong"; })
 return result
 `,

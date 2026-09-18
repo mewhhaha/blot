@@ -8,32 +8,32 @@ const Profile =
     .quota = Quota;
   }
 
-const rename :: R.Reversible (Profile, Text, Text)
+const rename: R.Reversible (Profile, Text, Text)
 const rename =
   R.replace (
     fn profile => profile.name,
     fn (profile, name) => Shape.update (profile, { .name; })
   )
 
-const set_quota :: R.Reversible (Profile, Quota, Quota)
+const set_quota: R.Reversible (Profile, Quota, Quota)
 const set_quota =
   R.replace (
     fn profile => profile.quota,
     fn (profile, quota) => Shape.update (profile, { .quota; })
   )
 
-const plan :: R.Reversible (Profile, (Text, Quota), (Text, Quota))
+const plan: R.Reversible (Profile, (Text, Quota), (Text, Quota))
 const plan = R.compose (rename, set_quota)
 
 const PolicyError = #QuotaTooHigh Quota
-const validate :: Profile -> Result (Unit, PolicyError)
+const validate: Profile -> Result (Unit, PolicyError)
 const validate = fn profile => do:
   if profile.quota <= 50:
     return #Ok Unit
 
   return #Error (#QuotaTooHigh profile.quota)
 
-const original :: Profile
+const original: Profile
 const original = { .name = "Ada"; .quota = 20; }
 
 let (changed, undo) = plan.apply (original, ("Grace", 40))

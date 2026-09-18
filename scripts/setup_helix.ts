@@ -117,7 +117,7 @@ const reservedTokens = [
   "=>",
   ":=",
   "<-",
-  "::",
+  ":",
 ];
 
 const grammarJsPath = join(grammarDirectory, "grammar.js");

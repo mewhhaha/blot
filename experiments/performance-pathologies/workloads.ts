@@ -1,11 +1,11 @@
 import { requiredFunction } from "../../src/abi_values.ts";
 /** Both Text operands remain dynamic, including long repetitive queries. */
 export const textSearchSource = `open import "blot:prelude"
-let contains :: (Text, Text) -> Int
+let contains: (Text, Text) -> Int
 let contains = fn (text, query) => case Text.contains text query of
   #True => 1
   #False => 0
-let find :: (Text, Text, Int) -> Int
+let find: (Text, Text, Int) -> Int
 let find = fn (text, query, start) => @text.find_from text query start
 return { .contains = contains; .find = find; }
 `;
@@ -22,7 +22,7 @@ export function nestedRecordSource(depth: number): string {
     value = `{ .child = ${value}; }`;
   }
   return `open import "blot:prelude"
-let nested :: Int -> ${type}
+let nested: Int -> ${type}
 let nested = fn input => ${value}
 return nested
 `;

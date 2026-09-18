@@ -5,7 +5,7 @@ const Input = #A | #B
 const Remaining = Input \ #A
 
 // `#A` has already been removed from Remaining, so forwarding it is a type error.
-const invalid :: Router.Stage (Input, Text, Remaining)
+const invalid: Router.Stage (Input, Text, Remaining)
 const invalid = fn input => case input of
   #A => #Error #A
   #B => #Error #B

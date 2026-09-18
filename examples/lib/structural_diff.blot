@@ -38,7 +38,7 @@ const scalar_equal = fn field => case Reflect.of field.type of
 const derive = fn schema => do:
   let evidence = Derive.fields schema
 
-  let changed :: (schema, schema) -> [Text]
+  let changed: (schema, schema) -> [Text]
   let changed = fn _ => @satisfies Array.empty [Text]
 
   for name in Iter.items (@shape.names evidence.fields):
@@ -54,7 +54,7 @@ const derive = fn schema => do:
       // extending that array therefore requires an explicit ownership copy.
       return @array.push (Array.copy names) name
 
-  let equal :: (schema, schema) -> Bool
+  let equal: (schema, schema) -> Bool
   let equal = fn pair => Int.eq (@array.len (changed pair)) 0
 
   return @satisfies {

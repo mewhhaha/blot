@@ -1,0 +1,44 @@
+name: Staged prototype
+
+on:
+  pull_request:
+    paths:
+      - "compiler/**"
+      - "experiments/staged-core/**"
+      - "spec/STAGED_PROTOTYPE.md"
+      - ".github/workflows/staged-prototype.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staged-prototype-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  executable-fragment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Rust formatting
+        run: cargo fmt --manifest-path experiments/staged-core/native/Cargo.toml -- --check
+      - name: Prototype inference, staging, identity and invalidation regressions
+        run: cargo test --locked --manifest-path experiments/staged-core/native/Cargo.toml
+      - name: Experimental Wasm library lint
+        run: cargo clippy --locked --manifest-path experiments/staged-core/native/Cargo.toml --target wasm32-unknown-unknown --lib -- -D warnings
+      - name: Build the opt-in native laboratory
+        run: cargo build --locked --release --manifest-path experiments/staged-core/native/Cargo.toml --bin staged-prototype
+      - name: Execute generated Wasm and compare fresh and real-edited results
+        run: node experiments/staged-core/verify.mjs experiments/staged-core/native/target/release/staged-prototype

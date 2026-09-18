@@ -5,13 +5,13 @@ const Model = Space.space #Model
 const World = Space.space #World
 const Screen = Space.space #Screen
 
-const model_to_world :: Space.Transform (Model.tag, World.tag)
+const model_to_world: Space.Transform (Model.tag, World.tag)
 const model_to_world = {
   .point = fn point => { .frame = #World; .x = point.x; .y = point.y; };
   .vector = fn vector => { .frame = #World; .dx = vector.dx; .dy = vector.dy; };
 }
 
-const screen_to_world :: Space.Transform (Screen.tag, World.tag)
+const screen_to_world: Space.Transform (Screen.tag, World.tag)
 const screen_to_world = {
   .point = fn point => { .frame = #World; .x = point.x; .y = point.y; };
   .vector = fn vector => { .frame = #World; .dx = vector.dx; .dy = vector.dy; };

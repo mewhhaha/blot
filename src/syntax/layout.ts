@@ -100,6 +100,7 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
   }
   if (tokens.length === 0) return { ok: true, layout: identityLayout(source) };
 
+  const openingPositions = delimiterOpenings(tokens);
   const insertions: SourceInsertion[] = [];
   const frames: LayoutFrame[] = [{
     indent: 0,
@@ -124,7 +125,8 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
     const newline = lastNewlineEnd(gap);
     const separator = newline >= 0 &&
       recordSeparator(source, delimiters, previous, token);
-    const suiteIntroducer = opensSuite(previous);
+    const suiteIntroducer = opensSuite(previous) &&
+      !isAnnotationColon(tokens, openingPositions, tokenIndex - 1);
     const frame = frames[frames.length - 1];
     const insideActiveSuite = frames.length > 1 &&
       delimiters.brackets === frame.brackets;
@@ -334,6 +336,63 @@ function sourceIndentWidth(source: string, offset: number): number {
   const indentation = beforeToken.match(/^[ \t]*/)?.[0];
   if (indentation === undefined) throw new Error("A source line has no start.");
   return indentationWidth(indentation);
+}
+
+// Layout needs only delimiter boundaries, never a second syntax parser. A
+// closing compound pattern can jump to its opener without rescanning children.
+// Baba still rejects mismatched delimiters and inadmissible patterns.
+function delimiterOpenings(tokens: readonly Token[]): Uint32Array {
+  const positions = new Uint32Array(tokens.length);
+  const pending: number[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const text = tokens[index].text;
+    if (["(", "[", "{"].includes(text)) pending.push(index);
+    else if ([")", "]", "}"].includes(text)) {
+      const opening = pending.pop();
+      if (opening !== undefined) positions[index] = opening + 1;
+    }
+  }
+  return positions;
+}
+
+// A type header can continue across equally indented lines. Unlike a suite
+// colon, it does not introduce statement layout. Skip one complete pattern and
+// its constructor/qualifier prefixes; nested children use the opening table.
+function isAnnotationColon(
+  tokens: readonly Token[],
+  openingPositions: Uint32Array,
+  index: number,
+): boolean {
+  if (index < 1 || tokens[index]?.text !== ":") return false;
+  let start = index - 1;
+  const end = tokens[start];
+  if ([")", "]", "}"].includes(end.text)) {
+    const opening = openingPositions[start];
+    if (opening === 0) return false;
+    start = opening - 1;
+  } else if (
+    end.type !== "named" ||
+    !["IDENT", "TYPE_IDENT", "INTEGER", "FLOAT", "TEXT"].includes(end.kind)
+  ) return false;
+  if (tokens[start - 1]?.text === "#") start -= 1;
+  while (start > 0) {
+    if (["!", "?", "&", "~", "^", "-"].includes(tokens[start - 1]?.text)) {
+      start -= 1;
+      continue;
+    }
+    const constructor = tokens[start - 1];
+    if (
+      start > 1 && constructor.type === "named" &&
+      constructor.kind === "TYPE_IDENT" && tokens[start - 2].text === "#"
+    ) {
+      start -= 2;
+      continue;
+    }
+    break;
+  }
+  const head = tokens[start - 1]?.text;
+  if (["let", "const", "use", "(", ","].includes(head)) return true;
+  return head === "rec" && ["let", "const"].includes(tokens[start - 2]?.text);
 }
 
 function opensSuite(token: Token): boolean {

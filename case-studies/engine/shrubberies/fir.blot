@@ -19,7 +19,7 @@ let pine_shadow = C.rgb (26, 76, 54)
 let pine_green = C.rgb (39, 111, 70)
 let new_growth = C.rgb (78, 145, 82)
 
-let fir :: FirRecipe
+let fir: FirRecipe
 let fir =
   {
     .height = 14;

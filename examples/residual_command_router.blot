@@ -8,7 +8,7 @@ const Health = #Health
 const Command = Create | Rename | Delete | Health
 
 const AfterCreate = Command \ Create
-const create :: Router.Stage (Command, Text, AfterCreate)
+const create: Router.Stage (Command, Text, AfterCreate)
 const create = fn command => case command of
   #Create request => #Ok ("create:" <> request.name)
   #Rename request => #Error (#Rename request)
@@ -16,28 +16,28 @@ const create = fn command => case command of
   #Health => #Error #Health
 
 const AfterRename = AfterCreate \ Rename
-const rename :: Router.Stage (AfterCreate, Text, AfterRename)
+const rename: Router.Stage (AfterCreate, Text, AfterRename)
 const rename = fn command => case command of
   #Rename request => #Ok ("rename:" <> Text.of_int request.id <> ":" <> request.name)
   #Delete id => #Error (#Delete id)
   #Health => #Error #Health
 
 const AfterDelete = AfterRename \ Delete
-const delete :: Router.Stage (AfterRename, Text, AfterDelete)
+const delete: Router.Stage (AfterRename, Text, AfterDelete)
 const delete = fn command => case command of
   #Delete id => #Ok ("delete:" <> Text.of_int id)
   #Health => #Error #Health
 
 // Pain point: Blot intentionally has no surface empty type, so a residual chain
 // ends at one concrete resolver instead of subtracting the final case to empty.
-const health :: AfterDelete -> Text
+const health: AfterDelete -> Text
 const health = fn command => case command of
   #Health => "healthy"
 
-const routed :: Router.Stage (Command, Text, AfterDelete)
+const routed: Router.Stage (Command, Text, AfterDelete)
 const routed = Router.then (Router.then (create, rename), delete)
 
-const dispatch :: Command -> Text
+const dispatch: Command -> Text
 const dispatch = Router.finish (routed, health)
 
 return {

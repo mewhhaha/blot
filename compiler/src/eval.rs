@@ -22,6 +22,7 @@ use crate::value::{
     RecursiveBindings, Resume, RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature,
     capture_env, child_env, contains_type_variables, declaration_env, equal, lookup,
     lookup_signature, opened_members, recursive_env, reusable_across_module_instances, show, tuple,
+    with_lookup,
 };
 use crate::value_capsule::ValueCapsule;
 
@@ -199,17 +200,9 @@ pub struct ClosureApplication {
     pub(crate) creation_scope: Rc<EffectScope>,
 }
 
-impl ClosureApplication {
-    fn references_module(&self, module: &str) -> bool {
-        self.application.references_module(module)
-            || self
-                .creation_scope
-                .iter()
-                .any(|frame| frame.references_module(module))
-    }
-}
-
-pub type EffectScope = Vec<ClosureApplication>;
+#[path = "effect_scope.rs"]
+mod effect_scope;
+pub use effect_scope::EffectScope;
 
 pub(crate) const MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT: usize = 64;
 const MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT: usize = 32;
@@ -327,10 +320,7 @@ impl ModuleResultTemplateInstance {
         self.module_instances
             .iter()
             .any(|instance| instance.references_module(module))
-            || self
-                .effect_scope
-                .iter()
-                .any(|frame| frame.references_module(module))
+            || self.effect_scope.references_module(module)
     }
 
     fn cacheable(&self) -> bool {
@@ -475,7 +465,7 @@ impl ModuleInstanceSite {
 struct EffectIdentity {
     module: String,
     source: ApplicationSite,
-    scope: EffectScope,
+    scope: Rc<EffectScope>,
     instances: ModuleInstanceScope,
     host: bool,
 }
@@ -484,10 +474,7 @@ impl EffectIdentity {
     fn references_module(&self, module: &str) -> bool {
         self.module == module
             || self.source.references_module(module)
-            || self
-                .scope
-                .iter()
-                .any(|frame| frame.references_module(module))
+            || self.scope.references_module(module)
             || self
                 .instances
                 .iter()
@@ -1204,7 +1191,7 @@ impl Context {
         let key = EffectIdentity {
             module: runtime.module.as_ref().clone(),
             source,
-            scope: runtime.effect_scope.as_ref().clone(),
+            scope: runtime.effect_scope.clone(),
             instances: runtime.module_instances.as_ref().clone(),
             host,
         };
@@ -1239,7 +1226,7 @@ impl Context {
         let occurrence = EffectIdentity {
             module: runtime.module.as_ref().clone(),
             source,
-            scope: runtime.effect_scope.as_ref().clone(),
+            scope: runtime.effect_scope.clone(),
             instances: runtime.module_instances.as_ref().clone(),
             host: false,
         };
@@ -1873,6 +1860,23 @@ fn recognition_argument_type(runtime: &Runtime, span: Span) -> Option<Value> {
     }
 }
 
+// Runtime argument evidence cannot be consumed without a residual trace. Test
+// that premise before looking up or inspecting an arbitrarily large value.
+fn residual_argument_type(
+    runtime: &Runtime,
+    environment: &Environment,
+    name: &str,
+) -> Option<Value> {
+    let trace = runtime.residual.as_ref()?;
+    with_lookup(environment, name, |value| {
+        let value = value?;
+        if !crate::hir::contains_runtime(value) {
+            return None;
+        }
+        trace.borrow().conservative_value_type(value)
+    })
+}
+
 fn runtime_value_type(value: Value) -> Option<Value> {
     let constant = |name| crate::primitives::constant(name);
     match value {
@@ -2157,7 +2161,7 @@ impl Runtime {
             residual: None,
             execution: Rc::new(()),
             signature_holes: None,
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             module_instances: Rc::new(Vec::new()),
             instance_facts: Vec::new(),
             result_context: None,
@@ -2875,14 +2879,9 @@ pub fn evaluate_expression(
                 .expression_type(&context, module_path.as_str(), argument)
                 .map(|type_| substitute_signature(&type_, &environment));
             let runtime_argument = match &loaded_module.arena.expressions[argument.0 as usize] {
-                Expression::Var { name, .. } => lookup(&environment, name)
-                    .filter(crate::hir::contains_runtime)
-                    .and_then(|value| {
-                        runtime
-                            .residual
-                            .as_ref()
-                            .and_then(|trace| trace.borrow().conservative_value_type(&value))
-                    }),
+                Expression::Var { name, .. } => {
+                    residual_argument_type(&runtime, &environment, name)
+                }
                 _ => None,
             };
             let expected_argument = runtime_argument
@@ -6853,6 +6852,18 @@ mod select_type_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn absent_residual_trace_does_not_inspect_argument_bindings() {
+        let environment = crate::value::child_env(None);
+        // A lookup would panic on this live mutable borrow. Neither phase may
+        // inspect an argument for trace evidence when there is no trace.
+        let _borrow = environment.names.borrow_mut();
+        for phase in [super::Phase::Comptime, super::Phase::Runtime] {
+            let runtime = super::Runtime::new(phase, "demand-test.blot".into());
+            assert!(super::residual_argument_type(&runtime, &environment, "unused").is_none());
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -6914,7 +6925,7 @@ mod tests {
     fn shared_text_large_uncached_arguments_still_evaluate() {
         let text = "β🐱\u{feff}".repeat(COMPTIME_ARGUMENT_BYTE_LIMIT);
         let program = format!(
-            "let count :: @type.text -> @type.int\n\
+            "let count: @type.text -> @type.int\n\
              let count = fn text => @text.len text\n\
              let text = \"{text}\"\n\
              return (count text, count text)\n"
@@ -7315,7 +7326,7 @@ mod tests {
         let source = ApplicationSite::expression(revision, ExpressionId(2));
         let frame = ClosureApplication {
             application: call,
-            creation_scope: Rc::new(Vec::new()),
+            creation_scope: Rc::new(crate::eval::EffectScope::default()),
         };
         let mut shallow = Runtime::new(Phase::Comptime, "recursive-effect.blot".to_owned());
         Rc::make_mut(&mut shallow.effect_scope).push(frame.clone());
@@ -7354,15 +7365,18 @@ mod tests {
     #[test]
     fn recursive_provenance_beyond_the_depth_limit_is_not_cacheable() {
         let revision = ModuleRevision::new("recursive-template.blot");
-        let mut effect_scope = Rc::new(Vec::new());
+        let mut effect_scope = Rc::new(crate::eval::EffectScope::default());
         for expression in 0..=MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT {
-            effect_scope = Rc::new(vec![ClosureApplication {
-                application: ApplicationSite::expression(
-                    revision.clone(),
-                    ExpressionId(expression as u32),
-                ),
-                creation_scope: effect_scope,
-            }]);
+            effect_scope = Rc::new(
+                vec![ClosureApplication {
+                    application: ApplicationSite::expression(
+                        revision.clone(),
+                        ExpressionId(expression as u32),
+                    ),
+                    creation_scope: effect_scope,
+                }]
+                .into(),
+            );
         }
         let instance = ModuleResultTemplateInstance {
             module_instances: Rc::new(Vec::new()),
@@ -7381,7 +7395,7 @@ mod tests {
     fn decoded_environment_ids_are_stable_and_distinct() {
         let context = Context::default();
         let revision = ModuleRevision::new("decoded-identities.blot");
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
 
         let first =
             context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 2);
@@ -7402,7 +7416,7 @@ mod tests {
     #[test]
     fn decoded_environment_identity_interner_prunes_dead_keys() {
         let context = Context::default();
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         for revision in 0..(DECODED_ENVIRONMENT_IDENTITY_MINIMUM_SWEEP * 2) {
             let identities = context.decoded_environment_identities(
                 &ModuleRevision::new(&format!("decoded-identities-{revision}.blot")),
@@ -7424,7 +7438,7 @@ mod tests {
         let context = Context::default();
         let path = "invalidated-decoded-identity.blot";
         let revision = ModuleRevision::new(path);
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         let first =
             context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 1)[0]
                 .as_ref()
@@ -7448,10 +7462,13 @@ mod tests {
         let context = Context::default();
         let revision = ModuleRevision::new("returned-effect.blot");
         let creation_scope = |expression| {
-            Rc::new(vec![ClosureApplication {
-                application: ApplicationSite::expression(revision.clone(), expression),
-                creation_scope: Rc::new(Vec::new()),
-            }])
+            Rc::new(
+                vec![ClosureApplication {
+                    application: ApplicationSite::expression(revision.clone(), expression),
+                    creation_scope: Rc::new(crate::eval::EffectScope::default()),
+                }]
+                .into(),
+            )
         };
         let invocation = ApplicationSite::expression(revision.clone(), ExpressionId(3));
         let runtime_for = |creation_scope| {
@@ -7576,7 +7593,7 @@ mod operator_projection_regression_tests {
         let weak_environment = Rc::downgrade(&environment);
         let module_instances = Rc::new(Vec::new());
         let weak_instances = Rc::downgrade(&module_instances);
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         let weak_scope = Rc::downgrade(&effect_scope);
         let value = Value::Closure {
             module: Rc::new("members.blot".to_owned()),

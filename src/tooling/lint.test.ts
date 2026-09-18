@@ -911,13 +911,13 @@ return identity
 Deno.test("a nonrecursive function drops rec from its signature and binding", async () => {
   assertEquals(
     await applyLintFix(
-      `let rec identity :: Int -> Int
+      `let rec identity: Int -> Int
 let rec identity = fn value => value
 return identity
 `,
       "BLOT_LINT_UNNECESSARY_REC",
     ),
-    `let identity :: Int -> Int
+    `let identity: Int -> Int
 let identity = fn value => value
 return identity
 `,

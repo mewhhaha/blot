@@ -17,24 +17,24 @@ const PairState = fn (left, right) => {
 
 // Pain point: `check` can currently underconstrain this shared `Input` across a
 // generic reducer/array call; full specialization still rejects a mismatch.
-const run :: @forall (fn Input => @forall (fn State => @forall (fn Output => (Reducer (Input, State, Output), [Input]) -> Output)))
+const run: @forall (fn Input => @forall (fn State => @forall (fn Output => (Reducer (Input, State, Output), [Input]) -> Output)))
 const run = fn (reducer, values) => reducer.finish (fold (values, reducer.initial, reducer.step))
 
-const contramap :: @forall (fn Outer => @forall (fn Input => @forall (fn State => @forall (fn Output => (Reducer (Input, State, Output), (Outer -> Input)) -> Reducer (Outer, State, Output)))))
+const contramap: @forall (fn Outer => @forall (fn Input => @forall (fn State => @forall (fn Output => (Reducer (Input, State, Output), (Outer -> Input)) -> Reducer (Outer, State, Output)))))
 const contramap = fn (reducer, project) => {
   .initial = reducer.initial;
   .step = fn (state, value) => reducer.step (state, project value);
   .finish = reducer.finish;
 }
 
-const map_output :: @forall (fn Input => @forall (fn State => @forall (fn Output => @forall (fn Mapped => (Reducer (Input, State, Output), (Output -> Mapped)) -> Reducer (Input, State, Mapped)))))
+const map_output: @forall (fn Input => @forall (fn State => @forall (fn Output => @forall (fn Mapped => (Reducer (Input, State, Output), (Output -> Mapped)) -> Reducer (Input, State, Mapped)))))
 const map_output = fn (reducer, transform) => {
   .initial = reducer.initial;
   .step = reducer.step;
   .finish = fn state => transform (reducer.finish state);
 }
 
-const zip_with :: @forall (fn Input => @forall (fn LeftState => @forall (fn RightState => @forall (fn Left => @forall (fn Right => @forall (fn Output => (Reducer (Input, LeftState, Left), Reducer (Input, RightState, Right), ((Left, Right) -> Output)) -> Reducer (Input, PairState (LeftState, RightState), Output)))))))
+const zip_with: @forall (fn Input => @forall (fn LeftState => @forall (fn RightState => @forall (fn Left => @forall (fn Right => @forall (fn Output => (Reducer (Input, LeftState, Left), Reducer (Input, RightState, Right), ((Left, Right) -> Output)) -> Reducer (Input, PairState (LeftState, RightState), Output)))))))
 const zip_with = fn (left, right, combine) => {
   .initial = {
     .left = left.initial;

@@ -1,5 +1,21 @@
 # The Blot Language
 
+## Type annotation spelling
+
+Type annotations use one colon: `let value: Int`, `const f: Int -> Int`,
+`use answer: Int <- request ()`, and `fn (value: Int) -> Int => value`. A
+separate signature header can put its type on an indented following line. The
+former `::` spelling is no longer accepted as a type annotation. A colon inside
+text or a comment has no annotation meaning. `:=` remains stable rebinding,
+`do:` and statement-suite colons retain their existing meaning, and function
+result annotations still begin with `->`. Canonical formatting has no space
+before an annotation colon and one space after it on the same line. This is a
+source-syntax change, not a change to inferred types or their rules. The
+lexer-based `scripts/migrate_type_annotations.ts` utility migrates explicit
+legacy `.blot` files without changing strings or comments. Run it without
+`--write` to list files needing migration, or with `--write` to apply the edits;
+format the resulting source with the current formatter.
+
 This document specifies the implemented Blot language. It describes source
 syntax, evaluation, inference, ownership, modules, effects, the primitive
 namespace, and the compilation boundaries to WebAssembly.
@@ -7,6 +23,18 @@ namespace, and the compilation boundaries to WebAssembly.
 `grammar.baba` is the authority for concrete parse acceptance. This document is
 the authority for what accepted source means. A disagreement between either one
 and the compiler is a compiler or specification bug.
+
+## Experimental implementation boundary
+
+The opt-in `staged-prototype` laboratory described in
+[`spec/STAGED_PROTOTYPE.md`](spec/STAGED_PROTOTYPE.md) tests a proposed pure
+staged core using Baba's syntax. Its `@staged.*` operations and uniform-word ABI
+are not production language primitives or an alternative accepted Blot mode. Its
+recursive, collection and scoped-generation operations remain experimental,
+including definition-local delayed type queries. Normal compilation never
+selects it, and unsupported effects, ownership and other source forms are
+refused rather than erased or delegated. This document remains authoritative for
+production source meaning.
 
 ## 1. Design model
 
@@ -491,10 +519,10 @@ const pattern = value
 let rec name = fn parameter => body
 const rec name = fn parameter => body
 
-let name :: type
+let name: type
 let name = value
 
-let rec name :: type
+let rec name: type
 let rec name = fn parameter => body
 
 let descriptive_pattern =
@@ -520,7 +548,7 @@ expression-shaped spelling `let name = rec (fn ... )` is not accepted. Section
 6.5 defines recursive groups and their lowering.
 
 A signature header repeats the binding's complete header and replaces `=` with
-`::`. It must be immediately followed by exactly that binding: `let` or `const`,
+`:`. It must be immediately followed by exactly that binding: `let` or `const`,
 the presence of `rec`, and the name must all agree. A signature binds no value
 and admits no declaration tags. Its type is an ordinary compile-time expression,
 evaluated before the binding is checked.
@@ -673,16 +701,16 @@ checking, evaluation, and building never execute tests.
 ### 4.3 Signatures
 
 ```blot
-let name :: type_value
+let name: type_value
 let name = value
 ```
 
 Named bindings also admit an inline signature:
 
 ```blot
-let count :: Int = 0
-const double :: Int -> Int = fn x => x + x
-use answer :: Int <- Clock.read ()
+let count: Int = 0
+const double: Int -> Int = fn x => x + x
+use answer: Int <- Clock.read ()
 ```
 
 Inline `let`, `const`, and `use` signatures elaborate to a signature immediately
@@ -1210,7 +1238,7 @@ diagnostic identifies the caller's application and retains the originating
 implementation span in the explanation.
 
 ```blot
-let original :: { .name = Text; .count = Int; }
+let original: { .name = Text; .count = Int; }
 let original = { .name = "old"; .count = 3; }
 let renamed = Shape.update (original, { .name = "new"; })
 let identified = { ...original; .id = 7; }
@@ -1288,23 +1316,22 @@ fn parameter => body
 Function headers may place ordinary type values next to parameter patterns:
 
 ```blot
-const add = fn (left :: Int, right :: Int) -> Int => do:
+const add = fn (left: Int, right: Int) -> Int => do:
   return left + right
 ```
 
-The parentheses still describe one parameter: `(value :: Int)` groups a single
-pattern and `(left :: Int, right :: Int)` describes a tuple. Qualifiers precede
-the name, for example `(!value :: Int)` or `(&values :: [Int])`;
-`(~value :: Int)` retains deferred application. A whole destructuring pattern
-may be annotated inside parentheses. Unannotated tuple components remain
-inferred. Each parameter annotation and the result annotation is independently
-optional. For example:
+The parentheses still describe one parameter: `(value: Int)` groups a single
+pattern and `(left: Int, right: Int)` describes a tuple. Qualifiers precede the
+name, for example `(!value: Int)` or `(&values: [Int])`; `(~value: Int)` retains
+deferred application. A whole destructuring pattern may be annotated inside
+parentheses. Unannotated tuple components remain inferred. Each parameter
+annotation and the result annotation is independently optional. For example:
 
 ```blot
-const first = fn (a :: Int, b) => a
-const second = fn (a, b :: Int) => b
+const first = fn (a: Int, b) => a
+const second = fn (a, b: Int) => b
 const integer = fn (a, b) -> Int => a
-const mixed = fn (a :: Int, b) -> Int => a
+const mixed = fn (a: Int, b) -> Int => a
 ```
 
 Omitted components use binding-local inference holes and are generalized with
@@ -1774,7 +1801,7 @@ set, literal union, or product has more members than a compiler could reasonably
 enumerate as complete runtime values.
 
 ```blot
-let rank :: 1 | 2 | 3 -> Int
+let rank: 1 | 2 | 3 -> Int
 let rank = fn level => case level of
   1 => 100
   2 => 200
@@ -1788,7 +1815,7 @@ range with an open end — cannot be exhausted by listed literal arms. Such a
 `case` is refused rather than accepted in silence:
 
 ```blot
-let describe :: Int -> Text
+let describe: Int -> Text
 let describe = fn n => case n of
   1 => "one"
   2 => "two"
@@ -1899,7 +1926,7 @@ cross-product: a combination of columns no arm accepts is
 target. So
 
 ```blot
-let join :: (Option Int, Option Int) -> Int
+let join: (Option Int, Option Int) -> Int
 let join = fn pair => case pair of
   (#Some a, #Some b) => a + b
   (#Some a, #None) => a
@@ -1922,7 +1949,7 @@ column whose type has more values than arms can list — `Int`, `F64`, an opaque
 type, a shape — can only be covered by an irrefutable pattern in that column, so
 
 ```blot
-let pick :: (Int, Option Int) -> Int
+let pick: (Int, Option Int) -> Int
 let pick = fn pair => case pair of
   (1, #Some a) => a
   (_, #None) => 0
@@ -2010,7 +2037,7 @@ branch reached because it was not, the name's type is the part of its declared
 set that the condition allows.
 
 ```blot
-let name :: 1 | 2 | 3 -> Text
+let name: 1 | 2 | 3 -> Text
 let name = fn n => do:
   if n == 1:
     return case n of
@@ -2059,7 +2086,7 @@ Inference records that value relationship in the refinement context rather than
 in the integer's type:
 
 ```blot
-let at :: [Int] -> Int -> Int
+let at: [Int] -> Int -> Int
 let at = fn xs => fn n => do:
   if n >= 0:
     if n < @array.len xs:
@@ -2507,11 +2534,11 @@ describe callable behavior separately from parameter and result representation:
 ```blot
 const Named = { .name = Text; }
 
-let label :: @forall (fn T => Named -> T -> Text)
+let label: @forall (fn T => Named -> T -> Text)
 let label = fn named => fn _ => named.name
 
 const Console = @effect { .write = Text -> Unit; }
-let map_logged ::
+let map_logged:
   (Int -> Int ~ { ..e }) ->
   Int -> Int ~ { Console, ..e }
 let map_logged = fn transform => fn value => transform value
@@ -3389,7 +3416,7 @@ row the way the checker prints it:
 ```blot
 const Console = @effect { .write = Text -> Unit; }
 
-let map_logged ::
+let map_logged:
   (Int -> Int ~ { ..e }) ->
   Int -> Int ~ { Console, ..e }
 let map_logged = fn callback => fn value => do:
@@ -3415,7 +3442,7 @@ record row polymorphism.
 A written row remains an upper bound. The binding's inferred type must be a
 subtype of the signature, and fewer effects is a subtype, so a body may perform
 fewer named effects than its signature promises. A closed
-`let quiet :: Int -> Int ~ { Console }` over a pure body is therefore accepted
+`let quiet: Int -> Int ~ { Console }` over a pure body is therefore accepted
 when immediately followed by `let quiet = ...`. Conversely, bare `->` is the
 exactly-empty row, so a body that performs is rejected when its signature omits
 `~`.
@@ -3588,7 +3615,7 @@ the call site instead, by the name:
 
 ```blot
 let r = { .a = 7; }
-let z :: 0
+let z: 0
 let z = @shape.get r "a"
 // BLOT_TYPE_ERROR: `7` is outside `0`.
 ```
@@ -4231,7 +4258,7 @@ implicit prelude bindings, new primitives, or alternate semantic authorities.
 
 `import "blot:float"` exports `PartialOrdering` and extended `F64` and `F32`
 namespaces. Each namespace provides `partial_cmp`, `cmp_exn`, and `to_text`.
-`F64.to_text :: F64 -> Text` and `F32.to_text :: F32 -> Text` are pure source
+`F64.to_text: F64 -> Text` and `F32.to_text: F32 -> Text` are pure source
 functions. Each returns a shortest decimal that rounds back to the input in its
 own precision under round-to-nearest, ties-to-even. Among shortest candidates,
 choose the nearest decimal; an exact decimal tie chooses the even last digit.
@@ -4833,7 +4860,7 @@ message`, and `Channel.Ends message`.
 `Channel.bounded scope capacity` returns the endpoint record; capacity zero is a
 rendezvous and a positive capacity is a FIFO buffer. Capacity must be an integer
 from zero through 2147483647. An output-only message type can be supplied with
-`use channel :: Channel.Ends Int
+`use channel: Channel.Ends Int
 <- Channel.bounded scope 8`.
 `Channel.send sender (?message)` waits for space or a receiver and returns
 whether it was accepted. `Channel.receive receiver` waits for a message and
@@ -4849,12 +4876,12 @@ expose `Channel.Effect` in their effect rows.
 elapsed milliseconds from that granted clock;
 `Io.Clock.sleep clock milliseconds` suspends and accepts durations from zero
 through 2147483647. `Io.Http.get http path` returns
-`Result (Io.Http.Response, Text)`, where a response contains `.status :: Int`
-and `.body :: Text`. HTTP status codes, including error status codes, are
-responses. Transport and origin-policy failures produce `#Error`; cancellation
-remains cancellation. The standard host HTTP grant resolves paths against its
-base URL, restricts requests to that origin, and refuses redirects. These
-services have no ambient source binding.
+`Result (Io.Http.Response, Text)`, where a response contains `.status: Int` and
+`.body: Text`. HTTP status codes, including error status codes, are responses.
+Transport and origin-policy failures produce `#Error`; cancellation remains
+cancellation. The standard host HTTP grant resolves paths against its base URL,
+restricts requests to that origin, and refuses redirects. These services have no
+ambient source binding.
 
 `import "blot:events"` provides `Events.Source message`,
 `Events.Subscription message`, `Events.Policy`, and `Events.Effect`.

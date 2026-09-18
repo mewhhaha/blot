@@ -8,13 +8,13 @@ const nonempty_type = fn value => {
   .tail = [value];
 }
 
-const singleton :: @forall (fn T => T -> nonempty_type T)
+const singleton: @forall (fn T => T -> nonempty_type T)
 const singleton = fn value => {
   .head = value;
   .tail = [];
 }
 
-const prepend :: @forall (fn T => (T, nonempty_type T) -> nonempty_type T)
+const prepend: @forall (fn T => (T, nonempty_type T) -> nonempty_type T)
 const prepend = fn (value, values) => {
   .head = value;
   .tail = fold (
@@ -24,7 +24,7 @@ const prepend = fn (value, values) => {
   );
 }
 
-const to_array :: @forall (fn T => nonempty_type T -> [T])
+const to_array: @forall (fn T => nonempty_type T -> [T])
 const to_array = fn values => fold (
   values.tail,
   [values.head],
@@ -34,7 +34,7 @@ const to_array = fn values => fold (
 // Pain point: `left.tail` is still shared through the immutable input record, so
 // destructive `@array.push` correctly refuses it. `append` copies that tail
 // before extending it rather than hiding mutation behind the abstraction.
-const append :: @forall (fn T => nonempty_type T -> nonempty_type T -> nonempty_type T)
+const append: @forall (fn T => nonempty_type T -> nonempty_type T -> nonempty_type T)
 const append = fn left => fn right => {
   .head = left.head;
   .tail = fold (
@@ -44,25 +44,25 @@ const append = fn left => fn right => {
   );
 }
 
-const map_nonempty :: @forall (fn T => @forall (fn U => (nonempty_type T, (T -> U)) -> nonempty_type U))
+const map_nonempty: @forall (fn T => @forall (fn U => (nonempty_type T, (T -> U)) -> nonempty_type U))
 const map_nonempty = fn (values, transform) => {
   .head = transform values.head;
   .tail = map (values.tail, transform);
 }
 
-const fold_nonempty :: @forall (fn T => @forall (fn S => (nonempty_type T, S, ((S, T) -> S)) -> S))
+const fold_nonempty: @forall (fn T => @forall (fn S => (nonempty_type T, S, ((S, T) -> S)) -> S))
 const fold_nonempty = fn (values, initial, visit) => do:
   let after_head = visit (initial, values.head)
   return fold (values.tail, after_head, visit)
 
-const reduce :: @forall (fn T => (nonempty_type T, ((T, T) -> T)) -> T)
+const reduce: @forall (fn T => (nonempty_type T, ((T, T) -> T)) -> T)
 const reduce = fn (values, combine) => fold (
   values.tail,
   values.head,
   combine
 )
 
-const length :: @forall (fn T => nonempty_type T -> Int)
+const length: @forall (fn T => nonempty_type T -> Int)
 const length = fn values => Array.length (&values.tail) + 1
 
 // Pain point: Blot's structural collection interfaces are intentionally

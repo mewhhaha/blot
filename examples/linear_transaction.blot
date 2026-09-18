@@ -24,7 +24,7 @@ const simulated =
     ;
   }
 
-let settle :: Decision -> Receipt
+let settle: Decision -> Receipt
 let settle = fn decision => do:
   let work = fn () => do:
     use pending <- Transaction.begin "order-42"

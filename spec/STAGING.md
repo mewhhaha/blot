@@ -213,7 +213,17 @@ first-binding behavior. A previously bound variable retains its recorded value.
 These shortcuts cannot bypass source checking or predicate obligations. Closed
 subgraphs may be reused during substitution, but environment-specific
 substitution results must not be reused across independent calls or later
-changes to lexical substitution environments.
+changes to lexical substitution environments. Within one synchronous
+signature-substitution operation, repeated immutable function/range edges and
+record storage may share their substituted result. The operation retains its
+indexed input owners; addresses identify repeated storage and never establish
+type equality. Its memo is discarded before another operation, including another
+read of the same lexical environment. Missing and nearest type/effect
+substitutions therefore remain sensitive to later changes to bindings and parent
+scopes. Sharing preserves the existing single-step substitution of a variable's
+replacement, quantified binder identities, effect-row tails, and union
+normalization. It does not authorize source-call memoization or a second
+compatibility judgment.
 
 Closure calls select signature evidence in this order: the attached signature,
 then the recursive lexical signature, then inferred closure evidence. Lower
@@ -266,6 +276,23 @@ them. Repeated evaluation of one stack is stable; a second written call or an
 additional recursive frame is distinct. Signature equality is exact semantic
 type-value equality, including alpha-equivalence and referenced effect atoms;
 neither displayed values nor partial hashes are identity evidence.
+
+The implementation may retain this ordered scope as a persistent immutable
+prefix graph. Appending a frame retains its prefix and the callee's creation
+scope rather than copying either history. An immutable node may cache a
+process-local structural hash of its application, prefix, and creation scope;
+that hash selects lookup buckets only. Exact graph equality remains the identity
+authority even when hashes collide, and independently allocated equal histories
+compare equally. Source revisions remain part of every application identity.
+Revision invalidation must search both prefix and creation-scope edges, not just
+the most recent application.
+
+Hashing, equality, revision searches, and teardown must not expand every path
+through a shared provenance graph or recurse once per history node on the host
+stack. Capsule and portable evidence encoding retain the original ordered frame
+sequence and revision-qualified contents; cached process-local hashes are not
+serialized identity evidence. Sharing this immutable provenance does not share
+mutable lexical environments, source effect results, or mutable-region stores.
 
 A resident nullary module result may replace administrative re-evaluation only
 when its checked effect row is empty, its closed result type exposes no ordinary
@@ -533,6 +560,27 @@ remains in the existing staging path, subject to its ordinary limits and target
 policy. This decision is made before lowering a call argument, so declining
 sharing does not emit duplicate argument work. It is not a new source rejection
 or an excuse to fall back to a type-only key.
+
+An application must test for an active residual trace before looking up a
+variable argument solely to derive conservative runtime representation evidence.
+Without that consumer, it must not inspect the argument for this purpose. This
+does not skip source evaluation, checked argument/result evidence, fuel charges,
+or the ordinary fallback for recognizing a concrete argument's type.
+
+Runtime-presence queries may visit shared record storage once per synchronous
+query. They retain their existing variant boundaries and left-to-right short
+circuiting; in particular, a type edge, union, or extension's members do not
+become a runtime capture merely because this traversal is graph-aware. Mutable
+region cells are read afresh in subsequent queries. The query neither executes
+source code nor retains a cache across evaluation or revision changes.
+
+Captured values and signatures may be borrowed while constructing residual
+identity evidence instead of being cloned for an immediately discarded read. The
+read is synchronous and must not mutate lexical maps. It retains ordinary lookup
+precedence, recursive-group materialization, explicit absence, and observed-open
+demand recording; inspection-only reads remain unobserved. No binding value or
+absence is cached by this borrowing operation, and all lexical borrows end
+before subsequent evaluation may change the environment.
 
 Immutable record evidence uses shared chunks once all contained closure
 references are stable. The encoder retains record storage while indexing its

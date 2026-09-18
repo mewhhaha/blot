@@ -18,28 +18,28 @@ const fields = fn (Whole, names) => do:
   const Get = Whole -> Part
   const Put = (Whole, Part) -> Whole
 
-  let get :: Get
+  let get: Get
   let get = fn whole => Reflect.pick (whole, selected)
 
-  let put :: Put
+  let put: Put
   let put = fn (whole, _) => whole
   for name in Iter.items selected:
     let previous = put
-    let next :: Put
+    let next: Put
     let next = fn (whole, patch) => {
       ...previous (whole, patch);
       .[name] = @shape.get patch name;
     }
     put := next
 
-  let projection :: Projection (Whole, Part)
+  let projection: Projection (Whole, Part)
   let projection = { .get; .put; }
   return {
     .Part;
     .projection;
   }
 
-const over :: @forall (fn Whole => @forall (fn Part => (Projection (Whole, Part), Whole, (Part -> Part)) -> Whole))
+const over: @forall (fn Whole => @forall (fn Part => (Projection (Whole, Part), Whole, (Part -> Part)) -> Whole))
 const over = fn (projection, whole, change) => projection.put (whole, change (projection.get whole))
 
 return {

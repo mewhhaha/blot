@@ -6,7 +6,7 @@ open import "blot:prelude"
 const Source = @effect { .emit = Int -> Unit; }
 const Mapped = @effect { .emit = Int -> Unit; }
 
-let stream_sum :: Int -> Int
+let stream_sum: Int -> Int
 let stream_sum = fn seed => do:
   let produce = fn () => do:
     use Source.emit (seed + 1)

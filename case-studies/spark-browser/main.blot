@@ -15,10 +15,10 @@ const Ui =
     .stopped = View -> Unit;
   }
 
-const debounce ::
+const debounce:
   (Events.Subscription Int, Io.Clock.Capability, Int) -> Option Int ~ { Select.Effect }
 const debounce = fn (subscription, clock, initial) => do:
-  let rec wait :: Int -> Option Int ~ { Select.Effect }
+  let rec wait: Int -> Option Int ~ { Select.Effect }
   let rec wait = fn latest => do:
     use selected <- Select.wait [
       Select.events subscription,
@@ -32,7 +32,7 @@ const debounce = fn (subscription, clock, initial) => do:
 
   return wait initial
 
-let run ::
+let run:
   {
     .executor = Spark.Executor;
     .changes = Events.Source Int;
@@ -41,10 +41,10 @@ let run ::
     .view = View;
   } -> Unit ~ { Spark.Effect, Events.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
 let run = fn io => do:
-  let body ::
+  let body:
     Spark.Scope -> Unit ~ { Spark.Effect, Events.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
   let body = fn scope => do:
-    let ?cleanup :: Unit -> Unit ~ { Ui } = fn () => Ui.stopped io.view
+    let ?cleanup: Unit -> Unit ~ { Ui } = fn () => Ui.stopped io.view
     use () <- Spark.on_exit scope (?cleanup)
     use response <- Io.Http.get io.http "/message.txt"
     use () <- case response of
@@ -63,13 +63,13 @@ let run = fn io => do:
       if let #Some quantity = settled else:
         break
 
-      let calculate ::
+      let calculate:
         Spark.Scope -> Select.Selection Int ~ { Spark.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Ui }
       let calculate = fn computation => do:
-        use completed :: Channel.Ends Int <- Channel.bounded computation 1
-        let ?produce :: Unit -> Unit ~ { Spark.Effect, Channel.Effect, Io.Clock.Effect } = fn () => do:
+        use completed: Channel.Ends Int <- Channel.bounded computation 1
+        let ?produce: Unit -> Unit ~ { Spark.Effect, Channel.Effect, Io.Clock.Effect } = fn () => do:
           use () <- Io.Clock.sleep io.clock 300
-          let ?work :: Unit -> Int = fn () => formula.score quantity
+          let ?work: Unit -> Int = fn () => formula.score quantity
           use job <- Spark.parallel computation (?work)
           use score <- Spark.join job
           use accepted <- Channel.send completed.sender (?score)
@@ -82,7 +82,7 @@ let run = fn io => do:
         ]
         use () <- Spark.cancel producer
         return ?selected
-      use selected :: Select.Selection Int <- Spark.child_scope scope calculate
+      use selected: Select.Selection Int <- Spark.child_scope scope calculate
       if let #Message event = selected.outcome else:
         break
 

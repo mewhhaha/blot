@@ -16,10 +16,10 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
           uri,
           version: 1,
           text: `open import "blot:prelude"
-let remainder :: _
+let remainder: _
 let remainder = Op.rem 5 2
 const Result = Int
-let typed :: Result
+let typed: Result
 let typed = 1
 return remainder
 `,
@@ -139,7 +139,7 @@ return remainder
     }[];
   };
   assertEquals(inlayHints.result, [{
-    position: { line: 1, character: 18 },
+    position: { line: 1, character: 16 },
     label: ": Int",
     kind: 1,
     tooltip: "Compiler-inferred signature hole",

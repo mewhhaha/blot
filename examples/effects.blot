@@ -12,7 +12,7 @@
 // function that performs `Console` prints as, and a signature spells it the same
 // way — an effect is an ordinary compile-time value, so a row is the ordinary
 // list of them. A bare `->` is not silence about effects: it is the empty row,
-// so `let greet :: Unit -> Text` below would be rejected.
+// so `let greet: Unit -> Text` below would be rejected.
 
 open import "blot:prelude"
 
@@ -36,7 +36,7 @@ const Terminal =
 // still carries Console's generative identity.
 open Console
 
-let ask :: Unit -> Text ~ { Terminal }
+let ask: Unit -> Text ~ { Terminal }
 let ask = fn () => do:
   use answer <- Terminal.read ()
   return answer <> "!"
@@ -52,7 +52,7 @@ let answering =
 
 // Performing is a call, and the signature says the same
 // thing the printer would: the body may perform `Console` and nothing else.
-let greet :: Unit -> Text ~ { Console }
+let greet: Unit -> Text ~ { Console }
 let greet = fn () => do:
   use write "hello"
   use write "world"

@@ -3,10 +3,10 @@ const C = import "../../../examples/lib/codec.blot"
 
 const Error = #Invalid
 const Wrapped = { .value = Text; }
-const base :: C.Codec (Text, Text, Error)
+const base: C.Codec (Text, Text, Error)
 const base = C.identity
 
-const invalid :: C.Codec (Wrapped, Text, Error)
+const invalid: C.Codec (Wrapped, Text, Error)
 const invalid =
   C.imap (
     base,

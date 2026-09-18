@@ -6,7 +6,7 @@ const AuditEvent = #User UserEvent | #System Text
 
 // Each concrete prism is one exhaustive description of a constructor. The
 // reusable composition layer does not know the constructor names at all.
-const user :: P.Prism (AuditEvent, UserEvent)
+const user: P.Prism (AuditEvent, UserEvent)
 const user =
   {
     .preview = fn event => case event of
@@ -16,7 +16,7 @@ const user =
     .review = fn nested => #User nested;
   }
 
-const age_changed :: P.Prism (UserEvent, Int)
+const age_changed: P.Prism (UserEvent, Int)
 const age_changed =
   {
     .preview = fn event => case event of
@@ -27,7 +27,7 @@ const age_changed =
     .review = fn age => #AgeChanged age;
   }
 
-const registered :: P.Prism (UserEvent, Text)
+const registered: P.Prism (UserEvent, Text)
 const registered =
   {
     .preview = fn event => case event of
@@ -38,14 +38,14 @@ const registered =
     .review = fn name => #Registered name;
   }
 
-const audit_age :: P.Prism (AuditEvent, Int)
+const audit_age: P.Prism (AuditEvent, Int)
 const audit_age = P.compose (user, age_changed)
-const audit_registration :: P.Prism (AuditEvent, Text)
+const audit_registration: P.Prism (AuditEvent, Text)
 const audit_registration = P.compose (user, registered)
 
-const original_age :: AuditEvent
+const original_age: AuditEvent
 const original_age = #User (#AgeChanged 41)
-const system_event :: AuditEvent
+const system_event: AuditEvent
 const system_event = #System "deploy"
 
 const Observation =
@@ -62,7 +62,7 @@ const Observation =
 // Pain point: constructor knowledge is intentionally concrete. Generic Prism
 // composition is elegant, but defining a prism for a closed variant still needs
 // one exhaustive `case`; constructor labels are not row-polymorphic values.
-const observation :: Observation
+const observation: Observation
 const observation =
   {
     .matched_age = audit_age.preview original_age;

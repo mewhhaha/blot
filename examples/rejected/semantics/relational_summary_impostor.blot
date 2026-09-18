@@ -3,9 +3,10 @@ open import "blot:prelude"
 
 let Array = { .length = fn _ => 10; }
 
-let at :: [Int] -> Int -> Int
-let at = fn values => fn index => case index >= 0 && index < Array.length values of
-  #True => @array.get values index
-  #False => 0
+let at: [Int] -> Int -> Int
+let at =
+  fn values => fn index => case index >= 0 && index < Array.length values of
+    #True => @array.get values index
+    #False => 0
 
 return at

@@ -153,7 +153,7 @@ return { .run = run; }
     await compiler.checkSource(
       "/tmp/blot-pure-callback-borrow.blot",
       `open import "blot:prelude"
-const run :: (Int -> Int) -> [Int] -> Int
+const run: (Int -> Int) -> [Int] -> Int
 const run = fn read => fn &values => do:
   use answer <- read 1
   return Array.length (&values) + answer
@@ -268,7 +268,7 @@ test("emitted Wasm suspends a loop and resumes its live accumulator", async () =
       path,
       `open import "blot:prelude"
 const Clock = @effect.host { .tick = Effect.suspends (Int -> Int); }
-let run :: Int -> Int ~ { Clock }
+let run: Int -> Int ~ { Clock }
 let run = fn initial => do:
   let total = initial
   for index in Iter.range (0, 4):
@@ -350,7 +350,7 @@ test("async calls on one instance retain separate frames and copy aggregate valu
       path,
       `open import "blot:prelude"
 const Http = @effect.host { .get = Effect.suspends (Text -> Text); }
-let decorate :: Text -> Text ~ { Http }
+let decorate: Text -> Text ~ { Http }
 let decorate = fn path => do:
   use text <- Http.get path
   return path <> ":" <> text
@@ -523,7 +523,7 @@ test("resuming canonical records, variants, and arrays preserves their source va
       `open import "blot:prelude"
 const Payload = { .z = Int; .a = Text; .flags = [Bool]; .choice = #Zebra Int | #Apple Int; }
 const Echo = @effect.host { .reply = Effect.suspends (Payload -> Payload); }
-let run :: Payload -> Payload ~ { Echo }
+let run: Payload -> Payload ~ { Echo }
 let run = fn payload => do:
   use next <- Echo.reply payload
   return { .z = next.z + 1; .a = next.a <> "!"; .flags = next.flags; .choice = next.choice; }

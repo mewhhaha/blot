@@ -48,7 +48,7 @@ but it never becomes a runtime `let`.
 A signature may bind the rest of an effect row with one final `..name` tail:
 
 ```blot
-let logged ::
+let logged:
   (a -> b ~ { ..e }) ->
   a -> b ~ { Console, ..e }
 let logged = fn transform => fn value => transform value

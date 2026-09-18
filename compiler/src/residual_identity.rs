@@ -12,7 +12,7 @@ use crate::eval::{
 };
 use crate::value::{
     ChoiceSource, Domain, EffectOperationContract, Environment, OrderedFields, RuntimeMeaning,
-    RuntimeValue, TypeValue, Value, lookup, lookup_signature,
+    RuntimeValue, TypeValue, Value, with_lookup, with_lookup_signature,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -918,9 +918,11 @@ impl<'a> Builder<'a> {
             self.text(name);
             // An absent binding is recorded explicitly, not conflated with a
             // value. Demand may make a syntactic free occurrence unreachable.
-            if !self.optional_value(lookup(closure.environment, name).as_ref())?
-                || !self.optional_value(lookup_signature(closure.environment, name).as_ref())?
-            {
+            if !with_lookup(closure.environment, name, |value| {
+                self.optional_value(value)
+            })? || !with_lookup_signature(closure.environment, name, |value| {
+                self.optional_value(value)
+            })? {
                 return Ok(false);
             }
         }
@@ -1412,7 +1414,7 @@ mod tests {
         let signature = Rc::new(Value::Closure {
             module: Rc::new(path.to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter,
             body,
             environment: child_env(None),
@@ -1508,7 +1510,7 @@ mod tests {
         );
         let environment = child_env(None);
         let instances = Rc::new(Vec::new());
-        let scope = Rc::new(Vec::new());
+        let scope = Rc::new(EffectScope::default());
         let encode = || {
             residual_environment_key(
                 &context,
@@ -1740,11 +1742,11 @@ mod tests {
                 .unwrap()
                 .unwrap()
         };
-        let scope = Rc::new(Vec::new());
+        let scope = Rc::new(EffectScope::default());
         let shared = encode(&[Part::Scope(scope.clone()), Part::Scope(scope.clone())]);
         let separate = encode(&[
-            Part::Scope(Rc::new(Vec::new())),
-            Part::Scope(Rc::new(Vec::new())),
+            Part::Scope(Rc::new(EffectScope::default())),
+            Part::Scope(Rc::new(EffectScope::default())),
         ]);
         assert_eq!(shared.digest, separate.digest);
         assert_ne!(
@@ -1761,7 +1763,7 @@ mod tests {
     #[test]
     fn immutable_provenance_memo_preserves_keys_and_releases_revisions() {
         let context = Rc::new(Context::default());
-        let scope = Rc::new(Vec::new());
+        let scope = Rc::new(EffectScope::default());
         let part = Part::Scope(scope.clone());
         let encode = || {
             portable_evidence(&context, &[], std::iter::once(&part), HashMap::new())

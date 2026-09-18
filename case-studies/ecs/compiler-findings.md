@@ -61,12 +61,11 @@ not imply flat world columns, allocation-free updates, or worker execution.
 ## Fixed: local signatures could not depend on a constructor's type argument
 
 The system generator needs `const Step = Row -> Row` followed by
-`let step :: Step`. While checking the still-generic constructor, evaluating
-that signature reported `BLOT_UNBOUND` before Row was available. Such a
-signature now remains a specialization obligation when its missing value belongs
-to a declared generic binding. An actually undeclared name still fails. The
-concrete body must satisfy its signature even when its constructed result is
-unused.
+`let step: Step`. While checking the still-generic constructor, evaluating that
+signature reported `BLOT_UNBOUND` before Row was available. Such a signature now
+remains a specialization obligation when its missing value belongs to a declared
+generic binding. An actually undeclared name still fails. The concrete body must
+satisfy its signature even when its constructed result is unused.
 
 The scheduler can consequently derive signed read, patch, and row boundaries
 inside ordinary Blot functions. Public runtime exports still use concrete

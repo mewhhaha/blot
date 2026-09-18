@@ -3,6 +3,6 @@
 open import "blot:prelude"
 
 const Allowed = refine (range (10, 20), fn value => value >= 0 && value <= 100)
-let chosen :: Allowed
+let chosen: Allowed
 let chosen = 15
 return chosen

@@ -7,7 +7,7 @@ open import "blot:prelude"
 const Page = { .items = [Text]; .next = Option Int; }
 const PageResult = #Page Page | #InvalidPage Text
 
-let page :: ([Text], Int, Int) -> PageResult
+let page: ([Text], Int, Int) -> PageResult
 let page = fn (&values, offset, limit) => do:
   if offset < 0:
     return #InvalidPage "negative offset"
@@ -24,7 +24,7 @@ let page = fn (&values, offset, limit) => do:
     #True => limit
     #False => remaining
   let stop = offset + count
-  let items :: [Text]
+  let items: [Text]
   let items = []
   // Pain point: a computed bound is not automatically an indexing proof.
   // Array.get is total; a missing item here means our own bounds are wrong,
@@ -35,7 +35,7 @@ let page = fn (&values, offset, limit) => do:
 
     items := @array.push items item
 
-  let next :: Option Int
+  let next: Option Int
   let next = case stop < length of
     #True => Some stop
     #False => None

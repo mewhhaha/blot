@@ -1,6 +1,6 @@
 open import "blot:prelude"
 const Read = @effect { .get = Unit -> Int; }
 const supply = fn value => { .get = fn ((), ?resume) => resume value; }
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn value => @handle (Read, fn () => Read.get (), supply value)
 return run

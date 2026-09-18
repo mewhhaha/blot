@@ -1,5 +1,5 @@
 open import "blot:prelude"
 const Meter = seal ("Meter", Int)
-const make :: Int -> Meter
+const make: Int -> Meter
 const make = fn value => seal ("Meter", value)
 return { .default = make 3; .make = make; }

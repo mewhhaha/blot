@@ -10,7 +10,7 @@ const Events = @effect.host {
   .close = Effect.suspends (@forall (fn message => Subscription message -> Unit));
 }
 
-const subscribe :: @forall (fn message => Scope -> Source message -> Policy -> Subscription message ~ { Events })
+const subscribe: @forall (fn message => Scope -> Source message -> Policy -> Subscription message ~ { Events })
 const subscribe = fn scope => fn source => fn policy => Events.subscribe (scope, source, policy)
 
 return {

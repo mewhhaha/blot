@@ -605,10 +605,10 @@ export class LanguageService {
         correction.signatureSpan.start,
         correction.valueSpan.start,
       );
-      const delimiter = signaturePrefix.indexOf("::");
+      const delimiter = signaturePrefix.indexOf(":");
       if (delimiter < 0) {
         throw new Error(
-          `signature at ${correction.signatureSpan.start} has no :: delimiter`,
+          `signature at ${correction.signatureSpan.start} has no type-annotation colon`,
         );
       }
       let recursive = "";
@@ -626,7 +626,7 @@ export class LanguageService {
                 start: correction.signatureSpan.start,
                 end: correction.signatureSpan.start + delimiter,
               }),
-              newText: `${header} `,
+              newText: header,
             }],
           }],
         },
@@ -661,7 +661,7 @@ export class LanguageService {
                 end: lineStart,
               }),
               newText:
-                `${indentation}${binding.kind}${recursive} ${binding.name} :: _${lineEnding}`,
+                `${indentation}${binding.kind}${recursive} ${binding.name}: _${lineEnding}`,
             }],
           }],
         },

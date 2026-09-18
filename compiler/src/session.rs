@@ -544,7 +544,7 @@ impl CompilerSession {
         } else {
             let evaluated = if let Some(capsule) = &result_template {
                 let base_module_instances = Vec::new();
-                let base_effect_scope = Rc::new(Vec::new());
+                let base_effect_scope = Rc::new(crate::eval::EffectScope::default());
                 let environment = capsule.decode(
                     path,
                     module.as_ref(),
@@ -3032,7 +3032,7 @@ mod tests {
                 let snapshot = snapshot_from_source(
                     "numeric.blot",
                     &format!(
-                        "const earlier = @type.attach @type.int \"negate\" @int.neg\nconst negate :: @type.int -> @type.int\nconst negate = fn value => @int.add value {offset}\nconst Scalar = @type.attach @type.int \"negate\" negate\nreturn {{ .earlier = earlier; .Scalar = Scalar; }}\n"
+                        "const earlier = @type.attach @type.int \"negate\" @int.neg\nconst negate: @type.int -> @type.int\nconst negate = fn value => @int.add value {offset}\nconst Scalar = @type.attach @type.int \"negate\" negate\nreturn {{ .earlier = earlier; .Scalar = Scalar; }}\n"
                     ),
                 );
                 consumer
@@ -3387,12 +3387,12 @@ mod tests {
             .add_source(
                 PATH.to_owned(),
                 source(concat!(
-                    "let rec even :: @type.int -> @type.int\n",
+                    "let rec even: @type.int -> @type.int\n",
                     "let rec even = fn value => case @int.cmp value 0 of\n",
                     "  #Equal => 0\n",
                     "  #Greater => odd (@int.sub value 1)\n",
                     "  #Less => 0\n",
-                    "let rec odd :: @type.int -> @type.int\n",
+                    "let rec odd: @type.int -> @type.int\n",
                     "let rec odd = fn value => case @int.cmp value 0 of\n",
                     "  #Equal => 0\n",
                     "  #Greater => even (@int.sub value 1)\n",
@@ -3946,7 +3946,7 @@ mod tests {
         const MODULE_PATH: &str = "snapshot:evicted-closure-template";
         const TARGET_PATH: &str = "snapshot:evicted-closure-template-target";
         const MODULE_SOURCE: &str = "const make = fn captured => fn value => @int.add value captured\n\u{e000}const first = make 1\n\u{e000}const second = make 2\n\u{e000}return { .first = first; .second = second; }\u{e000}\n";
-        const SOURCE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const library = import \"library\"\n\n\u{e000}let run :: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => library.first\n    \u{e000}#False => library.first\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .first = library.first; .second = library.second; .run = run; }\u{e000}\n";
+        const SOURCE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const library = import \"library\"\n\n\u{e000}let run: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => library.first\n    \u{e000}#False => library.first\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .first = library.first; .second = library.second; .run = run; }\u{e000}\n";
 
         fn add_consumer(session: &mut CompilerSession, path: &str) {
             session
@@ -4034,7 +4034,7 @@ mod tests {
             right: Value,
         ) -> Vec<serde_json::Value> {
             const FUNCTION_SOURCE: &str = "return fn value => @int.add value 1\n";
-            const CHOICE_SOURCE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const left = import \"left\"\n\u{e000}const right = import \"right\"\n\n\u{e000}let run :: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => left\n    \u{e000}#False => right\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+            const CHOICE_SOURCE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const left = import \"left\"\n\u{e000}const right = import \"right\"\n\n\u{e000}let run: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => left\n    \u{e000}#False => right\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
             let left_path = format!("snapshot:history-choice-left-{suffix}");
             let right_path = format!("snapshot:history-choice-right-{suffix}");
             for path in [&left_path, &right_path] {
@@ -5150,7 +5150,7 @@ mod tests {
                 CALLER.to_owned(),
                 source(concat!(
                     "const Library = import \"library\"\n",
-                    "let run :: @type.int -> @type.int ~ { Library.Effect }\n",
+                    "let run: @type.int -> @type.int ~ { Library.Effect }\n",
                     "let run = fn value => Library.copy (Library.direct value)\n",
                     "return run\n",
                 )),
@@ -5193,7 +5193,7 @@ mod tests {
                 source(concat!(
                     "const first = import \"library\"\n",
                     "const second = import \"library\"\n",
-                    "let run :: @type.int -> @type.int ~ { second.Effect }\n",
+                    "let run: @type.int -> @type.int ~ { second.Effect }\n",
                     "let run = fn value => first.copy value\n",
                     "return run\n",
                 )),
@@ -5419,7 +5419,7 @@ mod tests {
             .add_source(
                 PATH.to_owned(),
                 source(
-                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let attach :: @type.int -> @type.int\n\u{e000}let attach = fn value => @shape.get (@type.members (@type.attach Fault \"origin\" value)) \"origin\"\n\u{e000}return attach\u{e000}\n",
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let attach: @type.int -> @type.int\n\u{e000}let attach = fn value => @shape.get (@type.members (@type.attach Fault \"origin\" value)) \"origin\"\n\u{e000}return attach\u{e000}\n",
                 ),
             )
             .expect("residual attachment source should load");
@@ -5921,7 +5921,7 @@ mod tests {
             "open { .ignored = 4; }\n",
             "const Types = { .Number = @type.int; }\n",
             "open Types\n",
-            "let typed :: Number\n",
+            "let typed: Number\n",
             "let typed = 4\n",
             "return (direct, forced, empty, rebuilt, selected, typed)\n",
         );
@@ -6276,9 +6276,9 @@ mod tests {
             .add_source(
                 "main.blot".to_owned(),
                 source(concat!(
-                    "let literal :: [@type.int]\n",
+                    "let literal: [@type.int]\n",
                     "let literal = []\n",
-                    "let primitive :: [@type.int]\n",
+                    "let primitive: [@type.int]\n",
                     "let primitive = @array.empty\n",
                     "let literal_one = @array.push literal 1\n",
                     "let literal_two = @array.push literal 2\n",
@@ -6443,7 +6443,7 @@ mod tests {
                     "  .first_enemy_id = @type.text;\n",
                     "  .second_enemy_id = @type.text;\n",
                     "}}\n",
-                    "let project :: @type.int -> Project\n",
+                    "let project: @type.int -> Project\n",
                     "let project = fn runtime_token => {{\n",
                     "  .runtime_token = runtime_token;\n",
                     "  .first_enemy_id = \"guard\";\n",
@@ -6469,7 +6469,7 @@ mod tests {
                     "  if use_first_enemy:\n",
                     "    return Project.first_enemy_id\n",
                     "  return Project.second_enemy_id\n",
-                    "let enemy_id_length :: @type.int -> @type.int\n",
+                    "let enemy_id_length: @type.int -> @type.int\n",
                     "let enemy_id_length = fn runtime_token => ",
                     "@text.len (active_enemy_id runtime_token)\n",
                     "return { .enemy_id_length = enemy_id_length; }\n",
@@ -6623,11 +6623,11 @@ mod tests {
             for (path, text) in [
                 (
                     "app.blot",
-                    "const lib = import \"lib\"\nconst run :: @type.int -> @type.int\nconst run = fn value => lib.run value\nreturn { .run = run; }\n",
+                    "const lib = import \"lib\"\nconst run: @type.int -> @type.int\nconst run = fn value => lib.run value\nreturn { .run = run; }\n",
                 ),
                 (
                     "lib.blot",
-                    "const step :: @type.int -> @type.int\nconst step = fn value => @int.add value 3\nconst run :: @type.int -> @type.int\nconst run = fn value => step value\nreturn { .run = run; }\n",
+                    "const step: @type.int -> @type.int\nconst step = fn value => @int.add value 3\nconst run: @type.int -> @type.int\nconst run = fn value => step value\nreturn { .run = run; }\n",
                 ),
             ] {
                 session.add_source(path.to_owned(), source(text)).unwrap();
@@ -6699,14 +6699,14 @@ mod tests {
                     format!("step{} value", index - 1)
                 };
                 library.push_str(&format!(
-                    "const step{index} :: Int -> Int\nconst step{index} = fn value => {previous}\n"
+                    "const step{index}: Int -> Int\nconst step{index} = fn value => {previous}\n"
                 ));
             }
             library.push_str("return { .run = step31; }\n");
             for (path, text) in [
                 (
                     "app.blot",
-                    "open import \"blot:prelude\"\nconst lib = import \"lib\"\nconst run :: Int -> Int\nconst run = fn value => lib.run value\nreturn { .run = run; }\n",
+                    "open import \"blot:prelude\"\nconst lib = import \"lib\"\nconst run: Int -> Int\nconst run = fn value => lib.run value\nreturn { .run = run; }\n",
                 ),
                 ("lib.blot", library.as_str()),
             ] {
@@ -6788,7 +6788,7 @@ mod tests {
                     PROVIDER.to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "let finished :: Int -> Bool\n",
+                        "let finished: Int -> Bool\n",
                         "let finished = fn remaining => remaining <= 0\n",
                         "return { .finished = finished; }\n",
                     )),
@@ -7096,7 +7096,7 @@ mod tests {
                 .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
                 .unwrap();
             session.add_source("main.blot".to_owned(), source(
-            "module with init\n\nopen import \"blot:prelude\"\n\nlet read :: Unit -> Int\nlet read = init.read\nreturn read () + 1\n",
+            "module with init\n\nopen import \"blot:prelude\"\n\nlet read: Unit -> Int\nlet read = init.read\nreturn read () + 1\n",
         )).unwrap();
             session
                 .configure_module(
@@ -7276,7 +7276,7 @@ mod tests {
             .add_source(
                 dependency_path.to_owned(),
                 source(
-                    "const captured :: @type.int\n\u{e000}const captured = 1\n\u{e000}const read :: @type.unit -> @type.int\n\u{e000}const read = fn () => captured\n\u{e000}return read\u{e000}\n",
+                    "const captured: @type.int\n\u{e000}const captured = 1\n\u{e000}const read: @type.unit -> @type.int\n\u{e000}const read = fn () => captured\n\u{e000}return read\u{e000}\n",
                 ),
             )
             .expect("dependency source should load");
@@ -7303,7 +7303,7 @@ mod tests {
             .add_source(
                 dependency_path.to_owned(),
                 source(
-                    "const captured :: @type.int\n\u{e000}const captured = 2\n\u{e000}const read :: @type.unit -> @type.int\n\u{e000}const read = fn () => captured\n\u{e000}return read\u{e000}\n",
+                    "const captured: @type.int\n\u{e000}const captured = 2\n\u{e000}const read: @type.unit -> @type.int\n\u{e000}const read = fn () => captured\n\u{e000}return read\u{e000}\n",
                 ),
             )
             .expect("changed dependency should load");
@@ -7441,7 +7441,7 @@ mod tests {
             .add_source(
                 path.to_owned(),
                 source(
-                    "const replacement :: @type.int\n\u{e000}const replacement = 2\n\u{e000}const set_x = fn record => { ...record; .x = replacement; }\n\u{e000}return (set_x { .x = 1; .y = \"kept\"; }).y\u{e000}",
+                    "const replacement: @type.int\n\u{e000}const replacement = 2\n\u{e000}const set_x = fn record => { ...record; .x = replacement; }\n\u{e000}return (set_x { .x = 1; .y = \"kept\"; }).y\u{e000}",
                 ),
             )
             .expect("shape update source should load");
@@ -7673,15 +7673,15 @@ mod tests {
         assert_eq!(dependencies.includes, ["shader.wgsl"]);
     }
 
-    const DIRECT_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let pick :: @type.int -> { .x = @type.int; } -> @type.int\n\u{e000}let pick = fn flag => do:\n  \u{e000}\u{e001}return case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n\n\u{e000}\u{e002}\u{e000}\u{e002}\u{e000}return { .pick = pick; }\u{e000}\n";
+    const DIRECT_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let pick: @type.int -> { .x = @type.int; } -> @type.int\n\u{e000}let pick = fn flag => do:\n  \u{e000}\u{e001}return case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n\n\u{e000}\u{e002}\u{e000}\u{e002}\u{e000}return { .pick = pick; }\u{e000}\n";
 
-    const SHARED_BODY_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const bump = fn step => fn value => @int.add value step\n\n\u{e000}let run :: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => bump 1\n    \u{e000}#False => bump 2\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+    const SHARED_BODY_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const bump = fn step => fn value => @int.add value step\n\n\u{e000}let run: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => bump 1\n    \u{e000}#False => bump 2\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
 
-    const PRIMITIVE_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let run :: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => @int.add flag\n    \u{e000}#False => @int.sub flag\n  \u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+    const PRIMITIVE_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let run: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => @int.add flag\n    \u{e000}#False => @int.sub flag\n  \u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
 
-    const EXPORTED_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let hold :: @type.int -> { .apply = { .x = @type.int; } -> @type.int; }\n\u{e000}let hold = fn flag => do:\n  \u{e000}\u{e001}let chosen = case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n  \u{e000}\u{e002}\u{e000}return { .apply = chosen; }\n\n\u{e000}\u{e002}\u{e000}return { .hold = hold; }\u{e000}\n";
+    const EXPORTED_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let hold: @type.int -> { .apply = { .x = @type.int; } -> @type.int; }\n\u{e000}let hold = fn flag => do:\n  \u{e000}\u{e001}let chosen = case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n  \u{e000}\u{e002}\u{e000}return { .apply = chosen; }\n\n\u{e000}\u{e002}\u{e000}return { .hold = hold; }\u{e000}\n";
 
-    const INCOMPATIBLE_CAPTURES: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let run :: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let ratio = @float.of_int flag\n  \u{e000}let selected = case positive flag of\n    \u{e000}\u{e001}#True => fn n => @int.add n flag\n    \u{e000}#False => do:\n      \u{e000}\u{e001}let scaled = @float.mul ratio 2.0\n      \u{e000}return fn n => @int.add n (@int.of_float scaled)\n  \u{e000}\u{e002}\u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+    const INCOMPATIBLE_CAPTURES: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let run: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let ratio = @float.of_int flag\n  \u{e000}let selected = case positive flag of\n    \u{e000}\u{e001}#True => fn n => @int.add n flag\n    \u{e000}#False => do:\n      \u{e000}\u{e001}let scaled = @float.mul ratio 2.0\n      \u{e000}return fn n => @int.add n (@int.of_float scaled)\n  \u{e000}\u{e002}\u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
 
     #[test]
     fn a_dynamic_function_choice_becomes_a_private_tagged_table() {
@@ -7705,7 +7705,7 @@ mod tests {
             "  #Less => #False\n",
             "  #Equal => #False\n",
             "\n",
-            "let run :: @type.int -> @type.int\n",
+            "let run: @type.int -> @type.int\n",
             "let run = fn flag => (case positive flag of\n",
             "  #True => fn value => @int.add value 1\n",
             "  #False => fn value => @int.sub value 1\n",
@@ -7796,6 +7796,53 @@ mod tests {
     }
 
     #[test]
+    fn single_colon_annotations_check_evaluate_and_emit() {
+        run_with_compiler_test_stack(|| {
+            for program in [
+                "const f = fn ((a, b):\n  (@type.int, @type.int)) -> @type.int => @int.add a b\nreturn f (20, 22)\n",
+                "const f = fn (():\n  @type.unit) -> @type.int => 42\nreturn f ()\n",
+                "let answer: @type.int\nlet answer = 42\nreturn answer\n",
+                "const answer:@type.int=42\nreturn answer\n",
+                "const identity:\n  @type.int -> @type.int\nconst identity = fn (x: @type.int) -> @type.int => x\nreturn identity 42\n",
+                "use answer: @type.int <- @int.add 20 22\nreturn answer\n",
+                "let answer: @type.int = 0\nanswer := 42\nreturn answer\n",
+            ] {
+                let mut session = CompilerSession::default();
+                session
+                    .add_source("main.blot".to_owned(), source(program))
+                    .unwrap();
+                session
+                    .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+                    .unwrap();
+                let checked = session.check_module("main.blot");
+                assert_eq!(checked["ok"], true, "{program}\n{checked}");
+                let evaluated = session.evaluate_module("main.blot");
+                assert_eq!(evaluated["ok"], true, "{program}\n{evaluated}");
+                assert_eq!(evaluated["display"], "42", "{program}\n{evaluated}");
+                session.compile_module("main.blot").unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn double_colon_is_not_a_type_annotation() {
+        for program in [
+            "let x :: @type.int\nlet x = 1\nreturn x\n",
+            "const x :: @type.int = 1\nreturn x\n",
+            "const f = fn (x :: @type.int) => x\nreturn f\n",
+            "use x :: @type.int <- @int.add 1 2\nreturn x\n",
+        ] {
+            let mut session = CompilerSession::default();
+            assert!(
+                session
+                    .add_source("main.blot".to_owned(), source(program))
+                    .is_err(),
+                "{program}"
+            );
+        }
+    }
+
+    #[test]
     fn typed_function_headers_check_and_emit_existing_core_forms() {
         run_with_compiler_test_stack(|| {
             let snapshot = snapshot_from_source(
@@ -7804,56 +7851,53 @@ mod tests {
             );
             for (program, succeeds) in [
                 (
-                    "const add = fn (a :: Int, b :: Int) -> Int => do:\n  return a + b\nreturn add (20, 22)\n",
+                    "const add = fn (a: Int, b: Int) -> Int => do:\n  return a + b\nreturn add (20, 22)\n",
                     true,
                 ),
                 (
-                    "const identity = fn (x :: Int) => x\nreturn identity 42\n",
+                    "const identity = fn (x: Int) => x\nreturn identity 42\n",
                     true,
                 ),
                 (
-                    "const same = fn (x :: Int, y) => y\nreturn same (1, 42)\n",
+                    "const same = fn (x: Int, y) => y\nreturn same (1, 42)\n",
                     true,
                 ),
                 (
-                    "const rec count = fn (n :: Int) -> Int => do:\n  if n == 0:\n    return 42\n  else:\n    return count (n - 1)\nreturn count 4\n",
+                    "const rec count = fn (n: Int) -> Int => do:\n  if n == 0:\n    return 42\n  else:\n    return count (n - 1)\nreturn count 4\n",
                     true,
                 ),
                 (
-                    "const consume = fn (!x :: Int) -> Int => x + 1\nlet !token = 41\nreturn consume (!token)\n",
+                    "const consume = fn (!x: Int) -> Int => x + 1\nlet !token = 41\nreturn consume (!token)\n",
                     true,
                 ),
                 (
-                    "const collect = fn (&values :: [Int]) -> Int => Array.length (&values)\nreturn collect [1, 2]\n",
+                    "const collect = fn (&values: [Int]) -> Int => Array.length (&values)\nreturn collect [1, 2]\n",
                     true,
                 ),
                 (
-                    "const apply = fn (f :: Int -> Int) -> Int => f 41\nreturn apply (fn (x :: Int) -> Int => x + 1)\n",
+                    "const apply = fn (f: Int -> Int) -> Int => f 41\nreturn apply (fn (x: Int) -> Int => x + 1)\n",
                     true,
                 ),
                 (
-                    "const f :: Int -> Int\nconst f = fn (x :: Int) -> Int => x\nreturn f 42\n",
+                    "const f: Int -> Int\nconst f = fn (x: Int) -> Int => x\nreturn f 42\n",
                     true,
                 ),
                 (
-                    "const f :: Int -> Text\nconst f = fn (x :: Int) -> Int => x\nreturn f 42\n",
+                    "const f: Int -> Text\nconst f = fn (x: Int) -> Int => x\nreturn f 42\n",
                     false,
                 ),
-                ("const f = fn (x :: Int) -> Text => x\nreturn f 42\n", false),
+                ("const f = fn (x: Int) -> Text => x\nreturn f 42\n", false),
                 (
-                    "const f = fn (x :: Int) -> Int => x\nreturn f \"wrong\"\n",
+                    "const f = fn (x: Int) -> Int => x\nreturn f \"wrong\"\n",
                     false,
                 ),
+                ("const f = fn (x: Int) -> Int => x\nreturn { .f; }\n", true),
                 (
-                    "const f = fn (x :: Int) -> Int => x\nreturn { .f; }\n",
+                    "const Ask = @effect { .ask = Unit -> Int; }\nconst f = fn (x: Int) -> Int ~ { Ask } => do:\n  use y <- Ask.ask ()\n  return x + y\nreturn 42\n",
                     true,
                 ),
                 (
-                    "const Ask = @effect { .ask = Unit -> Int; }\nconst f = fn (x :: Int) -> Int ~ { Ask } => do:\n  use y <- Ask.ask ()\n  return x + y\nreturn 42\n",
-                    true,
-                ),
-                (
-                    "const Ask = @effect { .ask = Unit -> Int; }\nconst f = fn (x :: Int) => do:\n  use y <- Ask.ask ()\n  return x + y\nreturn 42\n",
+                    "const Ask = @effect { .ask = Unit -> Int; }\nconst f = fn (x: Int) => do:\n  use y <- Ask.ask ()\n  return x + y\nreturn 42\n",
                     true,
                 ),
             ] {
@@ -7896,7 +7940,7 @@ mod tests {
             for (name, program) in [
                 (
                     "compare",
-                    "open import \"blot:prelude\"\nconst run = fn (limit :: Int, y :: Int) -> Int => do:\n  for x in Iter.range (0, limit):\n    if x < y:\n      return -1\n    if x > y:\n      return 1\n  return 0\nreturn { .run; }\n",
+                    "open import \"blot:prelude\"\nconst run = fn (limit: Int, y: Int) -> Int => do:\n  for x in Iter.range (0, limit):\n    if x < y:\n      return -1\n    if x > y:\n      return 1\n  return 0\nreturn { .run; }\n",
                 ),
                 ("sweep", include_str!("../../examples/lib/float_sweep.blot")),
                 (
@@ -7917,7 +7961,7 @@ mod tests {
                 ),
                 (
                     "partial",
-                    "open import \"blot:prelude\"\nconst choose = fn (a :: Int, b) => b\nreturn (choose (42, \"text\"), choose (42, True))\n",
+                    "open import \"blot:prelude\"\nconst choose = fn (a: Int, b) => b\nreturn (choose (42, \"text\"), choose (42, True))\n",
                 ),
             ] {
                 let mut session = CompilerSession::default();
@@ -8311,7 +8355,7 @@ return F32.add (-1) 2.5
                     concat!(
                         "open import \"blot:prelude\"
 ",
-                        "let value :: F32
+                        "let value: F32
 ",
                         "let value = 1.25
 ",
@@ -8324,7 +8368,7 @@ return F32.add (-1) 2.5
                 (
                     r#"open import "blot:prelude"
 const Row = { .x = F32; .y = F32; }
-const seed :: Int -> [Row]
+const seed: Int -> [Row]
 const seed = fn count => Iter.collect (Iter.map (Iter.range (0, count), fn index => { .x = F32.of_int index; .y = 1; }))
 return seed 2
 "#,
@@ -8409,7 +8453,7 @@ return seed 2
 
             for (index, text) in [concat!(
                 "open import \"blot:prelude\"\n",
-                "let original :: { .count = Int; }\n",
+                "let original: { .count = Int; }\n",
                 "let original = { .count = 1; }\n",
                 "return Shape.update (original, { .id = 2; })\n",
             )]
@@ -8936,7 +8980,7 @@ return seed 2
         run_with_compiler_test_stack(|| {
             let mut session = CompilerSession::default();
             session.add_source("main.blot".to_owned(), source(
-                "const Batch = @type.union (#Systems [@type.text]) (#Barrier @type.text)\nconst empty :: [Batch]\nconst empty = []\nreturn { .empty; }\n"
+                "const Batch = @type.union (#Systems [@type.text]) (#Barrier @type.text)\nconst empty: [Batch]\nconst empty = []\nreturn { .empty; }\n"
             )).unwrap();
             session
                 .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
@@ -8954,7 +8998,7 @@ return seed 2
             for (body, accepted) in [("value", true), ("\"wrong\"", false)] {
                 let mut session = CompilerSession::default();
                 session.add_source("main.blot".to_owned(), source(&format!(
-                    "const make = fn T => do:\n  const Step = T -> T\n  let step :: Step\n  let step = fn value => {body}\n  return step\nconst identity :: @type.int -> @type.int\nconst identity = make @type.int\nreturn {{ .identity; .default = identity 42; }}\n"
+                    "const make = fn T => do:\n  const Step = T -> T\n  let step: Step\n  let step = fn value => {body}\n  return step\nconst identity: @type.int -> @type.int\nconst identity = make @type.int\nreturn {{ .identity; .default = identity 42; }}\n"
                 ))).unwrap();
                 session
                     .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
@@ -8973,11 +9017,11 @@ return seed 2
             }
             for (contents, code) in [
                 (
-                    "const make = fn T => do:\n  let step :: T -> T\n  let step = fn value => \"wrong\"\n  return step\nconst unused = make @type.int\nreturn 0\n",
+                    "const make = fn T => do:\n  let step: T -> T\n  let step = fn value => \"wrong\"\n  return step\nconst unused = make @type.int\nreturn 0\n",
                     "BLOT_TYPE_ERROR",
                 ),
                 (
-                    "const make = fn T => do:\n  let step :: Missing\n  let step = fn value => value\n  return step\nconst unused = make @type.int\nreturn 0\n",
+                    "const make = fn T => do:\n  let step: Missing\n  let step = fn value => value\n  return step\nconst unused = make @type.int\nreturn 0\n",
                     "BLOT_UNBOUND",
                 ),
             ] {
@@ -9077,7 +9121,7 @@ return seed 2
                     "main.blot".to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "const run :: Int -> Int\n",
+                        "const run: Int -> Int\n",
                         "const run = fn count => do:\n",
                         "  let heads = [0, 1]\n",
                         "  for index in Iter.range (0, count):\n",
@@ -9182,7 +9226,7 @@ return s.resolve (row, combined)
                     concat!(
                         "open import \"blot:prelude\"\n",
                         "const a = import \"./arena.blot\"\n",
-                        "const run :: Int -> { .before = a.Summary; .after = a.Summary; .again = a.Summary; }\n",
+                        "const run: Int -> { .before = a.Summary; .after = a.Summary; .again = a.Summary; }\n",
                         "const run = fn health => do:\n",
                         "  let world = a.seed health\n",
                         "  let next = a.tick (world, [])\n",
@@ -9248,7 +9292,7 @@ return s.resolve (row, combined)
                     "main.blot".to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "let rebuild :: { .values = [Int]; } -> [Int]\n",
+                        "let rebuild: { .values = [Int]; } -> [Int]\n",
                         "let rebuild = fn input => do:\n",
                         "  let rebuilt = @satisfies Array.empty [Int]\n",
                         "  let shared = freeze input.values\n",
@@ -9281,7 +9325,7 @@ return s.resolve (row, combined)
             let library_snapshot = snapshot_from_source(
                 "library.blot",
                 concat!(
-                    "const push_zero :: [@type.int] -> [@type.int]\n",
+                    "const push_zero: [@type.int] -> [@type.int]\n",
                     "const push_zero = fn values => @array.push values 0\n",
                     "return { .push_zero = push_zero; }\n",
                 ),
@@ -9326,7 +9370,7 @@ return s.resolve (row, combined)
             .add_source(
                 "main.blot".to_owned(),
                 source(concat!(
-                    "let combine :: { .first = [@type.int]; .second = [@type.int]; } -> ",
+                    "let combine: { .first = [@type.int]; .second = [@type.int]; } -> ",
                     "{ .combined = [@type.int]; .first = [@type.int]; .second = [@type.int]; }\n",
                     "let combine = fn input => {\n",
                     "  .combined = [0, ...input.first, 1, ...[], ...input.second, 2, 3];\n",
@@ -9687,7 +9731,7 @@ return s.resolve (row, combined)
                     LIBRARY.to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "let acquire :: [Int] -> @region.type Int\n",
+                        "let acquire: [Int] -> @region.type Int\n",
                         "let acquire = fn !values => @region.copy (!values)\n",
                         "return { .acquire = acquire; }\n",
                     )),
@@ -9780,9 +9824,9 @@ return s.resolve (row, combined)
                     "main.blot".to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "const at :: Int -> Int\n",
+                        "const at: Int -> Int\n",
                         "const at = fn index => Array.expect_get ((&[10, 20, 30]), index)\n",
-                        "const at_again :: Int -> Int\n",
+                        "const at_again: Int -> Int\n",
                         "const at_again = fn index => Array.expect_get ((&[10, 20, 30]), index)\n",
                         "return { .at = at; .at_again = at_again; }\n",
                     )),
@@ -9902,11 +9946,11 @@ return s.resolve (row, combined)
                     "main.blot".to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "const increment :: Int -> Int\n",
+                        "const increment: Int -> Int\n",
                         "const increment = fn value => @int.add value 1\n",
-                        "const left :: Int -> Int\n",
+                        "const left: Int -> Int\n",
                         "const left = fn value => increment value\n",
-                        "const right :: Int -> Int\n",
+                        "const right: Int -> Int\n",
                         "const right = fn value => increment value\n",
                         "return { .left = left; .right = right; }\n",
                     )),
@@ -10052,7 +10096,7 @@ return s.resolve (row, combined)
                     "main.blot".to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "let collect_range :: Int -> [Int]\n",
+                        "let collect_range: Int -> [Int]\n",
                         "let collect_range = fn count => collect (Iter.range (0, count))\n",
                         "return collect_range\n",
                     )),
@@ -10228,10 +10272,10 @@ return s.resolve (row, combined)
                     "main.blot".to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "let replace :: (Text, Text, Text) -> Text\n",
+                        "let replace: (Text, Text, Text) -> Text\n",
                         "let replace = fn (text, query, replacement) => ",
                         "Text.replace (text, query, replacement)\n",
-                        "const split :: (Text, Text) -> [Text]\n",
+                        "const split: (Text, Text) -> [Text]\n",
                         "const split = fn (text, separator) => Text.split (text, separator)\n",
                         "return { .replace = replace; .split = split; }\n",
                     )),
@@ -10302,9 +10346,9 @@ return s.resolve (row, combined)
                     "main.blot".to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "const construct :: Int -> Int\n",
+                        "const construct: Int -> Int\n",
                         "const construct = fn count => do:\n",
-                        "  let values :: [Int]\n",
+                        "  let values: [Int]\n",
                         "  let values = Array.empty\n",
                         "  for value in Iter.range (0, count):\n",
                         "    values := @array.push values value\n",
@@ -10362,10 +10406,10 @@ return s.resolve (row, combined)
                     "main.blot".to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "const rewrite_count :: Int -> Int\n",
+                        "const rewrite_count: Int -> Int\n",
                         "const rewrite_count = fn count => do:\n",
                         "  let values = Array.copy [0]\n",
-                        "  let rec rewrite :: ([Int], Int) -> [Int]\n",
+                        "  let rec rewrite: ([Int], Int) -> [Int]\n",
                         "  let rec rewrite = fn (values, remaining) => do:\n",
                         "    if remaining <= 0:\n",
                         "      return values\n",
@@ -10441,9 +10485,9 @@ return s.resolve (row, combined)
                         "  for offset in Iter.range (0, count):\n",
                         "    values := @array.push values (start + offset)\n",
                         "  return values\n",
-                        "const construct :: Int -> Int\n",
+                        "const construct: Int -> Int\n",
                         "const construct = fn count => do:\n",
-                        "  let values :: [Int]\n",
+                        "  let values: [Int]\n",
                         "  let values = Array.empty\n",
                         "  for batch in Iter.range (0, count):\n",
                         "    values := append_batch (values, batch * 4, 4)\n",
@@ -10507,14 +10551,14 @@ return s.resolve (row, combined)
                     "main.blot".to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "const rec increment_many :: (Int, Int) -> Int\n",
+                        "const rec increment_many: (Int, Int) -> Int\n",
                         "const rec increment_many = fn (value, remaining) => do:\n",
                         "  if remaining <= 0:\n",
                         "    return value\n",
                         "  return increment_many (value + 1, remaining - 1)\n",
-                        "const first :: Int -> Int\n",
+                        "const first: Int -> Int\n",
                         "const first = fn value => increment_many (0, value)\n",
-                        "const second :: Int -> Int\n",
+                        "const second: Int -> Int\n",
                         "const second = fn value => increment_many (0, value)\n",
                         "return { .first = first; .second = second; }\n",
                     )),
@@ -10558,7 +10602,7 @@ return s.resolve (row, combined)
                     source(
                         r#"open import "blot:prelude"
 const Point = struct { .x = I32; .y = I32; }
-let p :: Point
+let p: Point
 let p = Point.new { .y = 20; .x = 10; }
 return (Point.x p, Point.y p)
 "#,
@@ -10657,7 +10701,7 @@ return (Point.x p, Point.y p)
                     source(
                         r#"const Int = @type.int
 const Bool = @type.union #True #False
-let pick :: (Bool, Int) -> Int
+let pick: (Bool, Int) -> Int
 let pick = fn (trunk, y) => case (trunk, @int.rem y 3) of
   (#True, _) => 10
   (_, 0) => 20
@@ -10745,7 +10789,7 @@ return { .pick = pick; }
                 concat!(
                     "open import \"blot:prelude\"\n",
                     "const Event = {}\n",
-                    "let read :: Event -> Int\n",
+                    "let read: Event -> Int\n",
                     "let read = fn event => case event of\n",
                     "{}\n",
                     "return read (#Event511 512)\n",
@@ -10794,7 +10838,7 @@ return { .pick = pick; }
             let text = format!(
                 concat!(
                     "open import \"blot:prelude\"\n",
-                    "let choose :: ({}) -> Int\n",
+                    "let choose: ({}) -> Int\n",
                     "let choose = fn values => case values of\n",
                     "  ({}) => 1\n",
                     "  ({}) => 0\n",
@@ -10979,7 +11023,7 @@ return { .pick = pick; }
                         "open import \"blot:prelude\"\n",
                         "const Kind = #Oak | #Fir | #Rock\n",
                         "const Entry = { .key = Int; .kind = Kind; }\n",
-                        "let entries :: [Entry]\n",
+                        "let entries: [Entry]\n",
                         "let entries = [\n",
                         "  { .key = 1; .kind = #Oak; },\n",
                         "  { .key = 2; .kind = #Fir; },\n",
@@ -11040,9 +11084,9 @@ return { .pick = pick; }
                         "open import \"blot:prelude\"\n",
                         "const Left = #Same | #Left\n",
                         "const Right = #Same | #Right\n",
-                        "let left :: [Left]\n",
+                        "let left: [Left]\n",
                         "let left = [#Same]\n",
-                        "let right :: [Right]\n",
+                        "let right: [Right]\n",
                         "let right = [#Same]\n",
                         "use requested <- input.index ()\n",
                         "let index = @int.add requested 0\n",
@@ -11939,7 +11983,7 @@ return { .pick = pick; }
             }
             text.push_str(&format!(
                 concat!(
-                    "let at :: [Int] -> Int -> Int\n",
+                    "let at: [Int] -> Int -> Int\n",
                     "let at = fn &values => fn index => case index >= 0 && index < count{} (&values) of\n",
                     "  #True => @array.get values index\n",
                     "  #False => 0\n",
@@ -12160,7 +12204,7 @@ return { .pick = pick; }
                 )
                 .unwrap();
             let prefix = include_str!("../../case-studies/ecs/stateful.blot")
-                .split_once("let apply ::")
+                .split_once("let apply:")
                 .unwrap()
                 .0;
             session
@@ -12213,7 +12257,7 @@ return { .pick = pick; }
                     "main.blot".to_owned(),
                     source(
                         r#"open import "blot:prelude"
-const element :: @forall (fn T => ([T], Int) -> T)
+const element: @forall (fn T => ([T], Int) -> T)
 const element = fn (&values, index) => do:
   return case Array.get ((&values), index) of
     #Some value => value
@@ -12265,7 +12309,7 @@ return (twice_first [2], twice_first [2.0], twice_first [@f32.of_int 2])
                     source(
                         r#"open import "blot:prelude"
 const directions = [{ .x = 1; }, { .x = 2; }]
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn count => do:
   let voxels = 0
   for x in Iter.range (0, count):
@@ -12362,7 +12406,7 @@ return ()
                     "main.blot".to_owned(),
                     source(
                         r#"open import "blot:prelude"
-let go = fn (outer :: Option Int, inner :: Option Int) => do:
+let go = fn (outer: Option Int, inner: Option Int) => do:
   let value = case outer of
     #Some x => case inner of
       #Some y => @panic "a"
@@ -12405,7 +12449,7 @@ return { .go; }
                     "main.blot".to_owned(),
                     source(
                         r#"open import "blot:prelude"
-let go = fn (outer :: Option Int, flag :: Bool) => do:
+let go = fn (outer: Option Int, flag: Bool) => do:
   let value = case outer of
     #Some x => case flag of
       #True => @panic "a"
@@ -13008,7 +13052,7 @@ return { .go; }
                     .collect();
             }
             let text = format!(
-                "open import \"blot:prelude\"\nconst Allowed = refine (Int, fn value => {})\nlet answer :: Allowed\nlet answer = 0\nreturn answer\n",
+                "open import \"blot:prelude\"\nconst Allowed = refine (Int, fn value => {})\nlet answer: Allowed\nlet answer = 0\nreturn answer\n",
                 predicates[0]
             );
             session
@@ -13073,9 +13117,9 @@ return { .go; }
                     "main.blot".to_owned(),
                     source(concat!(
                         "open import \"blot:prelude\"\n",
-                        "const empty_length :: Int -> Int\n",
+                        "const empty_length: Int -> Int\n",
                         "const empty_length = fn capacity => do:\n",
-                        "  let values :: [Int]\n",
+                        "  let values: [Int]\n",
                         "  let values = Scratch.finish (Scratch.with_capacity capacity)\n",
                         "  return Array.length (&values)\n",
                         "return { .empty_length = empty_length; }\n",
@@ -13174,7 +13218,7 @@ return { .go; }
                     source(concat!(
                         "open import \"blot:prelude\"\n",
                         "\n",
-                        "let flag :: Bool\n",
+                        "let flag: Bool\n",
                         "let flag = #False\n",
                         "\n",
                         "for _ in Iter.items [()]:\n",

@@ -14,7 +14,7 @@ const derive_accessors = fn shape => do:
 
 const User = derive_accessors { .name = Text; .score = Int; }
 
-let project :: User -> { .name = Text; .score = Int; }
+let project: User -> { .name = Text; .score = Int; }
 let project = fn user => {
   .name = User.name user;
   .score = User.score user;

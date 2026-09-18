@@ -5,6 +5,7 @@ pub use type_value::TypeValue;
 #[path = "value_graph.rs"]
 mod graph;
 
+use std::borrow::Cow;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Deref, DerefMut};
@@ -556,22 +557,49 @@ pub(crate) fn declaration_env(environment: &Environment) -> Environment {
 }
 
 pub fn lookup_signature(environment: &Environment, name: &str) -> Option<Value> {
+    with_lookup_signature(environment, name, |value| value.cloned())
+}
+
+/// Borrow a signature only for this synchronous read. The visitor must not
+/// mutate lexical maps; the RefCell guard is dropped before this call returns.
+pub(crate) fn with_lookup_signature<R>(
+    environment: &Environment,
+    name: &str,
+    visit: impl FnOnce(Option<&Value>) -> R,
+) -> R {
     let mut scope = Some(environment.clone());
     while let Some(current) = scope {
         if let Some(value) = current.signatures.borrow().get(name) {
-            return Some(value.clone());
+            return visit(Some(value));
         }
         scope = current.parent.borrow().clone();
     }
-    None
+    visit(None)
 }
 
 pub fn lookup(environment: &Environment, name: &str) -> Option<Value> {
-    find_binding(environment, name, BindingRead::Observed)
+    find_binding(environment, name, BindingRead::Observed, |value| {
+        value.map(Cow::into_owned)
+    })
 }
 
 pub(crate) fn lookup_unobserved(environment: &Environment, name: &str) -> Option<Value> {
-    find_binding(environment, name, BindingRead::Inspection)
+    find_binding(environment, name, BindingRead::Inspection, |value| {
+        value.map(Cow::into_owned)
+    })
+}
+
+/// Observe the same binding as `lookup` without cloning stored values. The
+/// visitor is a synchronous read: it must not mutate lexical maps. Recursive
+/// bindings still materialize their closure, retaining it until the read ends.
+pub(crate) fn with_lookup<R>(
+    environment: &Environment,
+    name: &str,
+    visit: impl FnOnce(Option<&Value>) -> R,
+) -> R {
+    find_binding(environment, name, BindingRead::Observed, |value| {
+        visit(value.as_deref())
+    })
 }
 
 enum BindingRead {
@@ -579,12 +607,19 @@ enum BindingRead {
     Inspection,
 }
 
-fn find_binding(environment: &Environment, name: &str, read: BindingRead) -> Option<Value> {
+fn find_binding<R>(
+    environment: &Environment,
+    name: &str,
+    read: BindingRead,
+    visit: impl FnOnce(Option<Cow<'_, Value>>) -> R,
+) -> R {
     let mut scope = Some(environment.clone());
     while let Some(current) = scope {
         let (current, indexed) = if let Some(locations) = current.name_locations.get() {
-            let owner = locations
-                .get(name)?
+            let Some(owner) = locations.get(name) else {
+                return visit(None);
+            };
+            let owner = owner
                 .upgrade()
                 .expect("indexed name retains its owning scope");
             (owner, true)
@@ -592,14 +627,14 @@ fn find_binding(environment: &Environment, name: &str, read: BindingRead) -> Opt
             (current, false)
         };
         if let Some(value) = current.names.borrow().get(name) {
-            return Some(value.clone());
+            return visit(Some(Cow::Borrowed(value)));
         }
         if let Some(value) = current
             .recursive_bindings
             .as_ref()
             .and_then(|bindings| bindings.lookup(name))
         {
-            return Some(value);
+            return visit(Some(Cow::Owned(value)));
         }
         for opened in current.opens.borrow().iter().rev() {
             let value = match read {
@@ -607,7 +642,7 @@ fn find_binding(environment: &Environment, name: &str, read: BindingRead) -> Opt
                 BindingRead::Inspection => opened.fields().get(name),
             };
             if let Some(value) = value {
-                return Some(value.clone());
+                return visit(Some(Cow::Borrowed(value)));
             }
         }
         assert!(
@@ -616,7 +651,7 @@ fn find_binding(environment: &Environment, name: &str, read: BindingRead) -> Opt
         );
         scope = current.parent.borrow().clone();
     }
-    None
+    visit(None)
 }
 
 pub(crate) fn index_environment_names(environment: &Environment) {
@@ -919,6 +954,10 @@ impl OrderedFields {
     /// A call-local key for immutable structural conversion, not source identity.
     pub(crate) fn storage_identity(&self) -> *const () {
         Rc::as_ptr(&self.0).cast()
+    }
+
+    pub(crate) fn has_shared_storage(&self) -> bool {
+        Rc::strong_count(&self.0) > 1
     }
 
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
@@ -1983,6 +2022,165 @@ mod type_value_tests {
     use super::*;
 
     #[test]
+    fn borrowed_lookup_visits_stored_values_without_cloning() {
+        let environment = child_env(None);
+        let array = Value::Array((0..2048).map(|n| Value::Int(n.into())).collect());
+        environment
+            .names
+            .borrow_mut()
+            .insert("values".into(), array);
+        environment
+            .signatures
+            .borrow_mut()
+            .insert("values".into(), Value::TypeVariable(7));
+        let visits = Cell::new(0);
+        with_lookup(&environment, "values", |value| {
+            visits.set(visits.get() + 1);
+            let names = environment.names.borrow();
+            assert!(std::ptr::eq(value.unwrap(), names.get("values").unwrap()));
+        });
+        with_lookup_signature(&environment, "values", |value| {
+            visits.set(visits.get() + 1);
+            let signatures = environment.signatures.borrow();
+            assert!(std::ptr::eq(
+                value.unwrap(),
+                signatures.get("values").unwrap()
+            ));
+        });
+        with_lookup(&environment, "missing", |value| {
+            visits.set(visits.get() + 1);
+            assert!(value.is_none());
+        });
+        assert_eq!(visits.get(), 3);
+        assert!(environment.names.try_borrow_mut().is_ok());
+        assert!(environment.signatures.try_borrow_mut().is_ok());
+    }
+
+    #[test]
+    fn borrowed_lookups_observe_mutations_and_nearest_signatures() {
+        let parent = child_env(None);
+        parent
+            .names
+            .borrow_mut()
+            .insert("x".into(), Value::Int(1.into()));
+        parent
+            .signatures
+            .borrow_mut()
+            .insert("x".into(), Value::TypeVariable(1));
+        let child = child_env(Some(parent.clone()));
+        assert!(with_lookup(&child, "x", |value| equal(
+            value.unwrap(),
+            &Value::Int(1.into())
+        )));
+        child
+            .names
+            .borrow_mut()
+            .insert("x".into(), Value::Int(2.into()));
+        child
+            .signatures
+            .borrow_mut()
+            .insert("x".into(), Value::TypeVariable(2));
+        assert!(with_lookup(&child, "x", |value| equal(
+            value.unwrap(),
+            &Value::Int(2.into())
+        )));
+        assert!(with_lookup_signature(&child, "x", |value| matches!(
+            value,
+            Some(Value::TypeVariable(2))
+        )));
+        child.names.borrow_mut().clear();
+        child.signatures.borrow_mut().clear();
+        parent
+            .names
+            .borrow_mut()
+            .insert("x".into(), Value::Int(3.into()));
+        assert!(with_lookup(&child, "x", |value| equal(
+            value.unwrap(),
+            &Value::Int(3.into())
+        )));
+        assert!(with_lookup_signature(&child, "x", |value| matches!(
+            value,
+            Some(Value::TypeVariable(1))
+        )));
+        *child.parent.borrow_mut() = Some(child_env(None));
+        assert!(with_lookup(&child, "x", |value| value.is_none()));
+        assert!(with_lookup_signature(&child, "x", |value| value.is_none()));
+    }
+
+    #[test]
+    fn borrowed_lookup_keeps_open_observation_and_indexed_precedence() {
+        let environment = child_env(None);
+        let used = Rc::new(RefCell::new(BTreeSet::new()));
+        environment.opens.borrow_mut().extend([
+            OpenedValues::new(OrderedFields::from([("x".into(), Value::Int(1.into()))])),
+            OpenedValues::tracked(
+                OrderedFields::from([
+                    ("x".into(), Value::Int(2.into())),
+                    ("shadowed".into(), Value::Int(3.into())),
+                ]),
+                used.clone(),
+            ),
+        ]);
+        environment
+            .names
+            .borrow_mut()
+            .insert("shadowed".into(), Value::Int(4.into()));
+        index_environment_names(&environment);
+        assert!(used.borrow().is_empty());
+        assert!(with_lookup(&environment, "shadowed", |value| equal(
+            value.unwrap(),
+            &Value::Int(4.into())
+        )));
+        assert!(used.borrow().is_empty());
+        assert!(with_lookup(&environment, "missing", |value| value.is_none()));
+        assert!(with_lookup(&environment, "x", |value| equal(
+            value.unwrap(),
+            &Value::Int(2.into())
+        )));
+        assert_eq!(*used.borrow(), BTreeSet::from(["x".to_owned()]));
+        used.borrow_mut().clear();
+        assert!(lookup_unobserved(&environment, "x").is_some());
+        assert!(used.borrow().is_empty());
+        assert!(environment.opens.try_borrow_mut().is_ok());
+    }
+
+    #[test]
+    fn borrowed_recursive_lookup_retains_its_group_environment() {
+        let (environment, bindings) = recursive_env(None);
+        let closure = Value::Closure {
+            module: Rc::new("test".into()),
+            module_instances: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
+            parameter: PatternId(0),
+            body: ExpressionId(0),
+            environment: environment.clone(),
+            self_name: Some("f".into()),
+            imports: None,
+            signature: None,
+            reuse_assertion: None,
+            deferred: false,
+        };
+        assert!(bindings.insert("f".into(), closure).is_ok());
+        with_lookup(&environment, "f", |value| {
+            let Some(Value::Closure {
+                environment: found, ..
+            }) = value
+            else {
+                panic!("recursive binding must materialize its closure");
+            };
+            assert!(Rc::ptr_eq(found, &environment));
+        });
+        assert!(matches!(
+            lookup(&environment, "f"),
+            Some(Value::Closure { .. })
+        ));
+        let weak = Rc::downgrade(&environment);
+        drop(bindings);
+        drop(environment);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
     fn indexed_lookup_preserves_shadowing_open_precedence_and_usage() {
         let parent = child_env(None);
         parent
@@ -2116,7 +2314,7 @@ mod type_value_tests {
         let mut closure = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter: PatternId(0),
             body: ExpressionId(0),
             environment: child_env(None),
@@ -2149,7 +2347,7 @@ mod type_value_tests {
         let captured = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter: PatternId(0),
             body: ExpressionId(0),
             environment: environment.clone(),
@@ -2162,7 +2360,7 @@ mod type_value_tests {
         let member = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter: PatternId(1),
             body: ExpressionId(1),
             environment,

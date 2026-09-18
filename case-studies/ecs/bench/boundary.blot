@@ -1,4 +1,4 @@
 open import "blot:prelude"
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn count => count
 return run

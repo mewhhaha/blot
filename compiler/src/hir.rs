@@ -9484,23 +9484,70 @@ fn capture_field_index(name: &str) -> Option<usize> {
 }
 
 pub(crate) fn contains_runtime(value: &Value) -> bool {
+    // Most calls ask about a scalar or a first-class type. Do not initialize a
+    // traversal memo for the allocation-free leaf cases.
     match value {
         Value::Runtime(_) | Value::ClosureChoice { .. } => true,
-        Value::Region { store, start, end } => {
-            store.borrow()[*start..*end].iter().any(contains_runtime)
+        Value::Region { .. }
+        | Value::RegionType(_)
+        | Value::ScratchType(_)
+        | Value::ResourceType { .. }
+        | Value::Scratch { .. }
+        | Value::DeferredScratch { .. }
+        | Value::Shape(_)
+        | Value::Array(_)
+        | Value::Tag {
+            payload: Some(_), ..
         }
-        Value::RegionType(element)
-        | Value::ScratchType(element)
-        | Value::ResourceType {
-            payload: element, ..
-        } => contains_runtime(element),
-        Value::Scratch { values, .. } => values.iter().any(contains_runtime),
-        Value::DeferredScratch { capacity } => contains_runtime(capacity),
-        Value::Shape(fields) => fields.iter().any(|(_, value)| contains_runtime(value)),
-        Value::Array(elements) => elements.iter().any(contains_runtime),
-        Value::Tag { payload, .. } => payload.as_deref().is_some_and(contains_runtime),
-        Value::Sealed { inner, .. } | Value::Extended { inner, .. } => contains_runtime(inner),
+        | Value::Sealed { .. }
+        | Value::Extended { .. } => RuntimePresence::default().visit(value),
         _ => false,
+    }
+}
+
+#[derive(Default)]
+struct RuntimePresence {
+    // Inputs remain borrowed throughout this read-only synchronous traversal.
+    // Only shared record storage needs a memo; no result survives this query.
+    fields: Option<HashSet<*const ()>>,
+    #[cfg(test)]
+    visits: usize,
+}
+
+impl RuntimePresence {
+    fn visit(&mut self, value: &Value) -> bool {
+        #[cfg(test)]
+        {
+            self.visits += 1;
+        }
+        match value {
+            Value::Runtime(_) | Value::ClosureChoice { .. } => true,
+            Value::Region { store, start, end } => store.borrow()[*start..*end]
+                .iter()
+                .any(|value| self.visit(value)),
+            Value::RegionType(element)
+            | Value::ScratchType(element)
+            | Value::ResourceType {
+                payload: element, ..
+            } => self.visit(element),
+            Value::Scratch { values, .. } => values.iter().any(|value| self.visit(value)),
+            Value::DeferredScratch { capacity } => self.visit(capacity),
+            Value::Shape(fields) => {
+                if fields.has_shared_storage()
+                    && !self
+                        .fields
+                        .get_or_insert_with(HashSet::new)
+                        .insert(fields.storage_identity())
+                {
+                    return false;
+                }
+                fields.iter().any(|(_, value)| self.visit(value))
+            }
+            Value::Array(elements) => elements.iter().any(|value| self.visit(value)),
+            Value::Tag { payload, .. } => payload.as_deref().is_some_and(|value| self.visit(value)),
+            Value::Sealed { inner, .. } | Value::Extended { inner, .. } => self.visit(inner),
+            _ => false,
+        }
     }
 }
 
@@ -14414,6 +14461,109 @@ fn hir_error(message: &str) -> Diagnostic {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    #[test]
+    fn runtime_presence_visits_shared_records_not_expanded_paths() {
+        let mut value = Value::Unit;
+        for _ in 0..24 {
+            value = Value::Shape(OrderedFields::from([
+                ("left".into(), value.clone()),
+                ("right".into(), value),
+            ]));
+        }
+        let mut scan = RuntimePresence::default();
+        assert!(!scan.visit(&value));
+        assert!(scan.visits <= 49, "{} visits", scan.visits);
+        assert_eq!(scan.fields.as_ref().unwrap().len(), 23);
+    }
+
+    #[test]
+    fn runtime_presence_observes_mutable_storage_on_every_query() {
+        let store = Rc::new(RefCell::new(vec![Value::Unit]));
+        let fields = OrderedFields::from([(
+            "cell".into(),
+            Value::Region {
+                store: store.clone(),
+                start: 0,
+                end: 1,
+            },
+        )]);
+        let root = Value::Shape(OrderedFields::from([
+            ("left".into(), Value::Shape(fields.clone())),
+            ("right".into(), Value::Shape(fields)),
+        ]));
+        assert!(!contains_runtime(&root));
+        store.borrow_mut()[0] = Value::Runtime(RuntimeValue {
+            id: 7,
+            type_id: 3,
+            meaning: RuntimeMeaning::Plain,
+        });
+        assert!(contains_runtime(&root));
+        store.borrow_mut()[0] = Value::Unit;
+        assert!(!contains_runtime(&root));
+    }
+
+    #[test]
+    fn runtime_presence_retains_original_traversal_boundaries() {
+        let runtime = Value::Runtime(RuntimeValue {
+            id: 7,
+            type_id: 3,
+            meaning: RuntimeMeaning::Plain,
+        });
+        assert!(!contains_runtime(&Value::Union(
+            vec![runtime.clone()].into()
+        )));
+        assert!(!contains_runtime(&Value::Extended {
+            inner: Box::new(Value::Unit),
+            members: OrderedFields::from([("member".into(), runtime.clone())]),
+        }));
+        assert!(!contains_runtime(&Value::Arrow {
+            deferred: false,
+            domain: TypeValue::new(runtime.clone()),
+            codomain: TypeValue::new(Value::Unit),
+            effects: Vec::new(),
+            effect_tail: None,
+        }));
+        assert!(contains_runtime(&Value::RegionType(Box::new(
+            runtime.clone()
+        ))));
+        assert!(contains_runtime(&Value::ScratchType(Box::new(
+            runtime.clone()
+        ))));
+        assert!(contains_runtime(&Value::Tag {
+            name: "tag".into(),
+            payload: Some(Box::new(runtime))
+        }));
+    }
+
+    #[test]
+    fn runtime_presence_preserves_short_circuit_order_and_copy_on_write() {
+        let fields = OrderedFields::from([("plain".into(), Value::Unit)]);
+        let unchanged = Value::Shape(fields.clone());
+        let mut changed = fields;
+        changed.insert(
+            "plain".into(),
+            Value::Runtime(RuntimeValue {
+                id: 7,
+                type_id: 3,
+                meaning: RuntimeMeaning::Plain,
+            }),
+        );
+        assert!(!contains_runtime(&unchanged));
+        assert!(contains_runtime(&Value::Shape(changed.clone())));
+        changed.insert(
+            "unreachable".into(),
+            Value::Region {
+                store: Rc::new(RefCell::new(Vec::new())),
+                start: 1,
+                end: 2,
+            },
+        );
+        // Reading the second field would panic. The earlier runtime leaf must
+        // still end the query before that field is examined.
+        assert!(contains_runtime(&Value::Shape(changed)));
+    }
+
     use super::*;
 
     fn capture_test_value(id: usize, meaning: RuntimeMeaning) -> Value {
@@ -14681,7 +14831,7 @@ mod tests {
         let closure = Value::Closure {
             module: Rc::new(path.to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter,
             body,
             environment: environment.clone(),
@@ -14817,7 +14967,7 @@ mod tests {
             .insert("captured".to_owned(), Value::Unit);
         let signature = test_residual_signature(Value::Unit, true);
         let instances = Rc::new(Vec::new());
-        let effects = Rc::new(Vec::new());
+        let effects = Rc::new(crate::eval::EffectScope::default());
         // A known negative decision must not demand captures merely to discard
         // the resulting evidence. Any environment lookup would panic here.
         let _unread_captures = environment.names.borrow_mut();

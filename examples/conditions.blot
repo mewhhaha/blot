@@ -18,7 +18,7 @@
 
 open import "blot:prelude"
 
-let name :: 1 | 2 | 3 -> Text
+let name: 1 | 2 | 3 -> Text
 let name = fn n => case n == 1 of
   #True => case n of
     1 => "one"
@@ -29,7 +29,7 @@ let name = fn n => case n == 1 of
 
 // The chain accumulates: the fallback knows that none of the earlier conditions
 // fired, so `n` is `3` there and one arm covers it.
-let ordinal :: 1 | 2 | 3 -> Text
+let ordinal: 1 | 2 | 3 -> Text
 let ordinal = fn n => case n == 1 of
   #True => "first"
   #False => case n == 2 of
@@ -41,13 +41,13 @@ let ordinal = fn n => case n == 1 of
 // comparison narrows an unbounded domain the same way it narrows a finite one:
 // `..9` and `10..` are the two halves `Int` splits into, and `size` could not
 // call either helper without the proof.
-let small :: range (@type.unbounded, 9) -> Text
+let small: range (@type.unbounded, 9) -> Text
 let small = fn n => "small"
 
-let large :: range (10, @type.unbounded) -> Text
+let large: range (10, @type.unbounded) -> Text
 let large = fn n => "large"
 
-let size :: Int -> Text
+let size: Int -> Text
 let size = fn n => do:
   if n < 10:
     return small n

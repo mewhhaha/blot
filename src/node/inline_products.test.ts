@@ -8,46 +8,46 @@ import { Compiler } from "../compiler.ts";
 
 const productSource = `open import "blot:prelude"
 
-let direct :: (Int, Int) -> Int
+let direct: (Int, Int) -> Int
 let direct = fn (left, right) => left - right
 
-let named :: (Int, Int) -> Int
+let named: (Int, Int) -> Int
 let named = fn pair => pair.0 - pair.1
 
-let rebound :: (Int, Int) -> Int
+let rebound: (Int, Int) -> Int
 let rebound = fn pair => do:
   let alias = pair
   let (left, right) = alias
   return left - right
 
-let nested :: (Int, Int) -> Int
+let nested: (Int, Int) -> Int
 let nested = fn (left, right) => do:
   let value = ((left, right), { .right = right; .left = left; })
   let (positional, fields) = value
   return positional.0 - fields.right
 
-let choice :: (Int, Int, Int) -> Int
+let choice: (Int, Int, Int) -> Int
 let choice = fn (selector, left, right) => do:
   let pair = case selector of
     0 => (left, right)
     _ => (right, left)
   return named pair
 
-let captured :: (Int, Int) -> Int
+let captured: (Int, Int) -> Int
 let captured = fn (left, right) => do:
   let pair = (left, right)
   let read = fn () => named pair
   return read ()
 
-let rec exchange :: (Int, Int, Int) -> (Int, Int)
+let rec exchange: (Int, Int, Int) -> (Int, Int)
 let rec exchange = fn (remaining, left, right) => case remaining of
   0 => (left, right)
   _ => exchange (remaining - 1, right, left)
 
-let returned :: (Int, Int, Int) -> Int
+let returned: (Int, Int, Int) -> Int
 let returned = fn arguments => named (exchange arguments)
 
-let mixed :: (F64, Int) -> Int
+let mixed: (F64, Int) -> Int
 let mixed = fn pair => do:
   let alias = pair
   return F64.truncate alias.0 + alias.1
@@ -171,7 +171,7 @@ for (
   test(`${argument} does not implicitly convert to ${parameterType}`, async () => {
     await withSource(
       `open import "blot:prelude"
-let consume :: ${parameterType} -> Int
+let consume: ${parameterType} -> Int
 let consume = fn value => 0
 return consume ${argument}
 `,

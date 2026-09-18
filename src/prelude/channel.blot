@@ -22,9 +22,9 @@ const ChannelRuntime = @effect.host {
   .close = Effect.suspends (@forall (fn message => Sender message -> Unit));
 }
 
-const bounded :: @forall (fn message => Scope -> Int -> Ends message ~ { ChannelRuntime })
+const bounded: @forall (fn message => Scope -> Int -> Ends message ~ { ChannelRuntime })
 const bounded = fn scope => fn capacity => ChannelRuntime.bounded (scope, capacity)
-const send :: @forall (fn message => Sender message -> message -> Bool ~ { ChannelRuntime })
+const send: @forall (fn message => Sender message -> message -> Bool ~ { ChannelRuntime })
 const send = fn sender => fn ?message => ChannelRuntime.send (sender, ?message)
 
 return {

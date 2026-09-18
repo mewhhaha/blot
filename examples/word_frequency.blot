@@ -3,7 +3,7 @@ open import "blot:prelude"
 const Frequencies = OrderedTextMap.of Int
 const FrequencyEntries = [OrderedTextMap.entry Int]
 
-let count_words :: Text -> Frequencies
+let count_words: Text -> Frequencies
 let count_words = fn text => do:
   let parts = Text.split (Text.trim text, " ")
   let words =
@@ -18,13 +18,12 @@ let count_words = fn text => do:
     )
   let length = Array.length (&sorted)
   if length == 0:
-    let entries :: FrequencyEntries
+    let entries: FrequencyEntries
     let entries = []
     return OrderedTextMap.copy entries
   else:
     let first = Array.expect_get ((&sorted), 0) <> ""
-    let rec collect_runs ::
-      (Int, Text, Int, FrequencyEntries) -> FrequencyEntries
+    let rec collect_runs: (Int, Text, Int, FrequencyEntries) -> FrequencyEntries
     let rec collect_runs = fn (index, word, count, entries) => do:
       if index >= length:
         return @array.push entries (word, count)
@@ -42,7 +41,7 @@ let count_words = fn text => do:
 
     return OrderedTextMap.copy (collect_runs (1, first, 1, []))
 
-let count :: (Frequencies, Text) -> Int
+let count: (Frequencies, Text) -> Int
 let count = fn (&frequencies, word) => case OrderedTextMap.get (
   (&frequencies),
   word

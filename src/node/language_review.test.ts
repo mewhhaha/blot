@@ -28,7 +28,7 @@ for (const precision of ["F64", "F32"]) {
     await withSource(
       `open import "blot:prelude"
 const Float = import "blot:float"
-let compare :: ${precision} -> ${precision} -> Float.PartialOrdering
+let compare: ${precision} -> ${precision} -> Float.PartialOrdering
 let compare = Float.${precision}.partial_cmp
 return compare
 `,
@@ -107,7 +107,7 @@ return case compare nan (${precision}.of_int 1) of
     await withSource(
       `open import "blot:prelude"
 const Float = import "blot:float"
-let less :: ${precision} -> ${precision} -> Int
+let less: ${precision} -> ${precision} -> Int
 let less = fn left => fn right => case is_less (Float.${precision}.cmp_exn left right) of
   #True => 1
   #False => 0
@@ -135,7 +135,7 @@ test("pipeline adapters preserve mapping, filtering, folding, and their input", 
     `open import "blot:prelude"
 open import "blot:pipeline"
 let original = [1, 2, 3, 4]
-let result :: Int
+let result: Int
 let result = original
   |> map_with (fn value => value + 1)
   |> filter_with (fn value => value > 3)
@@ -154,7 +154,7 @@ test("pipeline adapters remain generic over Text and handle an empty array", asy
     `open import "blot:prelude"
 open import "blot:pipeline"
 let words = ["a", "bb"] |> map_with (fn value => Text.length value)
-let empty :: [Int]
+let empty: [Int]
 let empty = []
 let total = empty |> map_with (fn value => value + 1)
   |> filter_with (fn value => value > 0)

@@ -14,7 +14,7 @@ const Console =
     .write = Text -> Unit;
   }
 
-let notify :: Text -> Unit
+let notify: Text -> Unit
 let notify = fn message => do:
   use result <- Console.write message
   return result

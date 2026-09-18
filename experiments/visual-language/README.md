@@ -79,7 +79,7 @@ removed from transfers of already-bound resources.
 Keep written binding signatures separate from their definitions:
 
 ```blot
-const score :: Int -> Int
+const score: Int -> Int
 const score = fn quantity => formula.score quantity
 ```
 
@@ -111,7 +111,7 @@ Effect rows can already be named as ordinary compile-time values:
 ```blot
 const Clock = @effect.host { .now = Unit -> Int; }
 const Reads = { Clock }
-let read :: Unit -> Int ~ Reads
+let read: Unit -> Int ~ Reads
 let read = fn () => Clock.now ()
 ```
 
@@ -139,10 +139,10 @@ beside the code.
 Implemented:
 
 ```blot
-const double = fn (a :: Int) -> Int => do:
+const double = fn (a: Int) -> Int => do:
   return a + a
 
-const add = fn (left :: Int, right :: Int) -> Int => do:
+const add = fn (left: Int, right: Int) -> Int => do:
   return left + right
 ```
 

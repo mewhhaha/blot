@@ -93,7 +93,7 @@ return T.over (T.each, ["a"], fn value => value <> "!")
           path,
           `open import "blot:prelude"
 const T = import "./lib/traversal.blot"
-const texts :: T.Traversal ([Text], Text)
+const texts: T.Traversal ([Text], Text)
 const texts = T.each
 return T.over (texts, ["a"], fn _ => 1)
 `,
@@ -114,12 +114,12 @@ test("a shared nested-array record supports a reconstructing traversal setter", 
       `open import "blot:prelude"
 const T = import "./lib/traversal.blot"
 const Config = { .items = [[Int]]; .revision = Int; }
-const items :: T.Traversal (Config, [[Int]])
+const items: T.Traversal (Config, [[Int]])
 const items = T.one (
   fn config => config.items,
   fn (config, values) => { ...config; .items = values; }
 )
-let initial :: Config
+let initial: Config
 let initial = { .items = freeze [[1, 2], [3]]; .revision = 7; }
 return T.over (items, initial, fn _ => [[9]])
 `,

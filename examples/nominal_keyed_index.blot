@@ -27,7 +27,7 @@ const User = { .name = Text; .email = Text; }
 const Project = { .slug = Text; .budget = Int; }
 const Membership = { .user = UserId; .project = ProjectId; }
 
-const users :: Store.Index (UserId, User)
+const users: Store.Index (UserId, User)
 const users =
   Store.from_entries (
     UserId.equal,
@@ -37,7 +37,7 @@ const users =
     ]
   )
 
-const projects :: Store.Index (ProjectId, Project)
+const projects: Store.Index (ProjectId, Project)
 const projects =
   Store.from_entries (
     ProjectId.equal,
@@ -47,12 +47,12 @@ const projects =
     ]
   )
 
-const user_names :: Store.Index (UserId, Text)
+const user_names: Store.Index (UserId, Text)
 const user_names = Store.map_values (users, fn user => user.name)
-const project_slugs :: Store.Index (ProjectId, Text)
+const project_slugs: Store.Index (ProjectId, Text)
 const project_slugs = Store.map_values (projects, fn project => project.slug)
 
-const membership :: Membership
+const membership: Membership
 const membership = { .user = UserId.of 1; .project = ProjectId.of 7; }
 
 let selected_user = Store.lookup (user_names, membership.user)

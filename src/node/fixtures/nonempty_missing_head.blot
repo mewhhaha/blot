@@ -1,6 +1,6 @@
 open import "blot:prelude"
 const NonEmpty = import "../../../examples/lib/nonempty.blot"
 
-let invalid :: NonEmpty.of Int
+let invalid: NonEmpty.of Int
 let invalid = { .tail = [1, 2, 3]; }
 return invalid

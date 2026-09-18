@@ -45,7 +45,7 @@ for (const placement of ["local", "import", "capsule"] as const) {
         const path = join(directory, "main.blot");
         await writeFile(
           path,
-          `${prelude}${declaration}let run :: Int -> Int
+          `${prelude}${declaration}let run: Int -> Int
 let run = fn index => do:
   let values = [10, 20]
   if fits (index, @array.len values):
@@ -138,7 +138,7 @@ for (const fixture of unsafe) {
       await writeFile(
         path,
         `${prelude}${fixture.declaration}
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn index => do:
   let values = [10, 20]
   if ${fixture.condition}:

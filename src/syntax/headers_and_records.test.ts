@@ -3,25 +3,25 @@ import { parse } from "./parse.ts";
 import { formatSource } from "../tooling/formatter.ts";
 
 const sources = [
-  `const left = fn (a :: Int, b) => a
-const right = fn (a, b :: Int) => b
+  `const left = fn (a: Int, b) => a
+const right = fn (a, b: Int) => b
 const result = fn (a, b) -> Int => a
-const mixed = fn (a, b :: Int) -> Int => b
+const mixed = fn (a, b: Int) -> Int => b
 const scalar = fn a -> Int => a
 return { .left; .right; .result; .mixed; .scalar; }
 `,
-  `const add = fn (a :: Int, b :: Int) -> Int => do:
+  `const add = fn (a: Int, b: Int) -> Int => do:
   return a + b
 return { .add; }
 `,
-  `const rec count = fn (n :: Int) -> Int => do:
+  `const rec count = fn (n: Int) -> Int => do:
   if n == 0:
     return 42
   else:
     return count (n - 1)
 return count
 `,
-  `const expose = fn (!value :: Int) -> Int => value
+  `const expose = fn (!value: Int) -> Int => value
 return expose
 `,
   `return {
@@ -29,7 +29,7 @@ return expose
   .nested = {
     .value = 2
   }
-  .read = fn (x :: Int) -> Int => do:
+  .read = fn (x: Int) -> Int => do:
     let y = x + 1
     return y
   .last = object
@@ -91,5 +91,5 @@ Deno.test("typed headers elaborate to signatures and ordinary unary lambdas", as
 });
 
 Deno.test("pattern annotations outside function headers are diagnosed", async () => {
-  assertEquals((await parse("let (x :: Int) = 1\nreturn x\n")).ok, false);
+  assertEquals((await parse("let (x: Int) = 1\nreturn x\n")).ok, false);
 });

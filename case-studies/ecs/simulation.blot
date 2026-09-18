@@ -39,13 +39,13 @@ const resolve = fn (row, work) => @handle (
   C.Position.supply row.Position
 )
 
-const integrate :: Entity -> Entity
+const integrate: Entity -> Entity
 const integrate = fn row => C.Position.replace (row, resolve (row, next_position))
 
-const bounce :: Entity -> Entity
+const bounce: Entity -> Entity
 const bounce = fn row => C.Velocity.replace (row, resolve (row, next_velocity))
 
-const age :: Entity -> Entity
+const age: Entity -> Entity
 const age = fn row => C.Age.replace (row, row.Age + 1)
 
 const physics = Schedule.merge (integrate, bounce)
@@ -54,19 +54,19 @@ const tick = Schedule.merge (physics, bookkeeping)
 const reassociated = Schedule.merge (integrate, Schedule.merge (bounce, age))
 const reversed = Schedule.merge (bounce, Schedule.merge (integrate, age))
 
-const fused :: [Entity] -> [Entity]
+const fused: [Entity] -> [Entity]
 const fused = Schedule.each tick
-const regrouped :: [Entity] -> [Entity]
+const regrouped: [Entity] -> [Entity]
 const regrouped = Schedule.each reassociated
-const wrong_order :: [Entity] -> [Entity]
+const wrong_order: [Entity] -> [Entity]
 const wrong_order = Schedule.each reversed
-const separate :: [Entity] -> [Entity]
+const separate: [Entity] -> [Entity]
 const separate = fn rows => Schedule.each age (
   Schedule.each bounce (Schedule.each integrate rows)
 )
 
 // A direct counterpart makes the comparison about composition and traversal.
-const direct :: [Entity] -> [Entity]
+const direct: [Entity] -> [Entity]
 const direct = fn rows => map (rows, fn row => do:
   let position = {
     .x = row.Position.x + row.Velocity.x;
@@ -83,7 +83,7 @@ const direct = fn rows => map (rows, fn row => do:
   }
 )
 
-const seed :: (Int, Int) -> [Entity]
+const seed: (Int, Int) -> [Entity]
 const seed = fn (count, offset) => Iter.collect (Iter.map (
   Iter.range (0, count),
   fn index => {
@@ -94,7 +94,7 @@ const seed = fn (count, offset) => Iter.collect (Iter.map (
   }
 ))
 
-const checksum :: [Entity] -> Int
+const checksum: [Entity] -> Int
 const checksum = fn rows => fold (rows, 0, fn (total, row) => do:
   return total + row.Position.x * 3 + row.Position.y * 5 + row.Velocity.x * 7 + row.Velocity.y * 11 + row.Age
 )

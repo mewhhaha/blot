@@ -2,7 +2,7 @@ open import "blot:prelude"
 
 const Matrix = import "../../../examples/lib/semiring_matrix.blot"
 
-const invalid :: Matrix.Semiring Int
+const invalid: Matrix.Semiring Int
 const invalid =
   {
     .zero = 0;

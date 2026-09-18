@@ -21,7 +21,7 @@ const Purchase =
     .cost = Int;
   }
 
-let products :: [Product]
+let products: [Product]
 let products =
   [
     {
@@ -54,10 +54,10 @@ let products =
     }
   ]
 
-let needs_restock :: Product -> Bool
+let needs_restock: Product -> Bool
 let needs_restock = fn product => product.stock < product.reorder_at
 
-let purchase :: Product -> Purchase
+let purchase: Product -> Purchase
 let purchase = fn product => do:
   let quantity = product.target_stock - product.stock
   return {

@@ -4,7 +4,7 @@
 
 open import "blot:prelude"
 
-let ratio :: F64
+let ratio: F64
 let ratio = F64.div 22.0 7.0
 
 return ratio

@@ -26,7 +26,7 @@ const double = fn () => do:
   use State.set { .Position = row.Position * 2; .Velocity = row.Velocity; }
   return ()
 const movement = merge (move, double)
-let apply :: Int -> [Row]
+let apply: Int -> [Row]
 let apply = fn position => map (
   [
     { .Position = position; .Velocity = 3; },

@@ -38,14 +38,14 @@ const Transforms = fn Algebra => do:
       Planning.group ["age"]
     )
   const plan = Planning.compile (Entity, registry, graph)
-  let tick :: [Entity] -> [Entity]
+  let tick: [Entity] -> [Entity]
   let tick = plan.each
   return { .Entity; .plan; .tick; }
 
 const Scalar = Transforms Mat4.Scalar
 const Simd = Transforms Mat4.Simd
 
-const pack :: Scalar.Entity -> Simd.Entity
+const pack: Scalar.Entity -> Simd.Entity
 const pack = fn row => {
   ...row;
   .Parent = Mat4.pack row.Parent;
@@ -54,7 +54,7 @@ const pack = fn row => {
   .Point = Mat4.pack_vector row.Point;
   .Projected = Mat4.pack_vector row.Projected;
 }
-const unpack :: Simd.Entity -> Scalar.Entity
+const unpack: Simd.Entity -> Scalar.Entity
 const unpack = fn row => {
   ...row;
   .Parent = Mat4.unpack row.Parent;
@@ -63,10 +63,10 @@ const unpack = fn row => {
   .Point = Mat4.unpack_vector row.Point;
   .Projected = Mat4.unpack_vector row.Projected;
 }
-const tick :: [Scalar.Entity] -> [Scalar.Entity]
+const tick: [Scalar.Entity] -> [Scalar.Entity]
 const tick = fn rows => map (Simd.tick (map (rows, pack)), unpack)
 
-const seed :: Int -> [Scalar.Entity]
+const seed: Int -> [Scalar.Entity]
 const seed =
   fn count => Iter.collect (Iter.map (
     Iter.range (0, count),

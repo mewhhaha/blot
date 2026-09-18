@@ -177,7 +177,7 @@ Deno.test("language diagnostics report compiler target preflight refusals", asyn
   const path = join(directory, "target-refusal.blot");
   const source = `open import "blot:prelude"
 
-let vector :: F32 -> F32x4
+let vector: F32 -> F32x4
 let vector = fn value => F32x4.splat value
 return vector
 `;
@@ -251,9 +251,9 @@ Deno.test("inference-centered editor features share one resident revision", asyn
   const service = new LanguageService();
   const uri = "untitled:inference-features.blot";
   const source = `open import "blot:prelude"
-let add :: Int -> Int -> Int
+let add: Int -> Int -> Int
 let add = fn left => fn right => left
-let answer :: _
+let answer: _
 let answer = add 20 22
 return answer
 `;
@@ -281,7 +281,7 @@ return answer
 
     const hints = await service.inlayHints(uri);
     assertEquals(hints, [{
-      position: { line: 3, character: 15 },
+      position: { line: 3, character: 13 },
       label: ": Int",
       kind: 1,
       tooltip: "Compiler-inferred signature hole",
@@ -314,7 +314,7 @@ Deno.test("an unsigned value offers a matching signature-hole action", async () 
   const service = new LanguageService();
   const uri = "untitled:add-signature.blot";
   const source = `let unsigned = 42
-let signed :: _
+let signed: _
 let signed = unsigned
 return signed
 `;
@@ -332,7 +332,7 @@ return signed
         start: { line: 0, character: 0 },
         end: { line: 0, character: 0 },
       },
-      newText: "let unsigned :: _\n",
+      newText: "let unsigned: _\n",
     }]);
 
     const signedActions = await service.codeActions(uri, {
@@ -354,19 +354,19 @@ Deno.test("each signature hole receives its inferred type", async () => {
   const service = new LanguageService();
   const uri = "untitled:signature-hole-hints.blot";
   const source = `open import "blot:prelude"
-let increment :: _ -> _
+let increment: _ -> _
 let increment = fn value => Int.add value 1
 return increment
 `;
   try {
     service.open(uri, source, 1);
     assertEquals(await service.inlayHints(uri), [{
-      position: { line: 1, character: 18 },
+      position: { line: 1, character: 16 },
       label: ": Int",
       kind: 1,
       tooltip: "Compiler-inferred signature hole",
     }, {
-      position: { line: 1, character: 23 },
+      position: { line: 1, character: 21 },
       label: ": Int",
       kind: 1,
       tooltip: "Compiler-inferred signature hole",
@@ -379,9 +379,9 @@ return increment
 Deno.test("long inlay hints have a bounded preview and the complete type in their tooltip", async () => {
   const service = new LanguageService();
   const uri = "untitled:long-inlay-hint.blot";
-  const source = `let record :: _
+  const source = `let record: _
 let record = { .first_field = 1; .second_field = 2; .third_field = 3; .last_field = 4; }
-let short :: _
+let short: _
 let short = 42
 return (record, short)
 `;
@@ -414,8 +414,7 @@ Deno.test("inlay hint truncation respects Unicode and its exact length boundary"
     for (const length of [55, 56, 57]) {
       const value = "🙂".repeat(length);
       const type = JSON.stringify(value);
-      const source =
-        `let caption :: _\nlet caption = ${type}\nreturn caption\n`;
+      const source = `let caption: _\nlet caption = ${type}\nreturn caption\n`;
       service.open(uri, source, length);
       const [hint] = await service.inlayHints(uri);
       assert(hint !== undefined);
@@ -451,7 +450,7 @@ return identity
     );
     assertEquals(
       action?.edit.documentChanges[0].edits[0]?.newText,
-      "let rec identity :: _\n",
+      "let rec identity: _\n",
     );
   } finally {
     await service.destroy();
@@ -461,7 +460,7 @@ return identity
 Deno.test("a signature kind is corrected to match its binding", async () => {
   const service = new LanguageService();
   const uri = "untitled:correct-signature-kind.blot";
-  const source = `const answer :: _
+  const source = `const answer: _
 let answer = 42
 return answer
 `;
@@ -477,9 +476,9 @@ return answer
     assertEquals(correction?.edit.documentChanges[0].edits, [{
       range: {
         start: { line: 0, character: 0 },
-        end: { line: 0, character: 13 },
+        end: { line: 0, character: source.indexOf(":") },
       },
-      newText: "let answer ",
+      newText: "let answer",
     }]);
     assertEquals(
       actions.some((candidate) =>
@@ -495,7 +494,7 @@ return answer
 Deno.test("a signature recursion marker is corrected to match its binding", async () => {
   const service = new LanguageService();
   const uri = "untitled:correct-signature-recursion.blot";
-  const source = `let rec identity :: _
+  const source = `let rec identity: _
 let identity = fn value => value
 return identity
 `;
@@ -511,9 +510,9 @@ return identity
     assertEquals(correction?.edit.documentChanges[0].edits[0], {
       range: {
         start: { line: 0, character: 0 },
-        end: { line: 0, character: 17 },
+        end: { line: 0, character: source.indexOf(":") },
       },
-      newText: "let identity ",
+      newText: "let identity",
     });
   } finally {
     await service.destroy();
@@ -523,7 +522,7 @@ return identity
 Deno.test("a signature name is corrected to match its binding", async () => {
   const service = new LanguageService();
   const uri = "untitled:correct-signature-name.blot";
-  const source = `let result :: _
+  const source = `let result: _
 let answer = 42
 return answer
 `;
@@ -539,9 +538,9 @@ return answer
     assertEquals(correction?.edit.documentChanges[0].edits[0], {
       range: {
         start: { line: 0, character: 0 },
-        end: { line: 0, character: 11 },
+        end: { line: 0, character: source.indexOf(":") },
       },
-      newText: "let answer ",
+      newText: "let answer",
     });
   } finally {
     await service.destroy();
@@ -840,7 +839,7 @@ Deno.test("type definition follows the explicit signature type value", async () 
   const service = new LanguageService();
   const uri = "untitled:type-definition.blot";
   const source = `const Point = { .x = Number; }
-let point :: Point
+let point: Point
 let point = { .x = 42; }
 return point
 `;
@@ -874,7 +873,7 @@ Deno.test("type definition follows a qualified type value across an import", asy
 return { .Point = Point; }
 `;
   const mainSource = `const Types = import "./types.blot"
-let point :: Types.Point
+let point: Types.Point
 let point = { .x = 42; }
 return point
 `;
@@ -907,7 +906,7 @@ Deno.test("value hover shows its inferred signature, compact definition, and doc
   const source = `open import "blot:prelude"
 
 /// Adds two integers without changing either input.
-let add :: Int -> Int -> Int
+let add: Int -> Int -> Int
 let add = fn left => fn right => left + right
 let answer = add 20 22
 return answer
@@ -923,7 +922,7 @@ return answer
     service.open(uri, source, 1);
     const hover = await service.hover(uri, { line: 5, character: 14 });
     assert(hover !== null);
-    assertStringIncludes(hover.contents.value, "let add :: Int -> Int -> Int");
+    assertStringIncludes(hover.contents.value, "let add: Int -> Int -> Int");
     assertStringIncludes(
       hover.contents.value,
       "let add = fn left => fn right => body",
@@ -934,7 +933,7 @@ return answer
     );
     const parameter = await service.hover(uri, { line: 4, character: 14 });
     assert(parameter !== null);
-    assertStringIncludes(parameter.contents.value, "let left :: Int");
+    assertStringIncludes(parameter.contents.value, "let left: Int");
   } finally {
     await service.destroy();
   }
@@ -972,7 +971,7 @@ return count
     assert(field !== null);
     assertStringIncludes(
       field.contents.value,
-      "let Array.length :: forall 'q0. ['q0] -> Int",
+      "let Array.length: forall 'q0. ['q0] -> Int",
     );
     const imported = await service.hover(uri, { line: 0, character: 7 });
     assert(imported !== null);
@@ -1040,13 +1039,13 @@ return (reflected, point)
       character: 4,
     });
     assert(shapeMember !== null);
-    assertStringIncludes(shapeMember.contents.value, "let hello :: 42");
+    assertStringIncludes(shapeMember.contents.value, "let hello: 42");
     assertStringIncludes(
       shapeMember.contents.value,
       ".hello = Point.fields",
     );
     assertEquals(
-      shapeMember.contents.value.includes("let Point.fields ::"),
+      shapeMember.contents.value.includes("let Point.fields:"),
       false,
     );
 
@@ -1056,7 +1055,7 @@ return (reflected, point)
     });
     assert(attachedMember !== null);
     assertEquals(
-      attachedMember.contents.value.includes("let Point.new ::"),
+      attachedMember.contents.value.includes("let Point.new:"),
       false,
     );
     assertStringIncludes(
@@ -1093,21 +1092,21 @@ Deno.test("idiom and array-cost rewrites preserve the checked interface", async 
   const service = new LanguageService();
   const uri = "untitled:idiom-rewrites.blot";
   const source = `open import "blot:prelude"
-let identity :: Bool -> Bool
+let identity: Bool -> Bool
 let identity = fn flag => do:
   if flag:
     return #True
   else:
     return #False
-let same :: Bool -> Int
+let same: Bool -> Int
 let same = fn flag => do:
   if flag:
     return 1
   else:
     return 1
-let pushed :: [Int]
+let pushed: [Int]
 let pushed = Array.append [1] [2]
-let unchanged :: [Int]
+let unchanged: [Int]
 let unchanged = Array.append [1] []
 return (identity #True, same #True, pushed, unchanged)
 `;
@@ -1133,11 +1132,11 @@ Deno.test("control-flow flattening actions preserve the checked interface", asyn
   const service = new LanguageService();
   const uri = "untitled:control-flow-lints.blot";
   const source = `open import "blot:prelude"
-let increment :: Int -> Int
+let increment: Int -> Int
 let increment = fn value => do:
   // Increment at the boundary.
   return value + 1 // The returned value stays documented.
-let label :: Int -> Text
+let label: Int -> Text
 let label = fn value => do:
   if value == 0:
     // Zero has its own label.
@@ -1443,7 +1442,7 @@ Deno.test("a terminal Option match offers a compiler-checked guard action", asyn
   const directory = await Deno.makeTempDir();
   const path = join(directory, "option-guard.blot");
   const source = `open import "blot:prelude"
-let unwrap :: Option Unit -> Unit
+let unwrap: Option Unit -> Unit
 let unwrap = fn option => do:
   return case option of
     #None => do:

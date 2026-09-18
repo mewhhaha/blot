@@ -5,9 +5,9 @@ const Probe = { .label = Text; }
 const Wave = [Probe]
 const Plan = [Wave]
 
-const waves :: T.Traversal (Plan, Wave)
+const waves: T.Traversal (Plan, Wave)
 const waves = T.each
-const probe_label :: T.Traversal (Probe, Text)
+const probe_label: T.Traversal (Probe, Text)
 const probe_label =
   T.one (
     fn probe => probe.label,

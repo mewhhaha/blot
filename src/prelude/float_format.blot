@@ -4,11 +4,11 @@ open import "blot:prelude"
 
 const limb_base = 1000000000
 const limb =
-  fn (&limbs :: [Int], index :: Int) -> Int => case Array.get (limbs, index) of
+  fn (&limbs: [Int], index: Int) -> Int => case Array.get (limbs, index) of
     #None => 0
     #Some value => value
 
-const natural = fn (value :: Int) -> [Int] => do:
+const natural = fn (value: Int) -> [Int] => do:
   if value == 0:
     return []
 
@@ -17,9 +17,9 @@ const natural = fn (value :: Int) -> [Int] => do:
 
   return [value % limb_base, value / limb_base]
 
-const multiply = fn (&limbs :: [Int], factor :: Int) -> [Int] => do:
+const multiply = fn (&limbs: [Int], factor: Int) -> [Int] => do:
   let width = Array.length limbs
-  let rec visit :: (Int, [Int], Int) -> [Int]
+  let rec visit: (Int, [Int], Int) -> [Int]
   let rec visit = fn (index, ?output, carry) => do:
     if index == width:
       if carry > 0:
@@ -36,21 +36,21 @@ const multiply = fn (&limbs :: [Int], factor :: Int) -> [Int] => do:
 
   return @linear.freeze (visit (0, [], 0))
 
-const power_two = fn (exponent :: Int) -> Int => do:
+const power_two = fn (exponent: Int) -> Int => do:
   let value = 1
   for _ in Iter.range (0, exponent):
     value := value * 2
 
   return value
 
-const scale_two = fn (&limbs :: [Int], exponent :: Int) -> [Int] => do:
+const scale_two = fn (&limbs: [Int], exponent: Int) -> [Int] => do:
   let scaled = Array.copy (&limbs)
   for _ in Iter.range (0, exponent / 29):
     scaled := multiply (scaled, 536870912)
 
   return multiply (scaled, power_two (exponent % 29))
 
-const compare = fn (&left :: [Int], &right :: [Int]) -> Int => do:
+const compare = fn (&left: [Int], &right: [Int]) -> Int => do:
   let width = Array.length left
   let other_width = Array.length right
   if width < other_width:
@@ -71,9 +71,9 @@ const compare = fn (&left :: [Int], &right :: [Int]) -> Int => do:
 
   return 0
 
-const add = fn (&left :: [Int], &right :: [Int]) -> [Int] => do:
+const add = fn (&left: [Int], &right: [Int]) -> [Int] => do:
   let width = Int.max (Array.length left) (Array.length right)
-  let rec visit :: (Int, [Int], Int) -> [Int]
+  let rec visit: (Int, [Int], Int) -> [Int]
   let rec visit = fn (index, ?output, carry) => do:
     if index == width:
       if carry > 0:
@@ -87,9 +87,9 @@ const add = fn (&left :: [Int], &right :: [Int]) -> [Int] => do:
 
   return @linear.freeze (visit (0, [], 0))
 
-const subtract = fn (&left :: [Int], &right :: [Int]) -> [Int] => do:
+const subtract = fn (&left: [Int], &right: [Int]) -> [Int] => do:
   let width = Array.length left
-  let rec visit :: (Int, [Int], Int, Int) -> ([Int], Int)
+  let rec visit: (Int, [Int], Int, Int) -> ([Int], Int)
   let rec visit = fn (index, ?output, borrow, used) => do:
     if index == width:
       if borrow != 0:
@@ -111,7 +111,7 @@ const subtract = fn (&left :: [Int], &right :: [Int]) -> [Int] => do:
 
   let (built, used) = visit (0, [], 0, 0)
   let complete = @linear.freeze built
-  let rec trim :: (Int, [Int]) -> [Int]
+  let rec trim: (Int, [Int]) -> [Int]
   let rec trim = fn (index, ?output) => do:
     if index == used:
       return @linear.own output
@@ -136,7 +136,7 @@ const scales =
     (2.0, 1)
   ]
 
-const decompose :: (Int, Int) -> F64 -> (Int, Int, Bool)
+const decompose: (Int, Int) -> F64 -> (Int, Int, Bool)
 const decompose = fn (fraction_bits, minimum_exponent) => fn magnitude => do:
   let normalized = magnitude
   let exponent = 0
@@ -172,18 +172,18 @@ const decompose = fn (fraction_bits, minimum_exponent) => fn magnitude => do:
 // powers of two and inclusive boundaries for an even binary significand.
 const shortest =
   fn (
-    significand :: Int,
-    binary_exponent :: Int,
-    asymmetric :: Bool
+    significand: Int,
+    binary_exponent: Int,
+    asymmetric: Bool
   ) -> (Int, Int) => do:
     let remainder = natural (4 * significand)
-    let denominator :: [Int]
+    let denominator: [Int]
     let denominator = [1]
-    let lower :: [Int]
+    let lower: [Int]
     let lower = case asymmetric of
       #True => [1]
       #False => [2]
-    let upper :: [Int]
+    let upper: [Int]
     let upper = [2]
     if binary_exponent >= 0:
       remainder := scale_two (remainder, binary_exponent)
@@ -271,14 +271,14 @@ const shortest =
 
     return (digits, exponent)
 
-const zeroes = fn (count :: Int) -> Text => do:
+const zeroes = fn (count: Int) -> Text => do:
   let text = ""
   for _ in Iter.range (0, count):
     text := text <> "0"
 
   return text
 
-const decimal = fn (digits :: Int, exponent :: Int) -> Text => do:
+const decimal = fn (digits: Int, exponent: Int) -> Text => do:
   let text = Text.of_int digits
   let width = @text.byte_len text
   if exponent >= -6 && exponent < 21:
@@ -301,7 +301,7 @@ const decimal = fn (digits :: Int, exponent :: Int) -> Text => do:
     #False => ""
   return first <> tail <> "e" <> sign <> Text.of_int exponent
 
-const display :: (Int, Int) -> F64 -> Text
+const display: (Int, Int) -> F64 -> Text
 const display = fn (fraction_bits, minimum_exponent) => fn value => do:
   if F64.is_nan value:
     return "nan"
@@ -327,9 +327,9 @@ const display = fn (fraction_bits, minimum_exponent) => fn value => do:
   let (digits, decimal_exponent) = shortest (significand, exponent, asymmetric)
   return sign <> decimal (digits, decimal_exponent)
 
-const binary64 :: F64 -> Text
+const binary64: F64 -> Text
 const binary64 = display (52, -1022)
-const single_precision :: F64 -> Text
+const single_precision: F64 -> Text
 const single_precision = display (23, -126)
-const binary32 = fn (value :: F32) -> Text => single_precision (F32.widen value)
+const binary32 = fn (value: F32) -> Text => single_precision (F32.widen value)
 return { .binary64; .binary32; }

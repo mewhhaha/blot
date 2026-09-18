@@ -7,7 +7,7 @@ const Yield = fn T => @effect { .emit = T -> Unit; }
 const Positive = refine (Int, fn value => value > 0)
 const Numbers = Yield Positive
 
-let produce :: Unit -> Positive ~ { Numbers }
+let produce: Unit -> Positive ~ { Numbers }
 let produce = fn () => do:
   use Numbers.emit 10
   use Numbers.emit 20
@@ -34,7 +34,7 @@ const first =
   }
 
 // No emission is the singleton case, rather than the empty case.
-let singleton :: Unit -> Positive ~ { Numbers }
+let singleton: Unit -> Positive ~ { Numbers }
 let singleton = fn () => 7
 
 return {

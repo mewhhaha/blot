@@ -66,7 +66,7 @@ for (const reverse of [false, true]) {
     await agrees(
       `const make = fn name => fn value => @shape.get value name
 ${getters}
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn number => do:
   let pair = { .left = number; .right = 7; }
   return ${result}`,
@@ -80,7 +80,7 @@ test("static evidence survives captured records", async () => {
     `const make = fn config => fn value => @shape.get value config.name
 const left = make { .name = "left"; }
 const right = make { .name = "right"; }
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn number => do:
   let pair = { .left = number; .right = 7; }
   return left pair + right pair`,
@@ -94,7 +94,7 @@ test("static evidence includes transitive closure captures", async () => {
 const wrap = fn getter => fn value => getter value
 const left = wrap (make "left")
 const right = wrap (make "right")
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn number => do:
   let pair = { .left = number; .right = 7; }
   return left pair + right pair`,
@@ -105,7 +105,7 @@ let run = fn number => do:
 test("static and dynamic captures are independently accounted for", async () => {
   await agrees(
     `const make = fn name => fn bias => fn value => @int.add (@shape.get value name) bias
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn number => do:
   let left = make "left" number
   let right = make "right" (number + 1)
@@ -118,7 +118,7 @@ let run = fn number => do:
 test("same-typed runtime capture permutations retain their meaning", async () => {
   await agrees(
     `const make = fn left => fn right => fn ignored => @int.sub left right
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn number => do:
   let next = number + 1
   let forward = make number next
@@ -131,7 +131,7 @@ let run = fn number => do:
 test("recursive specializations retain distinct static environments", async () => {
   await agrees(
     `const make = fn offset => do:
-  let rec count :: Int -> Int
+  let rec count: Int -> Int
   let rec count = fn n => do:
     if n <= 0:
       return offset
@@ -139,7 +139,7 @@ test("recursive specializations retain distinct static environments", async () =
   return count
 const left = make 10
 const right = make 100
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn number => left number + right number`,
     [[0n, 110n], [3n, 116n], [10n, 130n]],
   );
@@ -149,7 +149,7 @@ test("repeated calls preserve corresponding runtime arguments", async () => {
   await agrees(
     `const make = fn name => fn value => @shape.get value name
 const left = make "left"
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn number => do:
   let first = { .left = number; .right = 7; }
   let second = { .left = number + 1; .right = 9; }

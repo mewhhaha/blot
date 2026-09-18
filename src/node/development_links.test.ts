@@ -28,9 +28,9 @@ test("suspending development links share caller scopes and drain independent cal
 const Spark = import "blot:spark"
 const Gate = @effect.host { .wait = Effect.suspends (Text -> Text); }
 const Finish = @effect.host { .record = Text -> Unit; }
-let work :: Spark.Scope -> Text -> [Text] ~ { Spark.Effect, Gate, Finish }
+let work: Spark.Scope -> Text -> [Text] ~ { Spark.Effect, Gate, Finish }
 let work = fn scope => fn label => do:
-  let ?cleanup :: Unit -> Unit ~ { Finish } = fn () => Finish.record label
+  let ?cleanup: Unit -> Unit ~ { Finish } = fn () => Finish.record label
   use () <- Spark.on_exit scope (?cleanup)
   use answer <- Gate.wait label
   return [answer, Text.of_int (Text.length label)]
@@ -42,9 +42,9 @@ return { .work = work; .Gate = Gate; .Finish = Finish; .Scheduling = Spark.Effec
     `open import "blot:prelude"
 const Spark = import "blot:spark"
 const provider = import "./provider.blot"
-let run :: Spark.Executor -> Text -> [Text] ~ { Spark.Effect, provider.Scheduling, provider.Gate, provider.Finish }
+let run: Spark.Executor -> Text -> [Text] ~ { Spark.Effect, provider.Scheduling, provider.Gate, provider.Finish }
 let run = fn executor => fn label => do:
-  let body :: Spark.Scope -> [Text] ~ { provider.Scheduling, provider.Gate, provider.Finish }
+  let body: Spark.Scope -> [Text] ~ { provider.Scheduling, provider.Gate, provider.Finish }
   let body = fn scope => provider.work scope label
   return Spark.scope executor body
 return { .run = run; }

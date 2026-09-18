@@ -224,7 +224,7 @@ test("graphs merge stable identities and sort dependencies into compatible batch
         `
 const P = import "./planning.blot"
 const s = import "./scheduling.blot"
-const report :: P.Report
+const report: P.Report
 const report = P.analyze (s.registry, ${graph})
 return { .default = report; }
 `,
@@ -319,15 +319,15 @@ const reflective = S.define ({ .reads = [C.Position]; .writes = [C.Position]; },
   #True => "Age"
   #False => "Position"
 ); })
-const reset_row :: Entity -> Entity
+const reset_row: Entity -> Entity
 const reset_row = reset.step
-const unchanged :: Entity -> Entity
+const unchanged: Entity -> Entity
 const unchanged = noop.step
-const swap_row :: Entity -> Entity
+const swap_row: Entity -> Entity
 const swap_row = swap.step
-const increment :: Entity -> Entity
+const increment: Entity -> Entity
 const increment = duplicate.step
-const reflect_row :: Entity -> Entity
+const reflect_row: Entity -> Entity
 const reflect_row = reflective.step
 return { .reset = reset_row; .unchanged; .swap = swap_row; .increment; .reflect = reflect_row; .reads = duplicate.reads; .writes = duplicate.writes; }
 `,

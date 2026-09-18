@@ -14,16 +14,16 @@ const space = fn frame => do:
   const P = Point frame
   const V = Vector frame
 
-  let point :: (Int, Int) -> P
+  let point: (Int, Int) -> P
   let point = fn (x, y) => { .frame; .x; .y; }
 
-  let vector :: (Int, Int) -> V
+  let vector: (Int, Int) -> V
   let vector = fn (dx, dy) => { .frame; .dx; .dy; }
 
-  let between :: (P, P) -> V
+  let between: (P, P) -> V
   let between = fn (from, to) => vector (to.x - from.x, to.y - from.y)
 
-  let move :: (P, V) -> P
+  let move: (P, V) -> P
   let move = fn (current, offset) => point (current.x + offset.dx, current.y + offset.dy)
 
   return {
@@ -43,7 +43,7 @@ const Transform = fn (From, To) => {
   .vector = Vector From -> Vector To;
 }
 
-const identity :: @forall (fn Frame => Transform (Frame, Frame))
+const identity: @forall (fn Frame => Transform (Frame, Frame))
 const identity = {
   .point = fn point => point;
   .vector = fn vector => vector;
@@ -51,13 +51,13 @@ const identity = {
 
 // The shared Middle appears as both an output and an input through Transform's
 // arrows. Incompatible adjacent coordinate spaces are therefore rejected.
-const compose :: @forall (fn From => @forall (fn Middle => @forall (fn To => (Transform (From, Middle), Transform (Middle, To)) -> Transform (From, To))))
+const compose: @forall (fn From => @forall (fn Middle => @forall (fn To => (Transform (From, Middle), Transform (Middle, To)) -> Transform (From, To))))
 const compose = fn (first, second) => {
   .point = fn point => second.point (first.point point);
   .vector = fn vector => second.vector (first.vector vector);
 }
 
-const map_points :: @forall (fn From => @forall (fn To => (Transform (From, To), [Point From]) -> [Point To]))
+const map_points: @forall (fn From => @forall (fn To => (Transform (From, To), [Point From]) -> [Point To]))
 const map_points = fn (transform, points) => map (points, transform.point)
 
 return {

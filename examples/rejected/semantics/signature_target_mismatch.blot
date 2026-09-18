@@ -4,6 +4,6 @@
 
 open import "blot:prelude"
 
-let rec identity :: Int -> Int
+let rec identity: Int -> Int
 let identity = fn value => value
 return identity 42

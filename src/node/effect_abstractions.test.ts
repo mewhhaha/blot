@@ -82,7 +82,7 @@ test("the first handler skips a trapping tail of a nonempty stream", async () =>
     await writeFile(
       path,
       source.slice(0, source.lastIndexOf("\nreturn {")) + `
-let interrupted :: Unit -> Positive ~ { Numbers }
+let interrupted: Unit -> Positive ~ { Numbers }
 let interrupted = fn () => do:
   use Numbers.emit 5
   return @panic "the first handler resumed the tail"

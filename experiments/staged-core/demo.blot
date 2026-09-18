@@ -1,0 +1,12 @@
+const Int = @staged.int
+const makeSchema =
+  @staged.static (fn (A, B) => @staged.record { .left = A; .right = B; })
+const Pair = @staged.static (makeSchema (Int, Int))
+const makeGetter = @staged.static (fn schema => @staged.getter (schema, "left"))
+const getLeft = @staged.splice (makeGetter Pair)
+const id = fn x => x
+const apply = fn (f, x) => f x
+const makeAdder = fn x => fn y => @staged.add (x, y)
+const work =
+  fn x => apply (makeAdder 10, getLeft { .left = id x; .right = 99; })
+return { .run = fn (x: Int) -> Int => work x; }

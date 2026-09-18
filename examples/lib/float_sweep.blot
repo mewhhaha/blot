@@ -1,17 +1,17 @@
 open import "blot:prelude"
 const Point = { .x = F32; .y = F32; }
 const MapWidth = 10
-const SweepStep :: F32
+const SweepStep: F32
 const SweepStep = 0.025
-const wall_occupied = fn (point :: Point) -> Bool => point.x > F32.of_float 2.0
+const wall_occupied = fn (point: Point) -> Bool => point.x > F32.of_float 2.0
 const figure_at =
-  fn (point :: Point) -> Int => case point.y > F32.of_float 2.0 of
+  fn (point: Point) -> Int => case point.y > F32.of_float 2.0 of
     #True => 1
     #False => -1
 
 const Travel = { .position = Point; .speaker = Int; }
 
-const sweep :: (Point, Point) -> Travel
+const sweep: (Point, Point) -> Travel
 const sweep = fn (position, displacement) => do:
   let distance = F32.abs displacement.x + F32.abs displacement.y
   let subdivisions = F32.truncate (distance / SweepStep) + 1

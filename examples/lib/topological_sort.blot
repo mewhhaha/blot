@@ -3,10 +3,10 @@ open import "blot:prelude"
 const Graph = import "./graph.blot"
 const SortResult = { .order = [Int]; .acyclic = Bool; }
 
-const sort :: [[Int]] -> SortResult
+const sort: [[Int]] -> SortResult
 const sort = fn &graph => do:
   let vertex_count = Array.length (&graph)
-  let incoming :: [Int]
+  let incoming: [Int]
   let incoming = []
   for Iter.range (0, vertex_count):
     incoming := @array.push incoming 0
@@ -21,7 +21,7 @@ const sort = fn &graph => do:
 
     incoming := updated
 
-  let rec collect_ready :: (Int, [Int]) -> [Int]
+  let rec collect_ready: (Int, [Int]) -> [Int]
   let rec collect_ready = fn (vertex, ready) => do:
     if vertex >= vertex_count:
       return ready
@@ -33,7 +33,7 @@ const sort = fn &graph => do:
 
   let ready = collect_ready (0, [])
 
-  let rec visit :: ([Int], Int, [Int], [Int]) -> [Int]
+  let rec visit: ([Int], Int, [Int], [Int]) -> [Int]
   let rec visit = fn (ready, cursor, incoming, order) => case Array.get (
     (&ready),
     cursor
@@ -42,7 +42,7 @@ const sort = fn &graph => do:
     #Some vertex => do:
       let vertex = vertex + 0
       let neighbors = Graph.outgoing ((&graph), (&vertex))
-      let rec decrease_incoming :: (Int, [Int], [Int]) -> ([Int], [Int])
+      let rec decrease_incoming: (Int, [Int], [Int]) -> ([Int], [Int])
       let rec decrease_incoming =
         fn (index, incoming, ready) => case Array.get (
           (&neighbors),

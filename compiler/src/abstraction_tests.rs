@@ -149,7 +149,7 @@ return @handle (Left.Read, fn () => Right.get (), {
 #[test]
 fn traversal_specialization_rejects_a_changed_element_carrier() {
     with_compiler(
-        "open import \"blot:prelude\"\nconst T = import \"traversal.blot\"\nconst values :: [Text]\nconst values = [\"a\", \"b\"]\nreturn T.over (T.each, values, fn _ => 1)\n",
+        "open import \"blot:prelude\"\nconst T = import \"traversal.blot\"\nconst values: [Text]\nconst values = [\"a\", \"b\"]\nreturn T.over (T.each, values, fn _ => 1)\n",
         |mut session| {
             session
                 .add_source(
@@ -189,7 +189,7 @@ fn traversal_specialization_rejects_a_changed_element_carrier() {
 #[test]
 fn nested_quantifiers_have_distinct_display_names() {
     let checked = check(
-        "const pair :: @forall (fn Left => @forall (fn Right => (Left, Right) -> (Right, Left)))\nconst pair = fn (left, right) => (right, left)\nreturn pair\n",
+        "const pair: @forall (fn Left => @forall (fn Right => (Left, Right) -> (Right, Left)))\nconst pair = fn (left, right) => (right, left)\nreturn pair\n",
     );
     assert_eq!(checked["ok"], true, "{checked}");
     assert_eq!(
@@ -267,7 +267,7 @@ fn nested_resource_updates_preserve_unmodified_fields() {
 const update = fn access => fn () => do:
   let current = access.read ()
   return access.write { ...current; .count = current.count + 1; }
-let run = fn (count :: Int) => update {
+let run = fn (count: Int) => update {
   .read = fn () => { .count; .label = "kept"; };
   .write = fn value => value;
 } ()
@@ -384,7 +384,7 @@ const resource_type = fn (T, initial) => do:
 const component = fn prototype => do:
   const T = @type.of prototype
   const column = resource_type ([T], @satisfies [] [T])
-  return { .column; .insert = fn (value :: T) => do:
+  return { .column; .insert = fn (value: T) => do:
     use previous <- column.get ()
     return column.set (@linear.freeze (@array.push (Array.copy (&previous)) value))
   ; }
@@ -515,7 +515,7 @@ fn generic_composition_rejects_an_incompatible_transform() {
 fn forwarded_schema_factory_preserves_its_result_parameter_contract() {
     let source = r#"open import "blot:prelude"
 const derive = fn schema => do:
-  let compare :: (schema, schema) -> Int
+  let compare: (schema, schema) -> Int
   let compare = fn _ => 1
   return { .compare = compare; }
 const forward = fn derive => fn schema => derive schema
@@ -545,7 +545,7 @@ return selected.compare ({ .wrong = "oops"; }, { .id = 7; })
 #[test]
 fn quantified_context_does_not_accept_a_concrete_implementation() {
     let checked = check(
-        "open import \"blot:prelude\"\nconst identity :: @forall (fn T => T -> T)\nconst identity = fn _ => 1\nreturn identity\n",
+        "open import \"blot:prelude\"\nconst identity: @forall (fn T => T -> T)\nconst identity = fn _ => 1\nreturn identity\n",
     );
     assert_eq!(
         checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
@@ -578,7 +578,7 @@ fn middleware_cannot_discard_its_inherited_effect_tail() {
         .next()
         .unwrap()
         .to_owned()
-        + "const Request = @effect { .send = Int -> Int; }\nconst perform :: Int -> Int ~ { Request }\nconst perform = fn value => Request.send value\nconst erased :: Int -> Int ~ { Trace, Metrics }\nconst erased = instrument perform\nreturn erased\n";
+        + "const Request = @effect { .send = Int -> Int; }\nconst perform: Int -> Int ~ { Request }\nconst perform = fn value => Request.send value\nconst erased: Int -> Int ~ { Trace, Metrics }\nconst erased = instrument perform\nreturn erased\n";
     let checked = check(&source);
     assert_eq!(
         checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
@@ -753,11 +753,11 @@ fn deep_rebinding_uses_existing_field_type_and_bounds_checks() {
             "BLOT_TYPE_ERROR",
         ),
         (
-            "let record :: { .x = @type.int; }\nlet record = { .x = 1; }\nrecord.x := \"bad\"\nreturn record\n",
+            "let record: { .x = @type.int; }\nlet record = { .x = 1; }\nrecord.x := \"bad\"\nreturn record\n",
             "BLOT_TYPE_ERROR",
         ),
         (
-            "let record :: { .x = 0; }\nlet record = { .x = 0; }\nrecord.x := 3\nreturn record\n",
+            "let record: { .x = 0; }\nlet record = { .x = 0; }\nrecord.x := 3\nreturn record\n",
             "BLOT_TYPE_ERROR",
         ),
         (

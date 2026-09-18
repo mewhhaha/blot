@@ -1,7 +1,7 @@
 open import "blot:prelude"
 open import "blot:pipeline"
 let original = [1, 2, 3, 4]
-let result :: Int
+let result: Int
 let result =
   original
     |> map_with (fn value => value + 1)

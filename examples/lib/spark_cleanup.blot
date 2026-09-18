@@ -7,13 +7,13 @@ const Cleanup = @effect.host {
   .wait = Effect.suspends (Unit -> Int);
 }
 
-let run :: { .executor = Spark.Executor; .handle = Handle; } -> Bool -> Int ~ { Spark.Effect, Cleanup }
+let run: { .executor = Spark.Executor; .handle = Handle; } -> Bool -> Int ~ { Spark.Effect, Cleanup }
 let run = fn io => fn wait => do:
-  let body :: Spark.Scope -> Int ~ { Spark.Effect, Cleanup }
+  let body: Spark.Scope -> Int ~ { Spark.Effect, Cleanup }
   let body = fn scope => do:
-    let ?first :: Unit -> Unit ~ { Cleanup } = fn () => Cleanup.release (io.handle, 1)
+    let ?first: Unit -> Unit ~ { Cleanup } = fn () => Cleanup.release (io.handle, 1)
     use Spark.on_exit scope (?first)
-    let ?second :: Unit -> Unit ~ { Cleanup } = fn () => Cleanup.release (io.handle, 2)
+    let ?second: Unit -> Unit ~ { Cleanup } = fn () => Cleanup.release (io.handle, 2)
     use Spark.on_exit scope (?second)
     if wait:
       use result <- Cleanup.wait ()

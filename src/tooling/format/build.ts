@@ -783,7 +783,7 @@ function decidePlan(
   const scopeTouch = new Set<Rule>();
   let fallback = false;
   for (const statement of statements) {
-    if (statement.name === "binding" && directToken(statement, "::") !== null) {
+    if (statement.name === "binding" && directToken(statement, ":") !== null) {
       if (annotatedBindingPoisons(statement, source)) fallback = true;
       continue;
     }
@@ -864,7 +864,7 @@ function statementLayout(
   comments: readonly TapeComment[],
 ): StatementLayout {
   let introducer = directToken(statement, "return");
-  if (statement.name === "signature") introducer = directToken(statement, "::");
+  if (statement.name === "signature") introducer = directToken(statement, ":");
   if (statement.name === "binding") introducer = directToken(statement, "=");
   if (introducer === null) return { kind: "keep" };
   let value = directRule(statement, "value");
@@ -946,7 +946,7 @@ function signatureScopeNeedsTouch(
   const indented = directRule(statement, "indented_value");
   if (indented !== null) value = indentedBindingValue(indented);
   if (value === null) return false;
-  const introducer = directToken(statement, "::");
+  const introducer = directToken(statement, ":");
   if (introducer === null) return false;
   const separator = source.slice(introducer.span.end, value.span.start);
   if (!isBlankSeparator(separator)) return false;
@@ -1234,7 +1234,7 @@ function bindingRegion(
   if (indented !== null) value = indentedBindingValue(indented);
   if (value === null) return;
   let introducer = directToken(node, "=");
-  if (node.name === "signature") introducer = directToken(node, "::");
+  if (node.name === "signature") introducer = directToken(node, ":");
   if (introducer === null) {
     throw new FormatterInvariantError(`${node.name} has no introducer`);
   }

@@ -72,7 +72,7 @@ test("callbacks cannot escape the defining artifact and uncalled callbacks are r
       path,
       `open import "blot:prelude"
 const Executor = @effect.host { .save = Effect.suspends ((Unit -> Int) -> Unit); }
-const run :: Int -> Unit ~ { Executor }
+const run: Int -> Unit ~ { Executor }
 const run = fn x => Executor.save (fn () => x + 1)
 return run
 `,
@@ -113,14 +113,14 @@ test("pure callback recursion yields, reuses tail frames, and observes cancellat
       path,
       `open import "blot:prelude"
 const Executor = @effect.host { .run = Effect.suspends ((Unit -> Int) -> Int); }
-const rec count :: (Int, Int) -> Int
+const rec count: (Int, Int) -> Int
 const rec count = fn (remaining, total) => do:
   if remaining < 1:
     return total
   return count (remaining - 1, total + 1)
-const run :: Int -> Int ~ { Executor }
+const run: Int -> Int ~ { Executor }
 const run = fn n => Executor.run (fn () => count (n, 0))
-const direct :: Int -> Int
+const direct: Int -> Int
 const direct = fn n => count (n, 0)
 return { .run = run; .direct = direct; }
 `,

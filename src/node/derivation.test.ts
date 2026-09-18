@@ -41,7 +41,7 @@ return Codec.encode { .count = 42; .code = -7; }`,
 test("derived encoding handles runtime parameters and canonical Text results", async () => {
   await withSource(
     `const Codec = Derive.integer_record { .count = Int; .code = Int; }
-let encode :: Int -> Text
+let encode: Int -> Text
 let encode = fn count => Codec.encode { .count = count; .code = 7; }
 return encode`,
     async (compiler, path) => {

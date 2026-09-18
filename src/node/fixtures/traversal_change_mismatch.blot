@@ -1,6 +1,6 @@
 open import "blot:prelude"
 const T = import "../../../examples/lib/traversal.blot"
 
-const values :: [Text]
+const values: [Text]
 const values = ["a", "b"]
 return T.over (T.each, values, fn _ => 1)

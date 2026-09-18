@@ -3,7 +3,7 @@ const Mat4 = import "./matrix.blot"
 const Transforms = import "./transforms.blot"
 const Particles = import "./particles.blot"
 
-const summarize ::
+const summarize:
   Transforms.Scalar.Entity -> { .Id = Int; .Projected = Mat4.Vector; .Age = Int; }
 const summarize =
   fn row => { .Id = row.Id; .Projected = row.Projected; .Age = row.Age; }

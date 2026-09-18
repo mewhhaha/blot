@@ -8,7 +8,7 @@ const IO =
     .read = Effect.suspends (Stream -> Text);
   }
 
-let run :: { .client = Client; } -> Text -> Text ~ { IO }
+let run: { .client = Client; } -> Text -> Text ~ { IO }
 let run = fn io => fn path => do:
   use stream <- IO.open (io.client, path)
   use text <- IO.read stream

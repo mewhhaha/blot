@@ -1,0 +1,26 @@
+const Int = @staged.int
+const Schema = @staged.static (@staged.record { .left = Int; .right = Int; })
+const arraysOf = @staged.static (fn schema => @staged.record_fields (
+  @staged.array_fold (
+    @staged.fields schema,
+    fn (fields, (name, T)) => @staged.array_push (fields, (name, @staged.array_type T)),
+    []
+  )
+))
+const Arrays = @staged.static (arraysOf Schema)
+const left = @staged.splice (@staged.getter (Arrays, "left"))
+const rec sum = fn (n, accumulator) => do:
+  if @staged.lt (n, 1):
+    return accumulator
+  else:
+    return sum (@staged.sub (n, 1), @staged.add (accumulator, n))
+
+const precomputed = @staged.static (sum (10, 0))
+const add = fn (a, b) => @staged.add (a, b)
+const work = fn x => do:
+  let xs = left { .left = [x, 2, 3]; .right = []; }
+  let ys = @staged.array_push (xs, precomputed)
+  return case @staged.array_at (ys, 0) of
+    #Some first => @staged.array_fold (ys, add, first)
+    #None => 0
+return { .run = fn (x: Int) -> Int => work x; }

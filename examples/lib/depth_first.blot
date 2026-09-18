@@ -4,10 +4,10 @@ const Graph = import "./graph.blot"
 const IntStack = import "./int_stack.blot"
 const VertexMarks = import "./vertex_marks.blot"
 
-const search :: ([[Int]], Int) -> [Int]
+const search: ([[Int]], Int) -> [Int]
 const search = fn (&graph, start) => do:
   let vertex_count = Array.length (&graph)
-  let rec visit ::
+  let rec visit:
     (
       { .values = [Int]; .length = Int; },
       [Bool],

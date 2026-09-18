@@ -2,16 +2,16 @@
 
 open import "blot:prelude"
 
-let celsius :: Int -> F64
+let celsius: Int -> F64
 let celsius = fn raw_tenths => do:
   // Pain point: an already-bound Int is not implicitly converted to F64.
   // Contextual literals can adapt, but raw_tenths needs an explicit conversion.
   return F64.of_int raw_tenths / 10.0
 
-let fahrenheit :: F64 -> F64
+let fahrenheit: F64 -> F64
 let fahrenheit = fn degrees => degrees * 1.8 + 32.0
 
-let mean :: [F64] -> Option F64
+let mean: [F64] -> Option F64
 let mean = fn &readings => do:
   let count = Array.length (&readings)
   if count == 0:
@@ -19,7 +19,7 @@ let mean = fn &readings => do:
 
   // Pain point: := preserves the accumulator's numeric domain. Starting at
   // the unconstrained integer 0 is not a promise to become a float later.
-  let total :: F64
+  let total: F64
   let total = 0.0
   // Pain point on this revision: generic + inside this inferred loop is
   // constrained to Int despite the F64 accumulator. The named member avoids

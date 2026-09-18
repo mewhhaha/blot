@@ -2,12 +2,12 @@ open import "blot:prelude"
 const O = import "../../../examples/lib/order.blot"
 
 const Ticket = { .id = Int; .title = Text; }
-const ticket_order :: O.Order Ticket
+const ticket_order: O.Order Ticket
 const ticket_order = O.on (O.integer, fn ticket => ticket.id)
 
 // At a concrete `Order Ticket` boundary, an Int order cannot be used as a
 // tie-breaker for a Ticket order.
-const invalid :: O.Order Ticket
+const invalid: O.Order Ticket
 const invalid = O.then (ticket_order, O.integer)
 
 return invalid

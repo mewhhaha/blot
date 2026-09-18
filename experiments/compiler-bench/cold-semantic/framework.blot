@@ -137,18 +137,18 @@ const Systems = fn Row => do:
 
           _ => False
         )
-      let execute :: Work
+      let execute: Work
       let execute = fn selected => checked selected
-      let apply :: Apply
+      let apply: Apply
       let apply = fn (row, patch) => row
       for name in Iter.items writes:
         let previous = apply
-        let replace :: Apply
+        let replace: Apply
         let replace =
           fn (row, patch) => { ...previous (row, patch); .[name] = @shape.get patch name; }
         apply := replace
 
-      let step :: Step
+      let step: Step
       let step = fn row => do:
         let patch = execute (Reflect.pick (row, reads))
         return apply (row, patch)
@@ -166,9 +166,9 @@ const Batch = #Systems [Text] | #Barrier Text
 const Report = { .batches = [Batch]; .order = [Text]; .passes = [[Text]]; }
 const Conflict = { .write_read = [Text]; .read_write = [Text]; .write_write = [Text]; }
 
-const plan_contains :: ([Text], Text) -> Bool
+const plan_contains: ([Text], Text) -> Bool
 const plan_contains = fn (&names, name) => any ((&names), fn candidate => candidate == name)
-const plan_union_names :: ([Text], [Text]) -> [Text]
+const plan_union_names: ([Text], [Text]) -> [Text]
 const plan_union_names = fn (left, right) => do:
   let combined = Array.copy left
   for name in Iter.items right:
@@ -177,18 +177,18 @@ const plan_union_names = fn (left, right) => do:
 
   return freeze combined
 
-const plan_group :: [Text] -> Graph
+const plan_group: [Text] -> Graph
 const plan_group = fn names => { .nodes = plan_union_names ([], names); .edges = freeze []; .barriers = freeze []; }
-const plan_barrier :: Text -> Graph
+const plan_barrier: Text -> Graph
 const plan_barrier = fn name => { .nodes = freeze [name]; .edges = freeze []; .barriers = freeze [name]; }
-const plan_before :: (Text, Text) -> Graph
+const plan_before: (Text, Text) -> Graph
 const plan_before = fn (first, second) => {
   .nodes = plan_union_names ([first], [second]);
   .edges = freeze [{ .before = first; .after = second; }];
   .barriers = freeze [];
 }
 
-const plan_merge :: (Graph, Graph) -> Graph
+const plan_merge: (Graph, Graph) -> Graph
 const plan_merge = fn (left, right) => do:
   for name in Iter.items left.nodes:
     let left_barrier = plan_contains (left.barriers, name)
@@ -209,7 +209,7 @@ const plan_merge = fn (left, right) => do:
   }
 
 // A dependency orders row work. A barrier node additionally ends a traversal.
-const plan_then :: (Graph, Graph) -> Graph
+const plan_then: (Graph, Graph) -> Graph
 const plan_then = fn (left, right) => do:
   let combined = plan_merge (left, right)
   let edges = Array.copy combined.edges
@@ -220,21 +220,21 @@ const plan_then = fn (left, right) => do:
 
   return { ...combined; .edges = freeze edges; }
 
-const plan_conflicts :: (Access, Access) -> Conflict
+const plan_conflicts: (Access, Access) -> Conflict
 const plan_conflicts = fn (left, right) => {
   .write_read = freeze (filter (left.writes, fn name => plan_contains (right.reads, name)));
   .read_write = freeze (filter (left.reads, fn name => plan_contains (right.writes, name)));
   .write_write = freeze (filter (left.writes, fn name => plan_contains (right.writes, name)));
 }
 
-const plan_compatible :: (Access, Access) -> Bool
+const plan_compatible: (Access, Access) -> Bool
 const plan_compatible = fn (left, right) => do:
   let overlap = plan_conflicts (left, right)
   return Array.length overlap.write_read + Array.length overlap.read_write + Array.length overlap.write_write == 0
 
 const plan_analyze = fn (registry, graph) => do:
   let graph = @satisfies graph Graph
-  const nodes :: [Text]
+  const nodes: [Text]
   const nodes = plan_union_names ([], graph.nodes)
   for name in Iter.items nodes:
     if plan_contains (graph.barriers, name):
@@ -256,26 +256,26 @@ const plan_analyze = fn (registry, graph) => do:
       return @fail ("dependency target is absent from the schedule: " <> edge.after)
 
   let pending = nodes
-  let finished :: [Text]
+  let finished: [Text]
   let finished = freeze []
-  let batches :: [Batch]
+  let batches: [Batch]
   let batches = freeze []
-  let order :: [Text]
+  let order: [Text]
   let order = freeze []
-  let passes :: [[Text]]
+  let passes: [[Text]]
   let passes = freeze []
-  let current :: [Text]
+  let current: [Text]
   let current = freeze []
   for Iter.range (0, Array.length nodes):
     if Array.length pending == 0:
       break
 
-    let ready :: [Text]
+    let ready: [Text]
     let ready = freeze (filter (pending, fn name => every (graph.edges, fn edge => edge.after != name || plan_contains (finished, edge.before))))
     if Array.length ready == 0:
       return @fail ("schedule contains a dependency cycle at: " <> Array.expect_get (pending, 0))
 
-    let selected :: [Text]
+    let selected: [Text]
     let selected = []
     for name in Iter.items ready:
       if plan_contains (graph.barriers, name):
@@ -285,7 +285,7 @@ const plan_analyze = fn (registry, graph) => do:
         if every ((&selected), fn previous => not (plan_contains (graph.barriers, previous)) && plan_compatible (@shape.get registry previous, @shape.get registry name)):
           selected := @array.push selected name
 
-    let chosen :: [Text]
+    let chosen: [Text]
     let chosen = freeze selected
     if plan_contains (graph.barriers, Array.expect_get (chosen, 0)):
       batches := freeze (@array.push (Array.copy batches) (#Barrier (Array.expect_get (chosen, 0))))
@@ -379,7 +379,7 @@ const Force = {
     const Game =
       { .initial = Unit -> Row; .update = (Row, Int) -> Row; .render = Row -> Int; }
     const run =
-      fn (game :: Game) => fn (count :: Int) -> Int => do:
+      fn (game: Game) => fn (count: Int) -> Int => do:
         let current = game.initial ()
         let total = 0
         for index in Iter.range (0, count):

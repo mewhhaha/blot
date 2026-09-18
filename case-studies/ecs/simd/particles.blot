@@ -8,10 +8,10 @@ const Block = { .Position = F32x4; .Velocity = F32x4; }
 const Table = { .count = Int; .blocks = [Block]; }
 const zero = F32x4.splat 0
 
-const pack :: [Entity] -> Table
+const pack: [Entity] -> Table
 const pack = fn rows => do:
   let count = Array.length rows
-  let blocks :: [Block]
+  let blocks: [Block]
   let blocks = []
   for start in Iter.range (0, (count + 3) / 4):
     let at = fn lane => case Array.get (rows, start * 4 + lane) of
@@ -28,7 +28,7 @@ const pack = fn rows => do:
 
   return { .count; .blocks; }
 
-const unpack :: Table -> [Entity]
+const unpack: Table -> [Entity]
 const unpack = fn table => Iter.collect (Iter.map (
   Iter.range (0, table.count),
   fn index => do:
@@ -59,10 +59,10 @@ const plan =
     { .integrate; .bounce; },
     Planning.before ("integrate", "bounce")
   )
-const advance :: Table -> Table
+const advance: Table -> Table
 const advance =
   fn table => { .count = table.count; .blocks = plan.each table.blocks; }
-const run :: ([Entity], Int) -> [Entity]
+const run: ([Entity], Int) -> [Entity]
 const run = fn (rows, frames) => do:
   let table = pack rows
   for Iter.range (0, frames):
@@ -70,7 +70,7 @@ const run = fn (rows, frames) => do:
 
   return unpack table
 
-const scalar :: ([Entity], Int) -> [Entity]
+const scalar: ([Entity], Int) -> [Entity]
 const scalar = fn (rows, frames) => do:
   let rows = rows
   for Iter.range (0, frames):
@@ -89,7 +89,7 @@ const scalar = fn (rows, frames) => do:
 
   return rows
 
-const seed :: Int -> [Entity]
+const seed: Int -> [Entity]
 const seed = fn count => Iter.collect (Iter.map (
   Iter.range (0, count),
   fn index => { .Position = F32.of_int (index % 11); .Velocity = F32.of_int (index % 5 - 2); }

@@ -18,9 +18,9 @@ const Shared = import "blot:shared"
 
 function scoped(body: string, result: string, declarations = ""): string {
   return `${header}${declarations}
-let run :: Spark.Executor -> ${result} ~ { Spark.Effect, Shared.Effect, Shared.Access }
+let run: Spark.Executor -> ${result} ~ { Spark.Effect, Shared.Effect, Shared.Access }
 let run = fn executor => do:
-  let body :: Spark.Scope -> ${result} ~ { Spark.Effect, Shared.Effect, Shared.Access }
+  let body: Spark.Scope -> ${result} ~ { Spark.Effect, Shared.Effect, Shared.Access }
   let body = fn scope => do:
 ${body}
   return Spark.scope executor body
@@ -49,9 +49,9 @@ test("shared float partitions support nested exact-cover joins", async () => {
     use whole <- Shared.join halves.rejoin
     return Shared.snapshot whole`,
             `[${type}]`,
-            `let kernel :: Shared.Partition ${type} -> Unit ~ { Shared.Access }
+            `let kernel: Shared.Partition ${type} -> Unit ~ { Shared.Access }
 let kernel = fn partition => do:
-  let increment :: ${type} = 1.25
+  let increment: ${type} = 1.25
   use length <- Shared.length partition
   for index in Iter.range (0, length):
     use current <- Shared.read partition index
@@ -191,12 +191,12 @@ test("cancelling a queued shared loan preserves its partition and never starts t
     use () <- Shared.run scope values kernel
     return Shared.snapshot values`,
         "[Int]",
-        `const sum :: Int -> Int = fn count => do:
+        `const sum: Int -> Int = fn count => do:
   let total = 0
   for index in Iter.range (0, count):
     total := total + index
   return total
-let kernel :: Shared.Partition Int -> Unit ~ { Shared.Access }
+let kernel: Shared.Partition Int -> Unit ~ { Shared.Access }
 let kernel = fn partition => Shared.write partition 0 9
 `,
       ),
@@ -277,7 +277,7 @@ test("cancelling an admitted shared kernel drains execution and invalidates its 
     use () <- Shared.run scope values kernel
     return Shared.snapshot values`,
         "[Int]",
-        `let kernel :: Shared.Partition Int -> Unit ~ { Shared.Access }
+        `let kernel: Shared.Partition Int -> Unit ~ { Shared.Access }
 let kernel = fn partition => do:
   for index in Iter.range (0, 1000000000):
     use Shared.write partition 0 9
@@ -361,13 +361,13 @@ test("parallel and speculative Sparks reject shared effects in their pure callba
           resolve(`shared-${operation}-refusal.blot`),
           scoped(
             `    use values <- Shared.i32 scope [1, 2]
-    let work :: Unit -> Unit ~ { Shared.Effect, Shared.Access }
+    let work: Unit -> Unit ~ { Shared.Effect, Shared.Access }
     let work = fn () => Shared.run scope values kernel
     use job <- Spark.${operation} scope work
     use () <- Spark.join job
     return Shared.snapshot values`,
             "[Int]",
-            `let kernel :: Shared.Partition Int -> Unit ~ { Shared.Access }
+            `let kernel: Shared.Partition Int -> Unit ~ { Shared.Access }
 let kernel = fn partition => Shared.write partition 0 9
 `,
           ),
@@ -417,7 +417,7 @@ test("shared loans reject overlapping admission and invalidate a failed worker's
     use result <- Shared.run scope halves.left kernel
     return Shared.snapshot halves.right`,
         "[Int]",
-        `let kernel :: Shared.Partition Int -> Int ~ { Shared.Access }
+        `let kernel: Shared.Partition Int -> Int ~ { Shared.Access }
 let kernel = fn partition => do:
   use Shared.write partition 0 0
   use zero <- Shared.read partition 0
