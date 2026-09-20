@@ -1,0 +1,12 @@
+open import "blot:prelude"
+const Resources = import "../../../examples/lib/resource_lease.blot"
+const FileHandle = #FileHandle Int
+const FileReceipt = #FileClosed
+const LockToken = #LockToken Int
+const LockReceipt = #Unlocked
+const Files = Resources.Lease (FileHandle, FileReceipt)
+const Locks = Resources.Lease (LockToken, LockReceipt)
+let wrong = fn () => do:
+  use file <- Files.acquire ()
+  return Locks.close (!file)
+return wrong

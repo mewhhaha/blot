@@ -52,6 +52,7 @@ const suites = [
   "src/node/typed_transducers.test.ts",
   "src/node/typed_subtyping_witnesses.test.ts",
   "src/node/interpretable_policies.test.ts",
+  "src/node/typed_resource_leases.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 
