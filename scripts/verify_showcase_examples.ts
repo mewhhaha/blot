@@ -64,6 +64,7 @@ const abstractionExamples = [
   "stateful_processors.blot",
   "reversible_protocols.blot",
   "zoomable_state_actions.blot",
+  "renderable_observations.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

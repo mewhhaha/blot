@@ -1,0 +1,54 @@
+open import "blot:prelude"
+const R = import "./lib/renderable.blot"
+
+const Port = range (1, 65535)
+const ReplicaCount = range (1, 32)
+const Health = #Healthy | #Degraded Text
+
+const show_port :: Port -> Text
+const show_port = fn port => "port=" <> Text.of_int port
+
+const show_replicas :: ReplicaCount -> Text
+const show_replicas = fn replicas => "replicas=" <> Text.of_int replicas
+
+const show_health :: Health -> Text
+const show_health = fn health => case health of
+  #Healthy => "health=healthy"
+  #Degraded reason => "health=degraded:" <> reason
+
+const show_owner :: Text -> Text
+const show_owner = fn owner => "owner=" <> owner
+
+const show_zone :: Option Text -> Text
+const show_zone = fn zone => case zone of
+  #Some name => "zone=" <> name
+  #None => "zone=none"
+
+const https_port :: Port
+const https_port = 443
+const replicas :: ReplicaCount
+const replicas = 3
+const health :: Health
+const health = #Degraded "cache warmup"
+const zone :: Option Text
+const zone = None
+
+const observations :: [R.Renderable]
+const observations =
+  [
+    R.make (https_port, show_port),
+    R.make (replicas, show_replicas),
+    R.make (health, show_health),
+    R.make ("Ada 🐱", show_owner),
+    R.make (zone, show_zone)
+  ]
+
+const empty :: [R.Renderable]
+const empty = []
+
+return {
+  .default = {
+    .plain = Array.map (observations, R.render);
+    .empty = Array.map (empty, R.render);
+  };
+}

@@ -47,6 +47,7 @@ const suites = [
   "src/node/stateful_processors.test.ts",
   "src/node/reversible_protocols.test.ts",
   "src/node/zoomable_state_actions.test.ts",
+  "src/node/renderable_observations.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 
