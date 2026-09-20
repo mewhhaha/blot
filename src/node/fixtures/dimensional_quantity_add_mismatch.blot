@@ -1,0 +1,9 @@
+open import "blot:prelude"
+const Dimension = import "../../../examples/lib/dimensional_quantity.blot"
+const Length = Dimension.make { .length = 1; .time = 0; }
+const Time = Dimension.make { .length = 0; .time = 1; }
+let distance :: Length.type
+let distance = Length.of 10
+let elapsed :: Time.type
+let elapsed = Time.of 2
+return Length.add (distance, elapsed)

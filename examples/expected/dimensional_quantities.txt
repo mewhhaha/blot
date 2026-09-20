@@ -1,0 +1,1 @@
+{ .default = { .total = 150; .rate = 30; .recovered = 150; .area = 108; .ratio = 9; .zero_divisor = #RejectedZero; .unicode_label = "m·s⁻¹"; }; }
