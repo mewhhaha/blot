@@ -45,6 +45,7 @@ const abstractionExamples = [
   "typed_validation.blot",
   "effect_row_middleware.blot",
   "effectful_retry_strategies.blot",
+  "typed_service_adapters.blot",
   "composable_reducers.blot",
   "typed_semiring_matrices.blot",
   "nominal_keyed_index.blot",
