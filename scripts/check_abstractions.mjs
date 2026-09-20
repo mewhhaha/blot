@@ -42,6 +42,7 @@ const suites = [
   "src/node/composable_event_aggregates.test.ts",
   "src/node/staged_bounded_domains.test.ts",
   "src/node/staged_endpoint_adapters.test.ts",
+  "src/node/versioned_schema_migrations.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 

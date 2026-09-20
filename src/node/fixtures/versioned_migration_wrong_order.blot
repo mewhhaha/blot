@@ -1,0 +1,16 @@
+open import "blot:prelude"
+const M = import "../../../examples/lib/versioned_migration.blot"
+
+const A = #A Int
+const B = #B Int
+const C = #C Int
+
+let ab :: M.Migration (A, B, #AB)
+let ab = fn source => case source of
+  #A value => Ok (#B value)
+
+let bc :: M.Migration (B, C, #BC)
+let bc = fn source => case source of
+  #B value => Ok (#C value)
+
+return M.and_then (bc, ab)
