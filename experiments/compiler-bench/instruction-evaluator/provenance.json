@@ -1,0 +1,42 @@
+{
+  "baseline": {
+    "schema": "blot-rust-compiler-artifact",
+    "version": 3,
+    "file": "compiler.wasm",
+    "bytes": 7277131,
+    "sha256": "da52e10c08f6532a2b3a9ceb07509ffcfe564e88e4aa8d02f3108e271822be8d",
+    "hostAbi": 10,
+    "preludeSha256": "87718708480be1ebe78c1c6cff3944c8e78cafce48157495dad3c780df7bd57f",
+    "compilerInputsSha256": "6d16b4b9f71511ad7eef03090908c4870a2f6ca229bedecfa9eb249f8fec6396",
+    "profile": "production",
+    "sourceCommit": "aea29be47da22636ae232f409bc3ab08b6650d51",
+    "sourceTree": "022a05bc3322c70903d7c8093cd81f22f29443ef",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+  },
+  "candidate": {
+    "schema": "blot-rust-compiler-artifact",
+    "version": 3,
+    "file": "compiler.wasm",
+    "bytes": 7313671,
+    "sha256": "f514ab9c07ad1a94965ddcd6b88ef19b692b01f1673b1c2e0db4b49a50a62b70",
+    "hostAbi": 10,
+    "preludeSha256": "d16f061b9bb08557cc6d3712f6feff61404d68738d3688a354dc67f26aff6765",
+    "compilerInputsSha256": "4a9230c3b3253271269bc75fc42986d82481ac4f10a09e42b33886bf97f168b9",
+    "profile": "production",
+    "sourceCommit": "aea29be47da22636ae232f409bc3ab08b6650d51",
+    "sourceTree": "022a05bc3322c70903d7c8093cd81f22f29443ef",
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+  },
+  "harness": "experiments/compiler-bench/staged-types/compare.mjs",
+  "harnessSha256": "8d018ff647da4a4b98def4190b78d282992fc6ca3d24ca77a025e60a7e1d59bd",
+  "candidateWorktree": true,
+  "node": "v24.12.0",
+  "v8": "13.6.233.17-node.37",
+  "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+  "platform": "linux",
+  "architecture": "x64",
+  "samplesPerArtifactAndFixture": 5,
+  "operation": "compile",
+  "telemetryDuringTiming": false,
+  "sameSnapshotUsedForBothArtifacts": "d16f061b9bb08557cc6d3712f6feff61404d68738d3688a354dc67f26aff6765"
+}

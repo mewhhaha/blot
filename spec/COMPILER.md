@@ -526,6 +526,41 @@ Identity policy is explicit:
 A semantic phase violation or failed required bridge is a source diagnostic. A
 documented fuel, memory, stack, or expansion bound is a limit diagnostic.
 
+The evaluator may compile a module's resolved AST into revision-local executable
+instructions. This is an internal Rust execution artifact, not a second parser,
+source checker, or compiler target. Instruction construction depends on the
+immutable AST and the compiler's primitive implementation. It does not capture
+an evaluation environment, inferred signature, effect instance, or checked
+result. Reusing instructions therefore does not authorize reusing values.
+
+Concrete execution uses explicit evaluation frames. Type-dependent applications
+still consume the current call's checked argument and result evidence through
+the shared application boundary. Residual execution retains the source-origin,
+representation, ownership, and effect facts needed to construct Runtime HIR.
+Instruction execution, semantic operations, and suspended continuations obey the
+same evaluation order and phase restrictions. An instruction cache miss only
+constructs code; it must not evaluate source or allocate a semantic identity.
+
+Binding layouts are source-only and shared with code. Each invocation allocates
+its own slots, populated on first observed lookup; static resolution stops at an
+`open` boundary. Capturing a closure may compact the current invocation's
+bindings, but must retain the inherited environment, tracked namespace demands,
+signature and substitution evidence, and recursive-group identity. Primitive
+arithmetic uses decoded operation IDs; other primitive spellings share immutable
+storage. Residual construction and declarations continue through their existing
+semantic implementations.
+
+Effect provenance retains the ordered call and creation histories in shared
+immutable frames. A cached hash accelerates indexing but never decides equality
+alone. Portable capsule encoding still writes the ordered history, independently
+of sharing or the hash, and decoding reconstructs the same semantic provenance.
+
+Compiler integers use inline signed machine values with arbitrary-precision
+promotion and normalization after arithmetic. The representation is private:
+equality, ordering, arithmetic, source printing, capsule bytes, and public
+integer bounds retain their existing meanings. The runtime i64 range check is
+independent of whether evaluation used the inline representation.
+
 ## 9. Staging and specialization
 
 Staging erases compile-time and proof-only values after consuming them into

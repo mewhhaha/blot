@@ -25,6 +25,10 @@ use crate::value::{
 };
 use crate::value_capsule::ValueCapsule;
 
+mod bytecode;
+mod effect_scope;
+pub use effect_scope::EffectScope;
+
 #[cfg(test)]
 thread_local! {
     static COMPTIME_CALL_CACHE_HITS: Cell<usize> = const { Cell::new(0) };
@@ -65,6 +69,7 @@ pub struct LoadedModule {
     pub(crate) scalar_cache_source_digest: Rc<std::cell::OnceCell<[u8; 32]>>,
     pub(crate) capsule_source_index:
         Rc<std::cell::OnceCell<Rc<crate::value_capsule::CapsuleSourceIndex>>>,
+    bytecode: Rc<std::cell::OnceCell<Rc<bytecode::Program>>>,
 }
 
 impl LoadedModule {
@@ -83,6 +88,7 @@ impl LoadedModule {
             scalar_cache_bodies: Rc::new(RefCell::new(HashMap::new())),
             scalar_cache_source_digest: Rc::new(std::cell::OnceCell::new()),
             capsule_source_index: Rc::new(std::cell::OnceCell::new()),
+            bytecode: Rc::new(std::cell::OnceCell::new()),
         }
     }
 
@@ -98,20 +104,20 @@ impl LoadedModule {
 
 #[derive(Clone)]
 pub(crate) struct ModuleRevision {
-    module: String,
+    module: Rc<String>,
     identity: Rc<()>,
 }
 
 impl ModuleRevision {
     fn new(module: &str) -> Self {
         Self {
-            module: module.to_owned(),
+            module: Rc::new(module.to_owned()),
             identity: Rc::new(()),
         }
     }
 
     fn references_module(&self, module: &str) -> bool {
-        self.module == module
+        self.module.as_str() == module
     }
 
     pub(crate) fn source_path(&self) -> &str {
@@ -194,8 +200,6 @@ impl ClosureApplication {
                 .any(|frame| frame.references_module(module))
     }
 }
-
-pub type EffectScope = Vec<ClosureApplication>;
 
 pub(crate) const MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT: usize = 64;
 const MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT: usize = 32;
@@ -675,7 +679,7 @@ impl ResidentOperatorMember {
                 arity,
                 applied,
             } => Some(Self::Primitive {
-                name: name.clone(),
+                name: name.to_string(),
                 arity: *arity,
                 applied: applied.clone(),
             }),
@@ -716,7 +720,7 @@ impl ResidentOperatorMember {
                 arity,
                 applied,
             } => Some(Value::Primitive {
-                name: name.clone(),
+                name: name.clone().into(),
                 arity: *arity,
                 applied: applied.clone(),
             }),
@@ -1792,48 +1796,39 @@ fn bootstrap_operator_type(value: Value) -> Value {
 }
 
 fn operator_type_with_members(value: Value) -> Value {
-    let members = OPERATOR_MEMBER_NAMES
-        .iter()
-        .map(|name| {
-            let primitive = if *name == "negate" {
-                match &value {
-                    Value::Int(_)
-                    | Value::Range {
-                        domain: Some(ValueDomain::Int),
-                        ..
-                    } => Some("@int.neg"),
-                    Value::Range {
-                        domain: Some(ValueDomain::Float),
-                        ..
-                    } => Some("@float.neg"),
-                    Value::Range {
-                        domain: Some(ValueDomain::Float32),
-                        ..
-                    } => Some("@f32.neg"),
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            let member = if let Some(primitive) = primitive {
-                Value::Primitive {
-                    name: primitive.to_owned(),
-                    arity: 1,
-                    applied: Vec::new(),
-                }
-            } else {
-                Value::Primitive {
-                    name: "@type.resolve_member".to_owned(),
-                    arity: 3,
-                    applied: vec![Value::Text((*name).into())],
-                }
-            };
-            ((*name).to_owned(), member)
-        })
-        .collect();
+    thread_local! {
+        static MEMBERS: [OrderedFields; 4] = std::array::from_fn(|index| {
+            OPERATOR_MEMBER_NAMES.iter().map(|name| {
+                let negate = match index {
+                    1 => Some("@int.neg"), 2 => Some("@float.neg"), 3 => Some("@f32.neg"), _ => None,
+                }.filter(|_| *name == "negate");
+                let member = match negate {
+                    Some(primitive) => Value::Primitive { name: primitive.into(), arity: 1, applied: Vec::new() },
+                    None => Value::Primitive { name: "@type.resolve_member".into(), arity: 3, applied: vec![Value::Text((*name).into())] },
+                };
+                ((*name).to_owned(), member)
+            }).collect()
+        });
+    }
+    let index = match &value {
+        Value::Int(_)
+        | Value::Range {
+            domain: Some(ValueDomain::Int),
+            ..
+        } => 1,
+        Value::Range {
+            domain: Some(ValueDomain::Float),
+            ..
+        } => 2,
+        Value::Range {
+            domain: Some(ValueDomain::Float32),
+            ..
+        } => 3,
+        _ => 0,
+    };
     Value::Extended {
         inner: Box::new(value),
-        members,
+        members: MEMBERS.with(|members| members[index].clone()),
     }
 }
 
@@ -1975,7 +1970,7 @@ const COMPTIME_ARGUMENT_BYTE_LIMIT: usize = 4_096;
 
 #[derive(Clone, Eq, Hash, PartialEq)]
 enum ComptimeArgument {
-    Int(num_bigint::BigInt),
+    Int(crate::integer::Integer),
     Float(u64),
     Float32(u32),
     Vector([u32; 4]),
@@ -2080,6 +2075,7 @@ pub struct Runtime {
     instance_facts: Vec<Rc<crate::typecheck::ResidualInstanceFacts>>,
     result_context: Option<Value>,
     checked_arguments: Rc<RefCell<HashMap<ApplicationSite, Value>>>,
+    locals: Option<Rc<bytecode::Locals>>,
 }
 
 struct ArrayProgress {
@@ -2105,6 +2101,19 @@ struct BranchProgress {
 }
 
 impl Runtime {
+    fn load(
+        &self,
+        module: &str,
+        expression: ExpressionId,
+        environment: &Environment,
+        name: &str,
+    ) -> Option<Value> {
+        match &self.locals {
+            Some(locals) => locals.load(module, expression, environment, name),
+            None => lookup(environment, name),
+        }
+    }
+
     fn expression_type(
         &self,
         context: &Context,
@@ -2143,11 +2152,12 @@ impl Runtime {
             residual: None,
             execution: Rc::new(()),
             signature_holes: None,
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(EffectScope::default()),
             module_instances: Rc::new(Vec::new()),
             instance_facts: Vec::new(),
             result_context: None,
             checked_arguments: Rc::new(RefCell::new(HashMap::new())),
+            locals: None,
         }
     }
 
@@ -2184,6 +2194,7 @@ impl Runtime {
             instance_facts: self.instance_facts.clone(),
             result_context: None,
             checked_arguments: self.checked_arguments.clone(),
+            locals: self.locals.clone(),
         }
     }
 }
@@ -2329,8 +2340,14 @@ pub enum Computation {
 }
 
 pub struct ComputationStep {
-    next: Box<dyn FnOnce() -> Computation>,
+    next: ComputationAction,
     continuations: VecDeque<ComputationContinuation>,
+}
+
+enum ComputationAction {
+    Callback(Box<dyn FnOnce() -> Computation>),
+    Bytecode(Box<bytecode::Machine>),
+    Call(Box<bytecode::Call>),
 }
 
 pub struct ComputationResume {
@@ -2346,7 +2363,12 @@ enum ComputationContinuation {
 
 impl ComputationStep {
     pub(crate) fn advance(self) -> Computation {
-        Computation::attach_continuations((self.next)(), self.continuations)
+        let computation = match self.next {
+            ComputationAction::Callback(next) => next(),
+            ComputationAction::Bytecode(machine) => machine.run(),
+            ComputationAction::Call(call) => bytecode::Machine::from_call(*call).run(),
+        };
+        Computation::attach_continuations(computation, self.continuations)
     }
 }
 
@@ -2367,7 +2389,7 @@ impl Computation {
 
     fn step(next: impl FnOnce() -> Computation + 'static) -> Self {
         Self::Step(ComputationStep {
-            next: Box::new(next),
+            next: ComputationAction::Callback(Box::new(next)),
             continuations: VecDeque::new(),
         })
     }
@@ -2586,6 +2608,7 @@ fn evaluate_module_with_capture(
 ) -> Computation {
     let path = Rc::new(path);
     runtime.module = path.clone();
+    runtime.locals = None;
     let loaded = match context.modules.borrow().get(path.as_str()).cloned() {
         Some(loaded) => loaded,
         None => {
@@ -2646,6 +2669,30 @@ pub fn module_closure(context: &Rc<Context>, path: &str) -> Result<Value, Diagno
 }
 
 pub fn evaluate_expression(
+    context: Rc<Context>,
+    module_path: Rc<String>,
+    expression_id: ExpressionId,
+    environment: Environment,
+    runtime: Runtime,
+) -> Computation {
+    if runtime.residual.is_none()
+        && let Some(machine) = bytecode::Machine::start(
+            &context,
+            &module_path,
+            expression_id,
+            &environment,
+            &runtime,
+        )
+    {
+        return Computation::Step(ComputationStep {
+            next: ComputationAction::Bytecode(Box::new(machine)),
+            continuations: VecDeque::new(),
+        });
+    }
+    evaluate_ast_expression(context, module_path, expression_id, environment, runtime)
+}
+
+fn evaluate_ast_expression(
     context: Rc<Context>,
     module_path: Rc<String>,
     expression_id: ExpressionId,
@@ -2753,10 +2800,7 @@ pub fn evaluate_expression(
                 Computation::value(Value::Float32(value))
             }
             _ => {
-                if runtime.phase == Phase::Runtime
-                    && (value < &(-BigIntExt::two_to_63())
-                        || value > &BigIntExt::two_to_63_minus_one())
-                {
+                if runtime.phase == Phase::Runtime && value.to_i64().is_none() {
                     return Computation::error(Diagnostic::new(
                         "BLOT_INTEGER_OVERFLOW",
                         format!("The runtime integer {value} is outside signed i64."),
@@ -2785,134 +2829,88 @@ pub fn evaluate_expression(
             name: name.clone(),
             payload: None,
         }),
-        Expression::Var { name, .. } => match lookup(&environment, name) {
-            Some(Value::Deferred {
-                module: suspended_module,
-                expression,
-                environment: suspended_environment,
-                demands,
-            }) => {
-                let block = runtime
-                    .residual
-                    .as_ref()
-                    .map(|trace| trace.borrow().current_block());
-                let mut demands = demands.borrow_mut();
-                let demands = demands.blocks_for(&runtime.execution);
-                let conflicts = demands.iter().any(|prior| match (*prior, block) {
-                    (None, _) | (_, None) => true,
-                    (Some(prior), Some(current)) => runtime
+        Expression::Var { name, .. } => {
+            match runtime.load(&module_path, expression_id, &environment, name) {
+                Some(Value::Deferred {
+                    module: suspended_module,
+                    expression,
+                    environment: suspended_environment,
+                    demands,
+                }) => {
+                    let block = runtime
                         .residual
                         .as_ref()
-                        .is_some_and(|trace| trace.borrow().blocks_share_path(prior, current)),
-                });
-                if conflicts {
-                    return Computation::error(Diagnostic::new(
-                        "BLOT_DEFERRED_DEMANDED_TWICE",
-                        format!(
-                            "Deferred parameter `{name}` was demanded more than once. Force it once into an ordinary `let` binding before reusing the value."
-                        ),
-                        span,
-                    ));
+                        .map(|trace| trace.borrow().current_block());
+                    let mut demands = demands.borrow_mut();
+                    let demands = demands.blocks_for(&runtime.execution);
+                    let conflicts = demands.iter().any(|prior| match (*prior, block) {
+                        (None, _) | (_, None) => true,
+                        (Some(prior), Some(current)) => runtime
+                            .residual
+                            .as_ref()
+                            .is_some_and(|trace| trace.borrow().blocks_share_path(prior, current)),
+                    });
+                    if conflicts {
+                        return Computation::error(Diagnostic::new(
+                            "BLOT_DEFERRED_DEMANDED_TWICE",
+                            format!(
+                                "Deferred parameter `{name}` was demanded more than once. Force it once into an ordinary `let` binding before reusing the value."
+                            ),
+                            span,
+                        ));
+                    }
+                    demands.push(block);
+                    runtime.locals = None;
+                    evaluate_expression(
+                        context,
+                        suspended_module,
+                        expression,
+                        suspended_environment,
+                        runtime,
+                    )
                 }
-                demands.push(block);
-                evaluate_expression(
-                    context,
-                    suspended_module,
-                    expression,
-                    suspended_environment,
-                    runtime,
-                )
-            }
-            Some(mut value) => {
-                if let Value::Closure { signature, .. } = &mut value
-                    && signature.is_none()
-                    && let Some(inferred) = lookup_signature(&environment, name)
-                {
-                    *signature = Some(Rc::new(inferred));
+                Some(mut value) => {
+                    if let Value::Closure { signature, .. } = &mut value
+                        && signature.is_none()
+                        && let Some(inferred) = lookup_signature(&environment, name)
+                    {
+                        *signature = Some(Rc::new(inferred));
+                    }
+                    Computation::value(value)
                 }
-                Computation::value(value)
+                None => Computation::error(Diagnostic::new(
+                    "BLOT_UNBOUND",
+                    format!("`{name}` is not in scope."),
+                    span,
+                )),
             }
-            None => Computation::error(Diagnostic::new(
-                "BLOT_UNBOUND",
-                format!("`{name}` is not in scope."),
-                span,
-            )),
-        },
+        }
         Expression::Intrinsic { name, .. } => intrinsic(name.clone(), span),
         Expression::Apply {
             function, argument, ..
         } => {
-            let application = match ApplicationSite::for_expression(
+            let (application, expected_result, expected_argument) = match prepare_application(
                 &context,
-                module_path.as_str(),
+                &module_path,
+                &loaded_module,
                 expression_id,
+                function,
+                argument,
+                &environment,
+                &runtime,
+                result_context,
+                span,
             ) {
-                Ok(application) => application,
+                Ok(PreparedApplication::Call {
+                    application,
+                    expected_result,
+                    expected_argument,
+                }) => (application, expected_result, expected_argument),
+                Ok(PreparedApplication::Value(value)) => return Computation::value(value),
                 Err(error) => return Computation::error(error),
             };
-            let expected_result = result_context.or_else(|| {
-                runtime
-                    .expression_type(&context, module_path.as_str(), expression_id)
-                    .map(|type_| substitute_signature(&type_, &environment))
-            });
             let function = *function;
             let argument = *argument;
-            let inferred_argument = runtime
-                .expression_type(&context, module_path.as_str(), argument)
-                .map(|type_| substitute_signature(&type_, &environment));
-            let runtime_argument = match &loaded_module.arena.expressions[argument.0 as usize] {
-                Expression::Var { name, .. } => lookup(&environment, name)
-                    .filter(crate::hir::contains_runtime)
-                    .and_then(|value| {
-                        runtime
-                            .residual
-                            .as_ref()
-                            .and_then(|trace| trace.borrow().conservative_value_type(&value))
-                    }),
-                _ => None,
-            };
-            let expected_argument = runtime_argument
-                .or_else(|| {
-                    inferred_argument
-                        .clone()
-                        .filter(|type_| !contains_type_variables(type_))
-                })
-                .or_else(|| recognition_argument_type(&runtime, span))
-                .or_else(
-                    || match &loaded_module.arena.expressions[argument.0 as usize] {
-                        Expression::Var { name, .. } => {
-                            lookup(&environment, name).and_then(runtime_value_type)
-                        }
-                        _ => None,
-                    },
-                );
-            if matches!(
-                &loaded_module.arena.expressions[function.0 as usize],
-                Expression::Intrinsic { name, .. } if name == "@type.inferred"
-            ) {
-                let Some(expected_argument) = expected_argument else {
-                    if runtime.residual.is_some() {
-                        return Computation::value(operator_type_with_members(
-                            inferred_argument.unwrap_or(Value::TypeVariable(0)),
-                        ));
-                    }
-                    return Computation::error(Diagnostic::new(
-                        "BLOT_NOT_COMPTIME",
-                        format!(
-                            "The inferred-type primitive has no checked argument type in module `{}` for expression {} argument {} at {}..{}.",
-                            module_path, expression_id.0, argument.0, span.start, span.end,
-                        ),
-                        span,
-                    ));
-                };
-                return Computation::value(context.decorate_operator_type(expected_argument));
-            }
-            if let Some(expected_argument) = &expected_argument {
-                runtime
-                    .checked_arguments
-                    .borrow_mut()
-                    .insert(application.clone(), expected_argument.clone());
-            }
             let argument_context = context.clone();
             let argument_module = module_path.clone();
             let argument_environment = environment.clone();
@@ -3000,7 +2998,15 @@ pub fn evaluate_expression(
             deferred,
             ..
         } => {
-            capture_env(&environment);
+            let environment = match &runtime.locals {
+                Some(locals) if runtime.residual.is_none() => {
+                    locals.capture(&context, &module_path, *parameter, *body, &environment)
+                }
+                _ => {
+                    capture_env(&environment);
+                    environment
+                }
+            };
             let signature = runtime
                 .closure_signature(&context, module_path.as_str(), *body)
                 .map(|signature| Rc::new(substitute_signature(&signature, &environment)));
@@ -3178,6 +3184,103 @@ pub fn evaluate_expression(
             .at(origin),
         _ => computation.at(origin),
     }
+}
+
+enum PreparedApplication {
+    Value(Value),
+    Call {
+        application: ApplicationSite,
+        expected_result: Option<Value>,
+        expected_argument: Option<Value>,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_application(
+    context: &Rc<Context>,
+    module_path: &Rc<String>,
+    loaded_module: &Module,
+    expression_id: ExpressionId,
+    function: &ExpressionId,
+    argument: &ExpressionId,
+    environment: &Environment,
+    runtime: &Runtime,
+    result_context: Option<Value>,
+    span: Span,
+) -> Result<PreparedApplication, Diagnostic> {
+    let application =
+        ApplicationSite::for_expression(context, module_path.as_str(), expression_id)?;
+    let expected_result = result_context.or_else(|| {
+        runtime
+            .expression_type(context, module_path.as_str(), expression_id)
+            .map(|type_| substitute_signature(&type_, environment))
+    });
+    let function = *function;
+    let argument = *argument;
+    let inferred_argument = runtime
+        .expression_type(context, module_path.as_str(), argument)
+        .map(|type_| substitute_signature(&type_, environment));
+    let runtime_argument = match &loaded_module.arena.expressions[argument.0 as usize] {
+        Expression::Var { name, .. } => runtime
+            .load(module_path, argument, environment, name)
+            .filter(crate::hir::contains_runtime)
+            .and_then(|value| {
+                runtime
+                    .residual
+                    .as_ref()
+                    .and_then(|trace| trace.borrow().conservative_value_type(&value))
+            }),
+        _ => None,
+    };
+    let expected_argument = runtime_argument
+        .or_else(|| {
+            inferred_argument
+                .clone()
+                .filter(|type_| !contains_type_variables(type_))
+        })
+        .or_else(|| recognition_argument_type(runtime, span))
+        .or_else(
+            || match &loaded_module.arena.expressions[argument.0 as usize] {
+                Expression::Var { name, .. } => runtime
+                    .load(module_path, argument, environment, name)
+                    .and_then(runtime_value_type),
+                _ => None,
+            },
+        );
+    if matches!(
+        &loaded_module.arena.expressions[function.0 as usize],
+        Expression::Intrinsic { name, .. } if name == "@type.inferred"
+    ) {
+        let Some(expected_argument) = expected_argument else {
+            if runtime.residual.is_some() {
+                return Ok(PreparedApplication::Value(operator_type_with_members(
+                    inferred_argument.unwrap_or(Value::TypeVariable(0)),
+                )));
+            }
+            return Err(Diagnostic::new(
+                "BLOT_NOT_COMPTIME",
+                format!(
+                    "The inferred-type primitive has no checked argument type in module `{}` for expression {} argument {} at {}..{}.",
+                    module_path, expression_id.0, argument.0, span.start, span.end,
+                ),
+                span,
+            ));
+        };
+        return Ok(PreparedApplication::Value(
+            context.decorate_operator_type(expected_argument),
+        ));
+    }
+    if let Some(expected_argument) = &expected_argument {
+        runtime
+            .checked_arguments
+            .borrow_mut()
+            .insert(application.clone(), expected_argument.clone());
+    }
+    Ok(PreparedApplication::Call {
+        application,
+        expected_result,
+        expected_argument,
+    })
 }
 
 fn evaluate_many(
@@ -4782,6 +4885,7 @@ fn enter_module_instance(
     imported: ModuleRevision,
     application: ApplicationSite,
 ) -> Runtime {
+    runtime.locals = None;
     let site = ModuleInstanceSite {
         application,
         imported,
@@ -4820,6 +4924,49 @@ struct ApplicationCall {
     runtime: Runtime,
     expected_result: Option<Value>,
     application: ApplicationSite,
+}
+
+struct CallReturn {
+    context: Rc<Context>,
+    expected_result: Option<Value>,
+    source_result_signature: Option<Value>,
+    reuse_assertion: Option<Span>,
+    memo_key: Option<ComptimeCallKey>,
+}
+
+impl CallReturn {
+    fn finish(self, mut value: Value) -> Value {
+        let result_signature = self
+            .expected_result
+            .as_ref()
+            .filter(|expected| {
+                matches!(value, Value::Closure { .. }) && !contains_type_variables(expected)
+            })
+            .or(self.source_result_signature.as_ref());
+        if let Some(result_signature) = result_signature {
+            attach_signature(&mut value, result_signature);
+        }
+        if let Some(span) = self.reuse_assertion
+            && let Value::Closure {
+                reuse_assertion: nested,
+                ..
+            } = &mut value
+            && nested.is_none()
+        {
+            *nested = Some(span);
+        }
+        if let Some(key) = self.memo_key {
+            let value_memoizable = comptime_argument(&value).is_some();
+            let mut results = self.context.comptime_call_results.borrow_mut();
+            let inserted = value_memoizable && results.len() < COMPTIME_CALL_RESULT_LIMIT;
+            if inserted {
+                results.insert(key, value.clone());
+            }
+            crate::phase_telemetry::note_memo_store(value_memoizable, inserted);
+            crate::phase_telemetry::note_memo_len(results.len());
+        }
+        value
+    }
 }
 
 fn apply_with_expected(
@@ -5240,6 +5387,17 @@ fn apply_with_expected(
                 ));
             }
             let mut closure_runtime = runtime;
+            closure_runtime.locals = if closure_runtime.residual.is_none() {
+                Some(bytecode::Locals::new(
+                    &context,
+                    &closure_module,
+                    parameter,
+                    body,
+                    &scope,
+                ))
+            } else {
+                None
+            };
             if let Some(facts) = instance_facts {
                 closure_runtime.instance_facts.push(facts);
             }
@@ -5260,7 +5418,6 @@ fn apply_with_expected(
                         (!contains_type_variables(&result)).then_some(result)
                     });
             }
-            let memo_context = context.clone();
             closure_runtime.module = closure_module.clone();
             closure_runtime.module_instances = module_instances;
             Rc::make_mut(&mut closure_runtime.effect_scope).push(ClosureApplication {
@@ -5277,10 +5434,27 @@ fn apply_with_expected(
                         };
                         Some(substitute_signature(codomain, &scope))
                     });
+            let completion = CallReturn {
+                context: context.clone(),
+                expected_result,
+                source_result_signature,
+                reuse_assertion,
+                memo_key,
+            };
+            if closure_runtime.residual.is_none() {
+                return bytecode::Call::enter(
+                    context,
+                    closure_module,
+                    body,
+                    scope,
+                    closure_runtime,
+                    completion,
+                );
+            }
             Computation::step(move || {
                 evaluate_expression(context, closure_module, body, scope, closure_runtime)
                     .map_result(move |result| {
-                        let mut value = match result {
+                        let value = match result {
                             Ok(value) => value,
                             Err(mut error) => {
                                 if let Some((_, compilation)) = &residual_compilation {
@@ -5300,42 +5474,13 @@ fn apply_with_expected(
                         {
                             return Computation::error(error);
                         }
-                        let result_signature = expected_result
-                            .as_ref()
-                            .filter(|expected| {
-                                matches!(value, Value::Closure { .. })
-                                    && !contains_type_variables(expected)
-                            })
-                            .or(source_result_signature.as_ref());
-                        if let Some(result_signature) = result_signature {
-                            attach_signature(&mut value, result_signature);
-                        }
-                        if let Some(span) = reuse_assertion
-                            && let Value::Closure {
-                                reuse_assertion: nested,
-                                ..
-                            } = &mut value
-                            && nested.is_none()
-                        {
-                            *nested = Some(span);
-                        }
-                        if let Some(key) = memo_key {
-                            let value_memoizable = comptime_argument(&value).is_some();
-                            let mut results = memo_context.comptime_call_results.borrow_mut();
-                            let inserted =
-                                value_memoizable && results.len() < COMPTIME_CALL_RESULT_LIMIT;
-                            if inserted {
-                                results.insert(key, value.clone());
-                            }
-                            crate::phase_telemetry::note_memo_store(value_memoizable, inserted);
-                            crate::phase_telemetry::note_memo_len(results.len());
-                        }
+                        let value = completion.finish(value);
                         let Some((trace, compilation)) = residual_compilation else {
                             return Computation::value(value);
                         };
                         match trace
                             .borrow_mut()
-                            .finish_residual_function(compilation, value)
+                            .finish_residual_function(*compilation, value)
                         {
                             Ok(value) => Computation::value(value),
                             Err(error) => Computation::error(error),
@@ -5575,13 +5720,14 @@ fn apply_closure_choice(
 
 fn run_special_or_primitive(
     context: Rc<Context>,
-    name: &str,
+    primitive: &crate::primitives::Primitive,
     arguments: Vec<Value>,
     span: Span,
     runtime: Runtime,
     expected_result: Option<&Value>,
     application: ApplicationSite,
 ) -> Computation {
+    let name = primitive.as_str();
     if matches!(name, "@effect" | "@effect.host" | "@effect.shared") {
         let (key, operation_argument) = if name == "@effect.shared" {
             let [Value::Text(key), operations] = arguments.as_slice() else {
@@ -5852,7 +5998,7 @@ fn run_special_or_primitive(
             Err(error) => return Computation::error(error),
         }
     }
-    match run_primitive(name, arguments, span, runtime.phase) {
+    match primitive.run(arguments, span, runtime.phase) {
         Ok(value) => {
             if name == "@type.attach" {
                 context.register_effect_attachment(&runtime.module, &value);
@@ -5880,7 +6026,12 @@ fn checked_primitive_arguments(
     else {
         return vec![None; argument_count];
     };
-    let loaded = match context.modules.borrow().get(&revision.module).cloned() {
+    let loaded = match context
+        .modules
+        .borrow()
+        .get(revision.module.as_str())
+        .cloned()
+    {
         Some(loaded) => loaded,
         None => return vec![None; argument_count],
     };
@@ -6062,7 +6213,7 @@ fn intrinsic(name: String, span: Span) -> Computation {
     }
     if let Some(arity) = primitive_arity(&name) {
         return Computation::value(Value::Primitive {
-            name,
+            name: name.into(),
             arity,
             applied: Vec::new(),
         });
@@ -6797,18 +6948,6 @@ fn current_import(context: &Context, importer: &str, specifier: &str) -> Option<
         .and_then(|loaded| loaded.imports.get(specifier).cloned())
 }
 
-struct BigIntExt;
-
-impl BigIntExt {
-    fn two_to_63() -> num_bigint::BigInt {
-        num_bigint::BigInt::from(1_u64) << 63
-    }
-
-    fn two_to_63_minus_one() -> num_bigint::BigInt {
-        Self::two_to_63() - 1
-    }
-}
-
 #[cfg(test)]
 #[path = "select_type_tests.rs"]
 mod select_type_tests;
@@ -6847,7 +6986,7 @@ mod tests {
         let large = Value::Text("x".repeat(COMPTIME_ARGUMENT_BYTE_LIMIT + 1).into());
         assert!(comptime_argument(&large).is_none());
         let large_integer =
-            Value::Int(num_bigint::BigInt::from(1) << (COMPTIME_ARGUMENT_BYTE_LIMIT * 8));
+            Value::Int(crate::integer::Integer::from(1) << (COMPTIME_ARGUMENT_BYTE_LIMIT * 8));
         assert!(comptime_argument(&large_integer).is_none());
     }
 
@@ -7277,7 +7416,7 @@ mod tests {
         let source = ApplicationSite::expression(revision, ExpressionId(2));
         let frame = ClosureApplication {
             application: call,
-            creation_scope: Rc::new(Vec::new()),
+            creation_scope: Rc::new(crate::eval::EffectScope::default()),
         };
         let mut shallow = Runtime::new(Phase::Comptime, "recursive-effect.blot".to_owned());
         Rc::make_mut(&mut shallow.effect_scope).push(frame.clone());
@@ -7316,15 +7455,15 @@ mod tests {
     #[test]
     fn recursive_provenance_beyond_the_depth_limit_is_not_cacheable() {
         let revision = ModuleRevision::new("recursive-template.blot");
-        let mut effect_scope = Rc::new(Vec::new());
+        let mut effect_scope = Rc::new(crate::eval::EffectScope::default());
         for expression in 0..=MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT {
-            effect_scope = Rc::new(vec![ClosureApplication {
+            effect_scope = Rc::new(crate::eval::EffectScope::from(vec![ClosureApplication {
                 application: ApplicationSite::expression(
                     revision.clone(),
                     ExpressionId(expression as u32),
                 ),
                 creation_scope: effect_scope,
-            }]);
+            }]));
         }
         let instance = ModuleResultTemplateInstance {
             module_instances: Rc::new(Vec::new()),
@@ -7343,7 +7482,7 @@ mod tests {
     fn decoded_environment_ids_are_stable_and_distinct() {
         let context = Context::default();
         let revision = ModuleRevision::new("decoded-identities.blot");
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
 
         let first =
             context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 2);
@@ -7364,7 +7503,7 @@ mod tests {
     #[test]
     fn decoded_environment_identity_interner_prunes_dead_keys() {
         let context = Context::default();
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         for revision in 0..(DECODED_ENVIRONMENT_IDENTITY_MINIMUM_SWEEP * 2) {
             let identities = context.decoded_environment_identities(
                 &ModuleRevision::new(&format!("decoded-identities-{revision}.blot")),
@@ -7386,7 +7525,7 @@ mod tests {
         let context = Context::default();
         let path = "invalidated-decoded-identity.blot";
         let revision = ModuleRevision::new(path);
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         let first =
             context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 1)[0]
                 .as_ref()
@@ -7410,10 +7549,10 @@ mod tests {
         let context = Context::default();
         let revision = ModuleRevision::new("returned-effect.blot");
         let creation_scope = |expression| {
-            Rc::new(vec![ClosureApplication {
+            Rc::new(crate::eval::EffectScope::from(vec![ClosureApplication {
                 application: ApplicationSite::expression(revision.clone(), expression),
-                creation_scope: Rc::new(Vec::new()),
-            }])
+                creation_scope: Rc::new(crate::eval::EffectScope::default()),
+            }]))
         };
         let invocation = ApplicationSite::expression(revision.clone(), ExpressionId(3));
         let runtime_for = |creation_scope| {
@@ -7538,7 +7677,7 @@ mod operator_projection_regression_tests {
         let weak_environment = Rc::downgrade(&environment);
         let module_instances = Rc::new(Vec::new());
         let weak_instances = Rc::downgrade(&module_instances);
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         let weak_scope = Rc::downgrade(&effect_scope);
         let value = Value::Closure {
             module: Rc::new("members.blot".to_owned()),

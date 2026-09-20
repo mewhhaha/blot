@@ -46,6 +46,33 @@ These terms are logical work. A fused implementation measures a combined term
 and may subdivide it with internal counters. Serialization, copying, module
 instantiation, and host/guest transfer are reported separately when present.
 
+Concrete evaluation lazily decodes revision-local instructions. Decode time and
+binding-layout construction belong inside the operation that first demands them.
+Each function invocation owns fresh numbered binding slots; a slot resolves on
+first use, and dynamic `open` scopes retain observed lookup. Closures compact
+the invocation's captures while retaining inherited module scopes, tracked
+opens, substitutions and signatures. Recursive binding groups retain their
+original environment identity. These are code and storage optimizations, not
+result-cache eligibility proofs.
+
+Ordinary expression and call-return frames use an explicit stack. Declaration
+evaluation, effects, and residual construction cross the existing semantic
+boundary. Telemetry reports `instructions` executed, `instructionsCompiled`
+decoded during the request, `semanticSteps` for callbacks driven inside the
+instruction machine, and `peakFrames` for its maximum live continuation depth.
+`steps` still counts outer trampoline iterations; it is no longer a proxy for
+total evaluator work. Instruction dispatch and frame movement do not consume
+source fuel. Every evaluated source expression consumes the same fuel as before.
+
+Effect call provenance is a persistent sequence with a cached structural hash.
+Append shares its prefix; equality still checks structure after comparing
+hashes. This does not merge identities based on a hash collision. Small integers
+use inline signed words and promote to shared arbitrary-precision storage;
+immutable scalar type descriptors and built-in operator tables share storage.
+Immutable array clones share their element vector; element mutation detaches the
+vector and preserves the existing aggregate-identity rules. Runtime overflow
+checks and generative computations retain their existing semantics.
+
 Evaluator records retain ordered entries and copy-on-write identity. Records of
 at most eight fields use a bounded linear lookup without a separate name index.
 Larger records maintain a name-to-position index; growth and removal keep it
@@ -55,6 +82,18 @@ caller ABI. Measure reconstruction and invalidation together: avoiding index
 allocation must not merely shift its destruction to the following edit.
 
 ## 2. Benchmark classes
+
+The staged-types artifact comparison can measure a cold `compile` operation. Its
+`coldCompileMs` starts before compiler Wasm instantiation and ends after copying
+emitted Wasm and manifest bytes out of compiler memory. It includes
+source/snapshot loading, frontend registration, instruction construction,
+checking, staging, backend closure and emission. Compiler-file reading, child
+process startup, output hashing/validation, subsequent observation analysis and
+session destruction are outside this clock. `compileMs` excludes instantiation
+and source registration. In this mode, `analysisMs` is a subsequent warm
+observation and must not be compared with cold analysis measurements. Artifact
+comparisons require identical emitted Wasm and manifest hashes in addition to
+the principal type, effects, interface and target-preflight observations.
 
 The following boundaries are not interchangeable:
 

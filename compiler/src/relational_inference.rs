@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-use num_bigint::BigInt;
+use crate::integer::Integer;
 
 use super::proof::*;
 use crate::ast::{
@@ -156,7 +156,7 @@ impl<'a> Inference<'a> {
                 value: known(match crate::primitives::constant(name) {
                     Some(value) => value,
                     None => Value::Primitive {
-                        name: name.clone(),
+                        name: name.clone().into(),
                         arity: crate::primitives::primitive_arity(name)
                             .ok_or(Refusal::Unsupported)?,
                         applied: Vec::new(),
@@ -627,7 +627,7 @@ impl<'a> Inference<'a> {
             return Ok(vec![Outcome {
                 value: Operand {
                     known: Some(Value::Primitive {
-                        name: name.to_owned(),
+                        name: name.into(),
                         arity,
                         applied: Vec::new(),
                     }),
@@ -778,7 +778,7 @@ impl<'a> Inference<'a> {
     }
 }
 
-pub(crate) fn integer(value: BigInt) -> Operand {
+pub(crate) fn integer(value: Integer) -> Operand {
     Operand {
         scalar: Some(Term::Literal(value)),
         ..Operand::default()
@@ -893,7 +893,7 @@ fn inconsistent(constraints: &[Constraint]) -> bool {
         .collect::<HashSet<_>>();
     let mut distances = nodes
         .iter()
-        .map(|node| (*node, BigInt::from(0)))
+        .map(|node| (*node, Integer::from(0)))
         .collect::<HashMap<_, _>>();
     for _ in 0..nodes.len() {
         let mut changed = false;
@@ -1189,7 +1189,7 @@ impl Inference<'_> {
         }
         let mut nodes = nodes.into_iter().collect::<Vec<_>>();
         nodes.sort();
-        let mut bounds = BTreeSet::from([BigInt::from(-1), BigInt::from(0), BigInt::from(1)]);
+        let mut bounds = BTreeSet::from([Integer::from(-1), Integer::from(0), Integer::from(1)]);
         let mut operands = vec![&initial];
         operands.extend(closure.bindings.values());
         while let Some(operand) = operands.pop() {

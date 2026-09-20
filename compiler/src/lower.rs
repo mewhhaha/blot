@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use num_bigint::BigInt;
+use crate::integer::Integer;
 
 use crate::ast::{
     Arm, ArrayElement, AstArena, Branch, Declaration, DeclarationId, DeclarationKind,
@@ -224,16 +224,16 @@ fn distribute_immediate_choice_applications(arena: &mut AstArena) {
     }
 }
 
-fn integer_literal(text: &str) -> Result<BigInt, String> {
+fn integer_literal(text: &str) -> Result<Integer, String> {
     let digits = text.replace('_', "");
     if let Some(hex) = digits
         .strip_prefix("0x")
         .or_else(|| digits.strip_prefix("0X"))
     {
-        return BigInt::parse_bytes(hex.as_bytes(), 16)
+        return Integer::parse_bytes(hex.as_bytes(), 16)
             .ok_or_else(|| "invalid hexadecimal integer".to_owned());
     }
-    BigInt::from_str(&digits).map_err(|error| error.to_string())
+    Integer::from_str(&digits).map_err(|error| error.to_string())
 }
 
 fn lower_fixity(cst: &CompactCst<'_>, cursor: Cursor) -> Result<Fixity, String> {

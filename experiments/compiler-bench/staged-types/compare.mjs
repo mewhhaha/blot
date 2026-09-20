@@ -26,6 +26,7 @@ for (const argument of process.argv.slice(2)) {
       "fixture",
       "prelude",
       "telemetry",
+      "operation",
     ]).has(match[1])
   ) {
     throw new Error(`Unknown option ${match[1]}`);
@@ -43,6 +44,15 @@ assert(
 );
 const telemetryMode = option("telemetry", "on");
 assert(["on", "off"].includes(telemetryMode), "--telemetry is on or off");
+const operation = option("operation", "analysis");
+assert(
+  ["analysis", "compile"].includes(operation),
+  "--operation is analysis or compile",
+);
+assert(
+  operation !== "compile" || telemetryMode === "off",
+  "cold compilation requires --telemetry=off; traced analysis would be warm",
+);
 let requestedFactMask = 0;
 if (telemetryMode === "on") requestedFactMask = 0x80000000;
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -180,6 +190,35 @@ async function sample(wasmPath, fixture) {
     assert.equal(registered.readUInt32LE(0), 1);
     const moduleId = registered.readUInt32LE(4);
     const preparationMs = performance.now() - started;
+    let compileMs;
+    let coldCompileMs;
+    let emittedWasmSha256;
+    let emittedManifestSha256;
+    if (operation === "compile") {
+      const compiling = performance.now();
+      words(
+        "main.blot",
+        (pointer, length) =>
+          result(
+            exports.compile_compiler_session_module(session, pointer, length),
+          ),
+      );
+      const wasm = new Uint8Array(
+        exports.memory.buffer,
+        exports.compiled_wasm_pointer() >>> 0,
+        exports.compiled_wasm_length() >>> 0,
+      ).slice();
+      const manifest = new Uint8Array(
+        exports.memory.buffer,
+        exports.compiled_manifest_pointer() >>> 0,
+        exports.compiled_manifest_length() >>> 0,
+      ).slice();
+      compileMs = performance.now() - compiling;
+      coldCompileMs = performance.now() - created;
+      assert(WebAssembly.validate(wasm), "compiled module must validate");
+      emittedWasmSha256 = digest(wasm);
+      emittedManifestSha256 = digest(manifest);
+    }
     const analyzed = performance.now();
     const analysis = JSON.parse(
       decoder.decode(
@@ -199,6 +238,7 @@ async function sample(wasmPath, fixture) {
     assert.equal(analysis.targetPreflight.supported, true);
     return {
       schema: 2,
+      operation,
       fixture,
       telemetryMode,
       prelude: preludeMode,
@@ -216,6 +256,10 @@ async function sample(wasmPath, fixture) {
       creationMs,
       preparationMs,
       analysisMs,
+      compileMs,
+      coldCompileMs,
+      emittedWasmSha256,
+      emittedManifestSha256,
       type: analysis.type,
       effects: analysis.effects,
       interfaceKey: analysis.interfaceKey,
@@ -256,6 +300,7 @@ if (options.has("sample")) {
           `--fixture=${fixture}`,
           `--prelude=${preludeMode}`,
           `--telemetry=${telemetryMode}`,
+          `--operation=${operation}`,
         ], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
         assert.equal(
           child.status,
@@ -269,6 +314,8 @@ if (options.has("sample")) {
           effects: observed.effects,
           interfaceKey: observed.interfaceKey,
           targetPreflight: observed.targetPreflight,
+          emittedWasmSha256: observed.emittedWasmSha256,
+          emittedManifestSha256: observed.emittedManifestSha256,
         };
         if (expectedSemantics.has(fixture)) {
           assert.deepEqual(

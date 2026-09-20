@@ -7,7 +7,7 @@ pub(crate) mod proof;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use num_bigint::BigInt;
+use crate::integer::Integer;
 
 use crate::ast::{Expression, ExpressionId, Module, Pattern, PatternId, ShapeMember};
 use crate::eval::Context;
@@ -23,7 +23,7 @@ pub enum Measure {
 pub struct Summary {
     pub measure: Measure,
     pub parameter: usize,
-    pub offset: BigInt,
+    pub offset: Integer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -125,7 +125,7 @@ impl Summaries {
                 return Some(Summary {
                     measure,
                     parameter: 0,
-                    offset: BigInt::from(0),
+                    offset: Integer::from(0),
                 });
             }
             return None;
@@ -623,7 +623,7 @@ fn result_measure(
             return Some(Summary {
                 measure,
                 parameter,
-                offset: BigInt::from(0),
+                offset: Integer::from(0),
             });
         }
         if matches!(name.as_str(), "@int.add" | "@int.sub") && arguments.len() == 2 {
@@ -749,7 +749,11 @@ fn is_parameter(module: &Module, expression: ExpressionId, parameter: &str) -> b
     }
 }
 
-fn integer(module: &Module, expression: ExpressionId, environment: &Environment) -> Option<BigInt> {
+fn integer(
+    module: &Module,
+    expression: ExpressionId,
+    environment: &Environment,
+) -> Option<Integer> {
     if let Expression::Int { value, .. } = &module.arena.expressions[expression.0 as usize] {
         return Some(value.clone());
     }

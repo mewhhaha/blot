@@ -544,7 +544,7 @@ impl CompilerSession {
         } else {
             let evaluated = if let Some(capsule) = &result_template {
                 let base_module_instances = Vec::new();
-                let base_effect_scope = Rc::new(Vec::new());
+                let base_effect_scope = Rc::new(crate::eval::EffectScope::default());
                 let environment = capsule.decode(
                     path,
                     module.as_ref(),
@@ -3639,7 +3639,7 @@ mod tests {
         .expect("snapshot result should provide application provenance");
         let runtime = Runtime::new(Phase::Comptime, MODULE_PATH.to_owned());
         let constructor = Value::Primitive {
-            name: "@effect".to_owned(),
+            name: "@effect".into(),
             arity: 1,
             applied: Vec::new(),
         };
@@ -3803,7 +3803,7 @@ mod tests {
         .expect("consumer result should provide application provenance");
         let runtime = Runtime::new(Phase::Comptime, CONSUMER_PATH.to_owned());
         let constructor = Value::Primitive {
-            name: "@effect".to_owned(),
+            name: "@effect".into(),
             arity: 1,
             applied: Vec::new(),
         };
@@ -5721,6 +5721,10 @@ mod tests {
             "uniqueInputs",
             "runs",
             "steps",
+            "instructions",
+            "instructionsCompiled",
+            "semanticSteps",
+            "peakFrames",
             "closureApplications",
             "moduleApplications",
             "conversionCalls",

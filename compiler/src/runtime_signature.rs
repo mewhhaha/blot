@@ -313,8 +313,8 @@ mod tests {
             .unwrap();
         let positive = Type::Range {
             domain: Domain::Int,
-            low: Some(Scalar::Int(BigInt::from(1))),
-            high: Some(Scalar::Int(BigInt::from(i64::MAX))),
+            low: Some(Scalar::Int(Integer::from(1))),
+            high: Some(Scalar::Int(Integer::from(i64::MAX))),
         };
         assert!(
             checker

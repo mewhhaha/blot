@@ -10,6 +10,7 @@ mod fixity;
 mod frontend;
 mod hir;
 mod host_transport;
+mod integer;
 mod layout;
 mod lower;
 mod ownership;

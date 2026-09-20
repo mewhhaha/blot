@@ -3,8 +3,8 @@ use crate::value::TypeValue;
 
 fn interval(low: Option<i64>, high: Option<i64>) -> Interval {
     Interval {
-        low: low.map(BigInt::from),
-        high: high.map(BigInt::from),
+        low: low.map(Integer::from),
+        high: high.map(Integer::from),
     }
 }
 

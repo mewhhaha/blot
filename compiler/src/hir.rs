@@ -943,7 +943,7 @@ struct RuntimeCapturePlan {
 pub(crate) enum ResidualFunctionCall {
     Static(&'static str),
     Existing(Value),
-    Compile(ResidualFunctionCompilation),
+    Compile(Box<ResidualFunctionCompilation>),
 }
 
 pub(crate) struct ResidualClosure<'a> {
@@ -3834,7 +3834,7 @@ impl ResidualTrace {
                 let product_type = self.capture_product_type(&captures);
                 Ok(vec![ClosureAlternative {
                     source: ChoiceSource::Primitive {
-                        name: name.clone(),
+                        name: name.to_string(),
                         arity: *arity,
                         applied: applied.clone(),
                     },
@@ -4283,7 +4283,7 @@ impl ResidualTrace {
                         .collect::<Result<Vec<_>, Diagnostic>>()?,
                 };
                 Ok(Value::Primitive {
-                    name: name.clone(),
+                    name: name.clone().into(),
                     arity: *arity,
                     applied,
                 })
@@ -5103,23 +5103,25 @@ impl ResidualTrace {
         let environment = replace_environment_runtime(context, lexical_closure, &replacements)?;
         let mut caller_arguments = vec![caller_argument.id];
         caller_arguments.extend(captures.iter().map(|capture| capture.id));
-        Ok(ResidualFunctionCall::Compile(ResidualFunctionCompilation {
-            host_callback,
-            source_signature: signature_value.clone(),
-            cache_request,
-            instance_facts,
-            argument,
-            environment,
-            function,
-            signature: signature_id,
-            result_type,
-            result_ownership,
-            caller_arguments,
-            name,
-            reuse,
-            span,
-            source_span,
-        }))
+        Ok(ResidualFunctionCall::Compile(Box::new(
+            ResidualFunctionCompilation {
+                host_callback,
+                source_signature: signature_value.clone(),
+                cache_request,
+                instance_facts,
+                argument,
+                environment,
+                function,
+                signature: signature_id,
+                result_type,
+                result_ownership,
+                caller_arguments,
+                name,
+                reuse,
+                span,
+                source_span,
+            },
+        )))
     }
 
     fn forwarded_parameter_result_type(

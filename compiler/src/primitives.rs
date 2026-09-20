@@ -1,5 +1,5 @@
+use crate::integer::Integer;
 use crate::value::TypeValue;
-use num_bigint::BigInt;
 use num_traits::{ToPrimitive, Zero};
 
 use crate::ast::Span;
@@ -19,30 +19,124 @@ const I16X8_MASK: &str = "I16x8Mask";
 const I8X16: &str = "I8x16";
 const I8X16_MASK: &str = "I8x16Mask";
 
+/// Common arithmetic is decoded once; remaining names share their storage.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Primitive {
+    IntAdd,
+    IntSub,
+    IntMul,
+    IntDiv,
+    IntRem,
+    IntNeg,
+    IntCmp,
+    Named(std::rc::Rc<str>),
+}
+
+impl Primitive {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::IntAdd => "@int.add",
+            Self::IntSub => "@int.sub",
+            Self::IntMul => "@int.mul",
+            Self::IntDiv => "@int.div",
+            Self::IntRem => "@int.rem",
+            Self::IntNeg => "@int.neg",
+            Self::IntCmp => "@int.cmp",
+            Self::Named(name) => name,
+        }
+    }
+
+    pub(crate) fn run(
+        &self,
+        arguments: Vec<Value>,
+        span: Span,
+        phase: Phase,
+    ) -> Result<Value, Diagnostic> {
+        match self {
+            Self::IntAdd => integer_binary(arguments, span, phase, self, |a, b| a + b),
+            Self::IntSub => integer_binary(arguments, span, phase, self, |a, b| a - b),
+            Self::IntMul => integer_binary(arguments, span, phase, self, |a, b| a * b),
+            Self::IntDiv => integer_divide(arguments, span, phase, false),
+            Self::IntRem => integer_divide(arguments, span, phase, true),
+            Self::IntNeg => integer_result(
+                -integer(&arguments[0], span, self)?.clone(),
+                span,
+                phase,
+                self,
+            ),
+            Self::IntCmp => Ok(ordering(integer(&arguments[0], span, self)?.cmp(integer(
+                &arguments[1],
+                span,
+                self,
+            )?))),
+            Self::Named(name) => run_primitive(name, arguments, span, phase),
+        }
+    }
+}
+
+impl From<&str> for Primitive {
+    fn from(name: &str) -> Self {
+        match name {
+            "@int.add" => Self::IntAdd,
+            "@int.sub" => Self::IntSub,
+            "@int.mul" => Self::IntMul,
+            "@int.div" => Self::IntDiv,
+            "@int.rem" => Self::IntRem,
+            "@int.neg" => Self::IntNeg,
+            "@int.cmp" => Self::IntCmp,
+            name => Self::Named(name.into()),
+        }
+    }
+}
+
+impl From<String> for Primitive {
+    fn from(name: String) -> Self {
+        name.as_str().into()
+    }
+}
+
+impl std::ops::Deref for Primitive {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for Primitive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
+impl PartialEq<str> for Primitive {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for Primitive {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+thread_local! {
+    static SCALAR_TYPES: [Value; 4] = [Domain::Int, Domain::Text, Domain::Float, Domain::Float32].map(|domain| {
+        let (low, high) = if domain == Domain::Int {
+            (Value::Int(Integer::from(i64::MIN)), Value::Int(Integer::from(i64::MAX)))
+        } else { (Value::Unbounded, Value::Unbounded) };
+        Value::Range { low: TypeValue::new(low), high: TypeValue::new(high), domain: Some(domain) }
+    });
+}
+
 pub fn constant(name: &str) -> Option<Value> {
     match name {
         "@type.unbounded" => Some(Value::Unbounded),
         "@type.unit" => Some(Value::Unit),
-        "@type.int" => Some(Value::Range {
-            low: TypeValue::new(Value::Int(-(BigInt::from(1_u64) << 63_usize))),
-            high: TypeValue::new(Value::Int((BigInt::from(1_u64) << 63_usize) - 1)),
-            domain: Some(Domain::Int),
-        }),
-        "@type.text" => Some(Value::Range {
-            low: TypeValue::new(Value::Unbounded),
-            high: TypeValue::new(Value::Unbounded),
-            domain: Some(Domain::Text),
-        }),
-        "@type.float" => Some(Value::Range {
-            low: TypeValue::new(Value::Unbounded),
-            high: TypeValue::new(Value::Unbounded),
-            domain: Some(Domain::Float),
-        }),
-        "@type.float32" => Some(Value::Range {
-            low: TypeValue::new(Value::Unbounded),
-            high: TypeValue::new(Value::Unbounded),
-            domain: Some(Domain::Float32),
-        }),
+        "@type.int" => Some(SCALAR_TYPES.with(|types| types[0].clone())),
+        "@type.text" => Some(SCALAR_TYPES.with(|types| types[1].clone())),
+        "@type.float" => Some(SCALAR_TYPES.with(|types| types[2].clone())),
+        "@type.float32" => Some(SCALAR_TYPES.with(|types| types[3].clone())),
         "@type.f32x4" => Some(Value::OpaqueType(F32X4.to_owned())),
         "@type.f32x4_mask" => Some(Value::OpaqueType(F32X4_MASK.to_owned())),
         "@type.i32x4" => Some(Value::OpaqueType(I32X4.to_owned())),
@@ -501,7 +595,7 @@ pub fn run_primitive(
         }
         "@region.length" => {
             let (_, start, end) = region(&arguments[0], span, name)?;
-            Ok(Value::Int(BigInt::from(end - start)))
+            Ok(Value::Int(Integer::from(end - start)))
         }
         "@region.get" => {
             let (store, start, end) = region(&arguments[0], span, name)?;
@@ -706,7 +800,7 @@ pub fn run_primitive(
             }
             Ok(Value::Array(values.clone().into()))
         }
-        "@array.len" => Ok(Value::Int(BigInt::from(
+        "@array.len" => Ok(Value::Int(Integer::from(
             array(&arguments[0], span, name)?.len(),
         ))),
         "@array.copy" => match &arguments[0] {
@@ -737,7 +831,7 @@ pub fn run_primitive(
             Ok(Value::Array(values.into()))
         }
         "@array.indexed" => Ok(Value::Shape(OrderedFields::from([
-            ("state".to_owned(), Value::Int(BigInt::zero())),
+            ("state".to_owned(), Value::Int(Integer::zero())),
             (
                 "step".to_owned(),
                 Value::IndexedStep {
@@ -747,22 +841,8 @@ pub fn run_primitive(
         ]))),
         "@array.take" => take(arguments, span),
         "@array.split" => split(arguments, span),
-        "@int.add" => integer_binary(arguments, span, phase, name, |left, right| left + right),
-        "@int.sub" => integer_binary(arguments, span, phase, name, |left, right| left - right),
-        "@int.mul" => integer_binary(arguments, span, phase, name, |left, right| left * right),
-        "@int.div" => integer_divide(arguments, span, phase, false),
-        "@int.rem" => integer_divide(arguments, span, phase, true),
-        "@int.neg" => integer_result(
-            -integer(&arguments[0], span, name)?.clone(),
-            span,
-            phase,
-            name,
-        ),
-        "@int.cmp" => Ok(ordering(integer(&arguments[0], span, name)?.cmp(integer(
-            &arguments[1],
-            span,
-            name,
-        )?))),
+        "@int.add" | "@int.sub" | "@int.mul" | "@int.div" | "@int.rem" | "@int.neg"
+        | "@int.cmp" => Primitive::from(name).run(arguments, span, phase),
         "@text.concat" => Ok(Value::Text(
             format!(
                 "{}{}",
@@ -784,10 +864,10 @@ pub fn run_primitive(
             }
             Ok(Value::Text(joined.into()))
         }
-        "@text.len" => Ok(Value::Int(BigInt::from(
+        "@text.len" => Ok(Value::Int(Integer::from(
             text(&arguments[0], span, name)?.chars().count(),
         ))),
-        "@text.byte_len" => Ok(Value::Int(BigInt::from(
+        "@text.byte_len" => Ok(Value::Int(Integer::from(
             text(&arguments[0], span, name)?.len(),
         ))),
         "@text.slice_bytes" => {
@@ -821,7 +901,9 @@ pub fn run_primitive(
                 })?;
             let found = suffix.find(query).map(|relative| start + relative);
             Ok(Value::Int(
-                found.map(BigInt::from).unwrap_or_else(|| BigInt::from(-1)),
+                found
+                    .map(Integer::from)
+                    .unwrap_or_else(|| Integer::from(-1)),
             ))
         }
         "@text.scalar_at" => {
@@ -848,7 +930,7 @@ pub fn run_primitive(
                     name: "Some".to_owned(),
                     payload: Some(Box::new(tuple(vec![
                         Value::Text(scalar.to_string().into()),
-                        Value::Int(BigInt::from(byte + scalar.len_utf8())),
+                        Value::Int(Integer::from(byte + scalar.len_utf8())),
                     ]))),
                 },
                 None => Value::Tag {
@@ -885,12 +967,12 @@ pub fn run_primitive(
                 .map(|(byte, _)| byte)
                 .or_else(|| (start == count).then_some(source.len()))
             else {
-                return Ok(Value::Int(BigInt::from(-1)));
+                return Ok(Value::Int(Integer::from(-1)));
             };
             let found = source[start_byte..]
                 .find(query)
                 .map(|relative| start + source[start_byte..start_byte + relative].chars().count());
-            Ok(Value::Int(BigInt::from(
+            Ok(Value::Int(Integer::from(
                 found
                     .and_then(|index| i64::try_from(index).ok())
                     .unwrap_or(-1),
@@ -965,7 +1047,7 @@ pub fn run_primitive(
                     span,
                 ));
             }
-            Ok(Value::Int(BigInt::from(value.trunc() as i64)))
+            Ok(Value::Int(Integer::from(value.trunc() as i64)))
         }
         "@f32.add" => float32_binary(arguments, span, name, |left, right| left + right),
         "@f32.sub" => float32_binary(arguments, span, name, |left, right| left - right),
@@ -1008,12 +1090,12 @@ pub fn run_primitive(
         "@f32x4.less" => vector_compare(arguments, span, name, |left, right| left < right),
         "@f32x4.select" => vector_select(arguments, span),
         "@f32x4.shuffle" => vector_shuffle(arguments, span),
-        "@f32x4.mask_all" => Ok(Value::Int(BigInt::from(
+        "@f32x4.mask_all" => Ok(Value::Int(Integer::from(
             vector_mask(&arguments[0], span, name)?
                 .iter()
                 .all(|lane| *lane),
         ))),
-        "@f32x4.mask_any" => Ok(Value::Int(BigInt::from(
+        "@f32x4.mask_any" => Ok(Value::Int(Integer::from(
             vector_mask(&arguments[0], span, name)?
                 .iter()
                 .any(|lane| *lane),
@@ -1086,14 +1168,14 @@ fn run_integer_simd(
                 ));
             }
             let lanes = integer_vector(&arguments[0], bits, span, name)?;
-            return Ok(Value::Int(BigInt::from(lanes[index])));
+            return Ok(Value::Int(Integer::from(lanes[index])));
         }
         if let Some(lane) = operation.strip_prefix("lane") {
             let index = lane.parse::<usize>().map_err(|_| {
                 Diagnostic::new("BLOT_TYPE", format!("{name} has an invalid lane."), span)
             })?;
             let lanes = integer_vector(&arguments[0], bits, span, name)?;
-            return Ok(Value::Int(BigInt::from(lanes[index])));
+            return Ok(Value::Int(Integer::from(lanes[index])));
         }
         if let Some(lane) = operation.strip_prefix("with_lane") {
             let index = lane.parse::<usize>().map_err(|_| {
@@ -1113,7 +1195,7 @@ fn run_integer_simd(
                 "mask_any" => i64::from(lanes.iter().any(|lane| *lane)),
                 _ => return Err(Diagnostic::new("BLOT_UNKNOWN_PRIMITIVE", name, span)),
             };
-            return Ok(Value::Int(BigInt::from(answer)));
+            return Ok(Value::Int(Integer::from(answer)));
         }
         if operation == "select" {
             let selected = integer_mask(&arguments[0], bits, span, name)?;
@@ -1264,8 +1346,8 @@ fn integer_mask<'a>(
     ))
 }
 
-fn wrap_lane(value: &BigInt, bits: u8) -> i32 {
-    let modulus = BigInt::from(1_u8) << usize::from(bits);
+fn wrap_lane(value: &Integer, bits: u8) -> i32 {
+    let modulus = Integer::from(1_u8) << usize::from(bits);
     let sign = &modulus >> 1_usize;
     let mut wrapped = value % &modulus;
     if wrapped.sign() == num_bigint::Sign::Minus {
@@ -1300,7 +1382,7 @@ fn type_error(what: &str, expected: &str, value: &Value, span: Span) -> Diagnost
     )
 }
 
-fn integer<'a>(value: &'a Value, span: Span, what: &str) -> Result<&'a BigInt, Diagnostic> {
+fn integer<'a>(value: &'a Value, span: Span, what: &str) -> Result<&'a Integer, Diagnostic> {
     match value {
         Value::Int(value) => Ok(value),
         _ => Err(type_error(what, "an integer", value, span)),
@@ -1430,14 +1512,12 @@ fn out_of_bounds(index: usize, length: usize, span: Span) -> Diagnostic {
 }
 
 fn integer_result(
-    value: BigInt,
+    value: Integer,
     span: Span,
     phase: Phase,
     operation: &str,
 ) -> Result<Value, Diagnostic> {
-    let low = -(BigInt::from(1_u64) << 63_usize);
-    let high = (BigInt::from(1_u64) << 63_usize) - 1;
-    if phase == Phase::Runtime && (value < low || value > high) {
+    if phase == Phase::Runtime && value.to_i64().is_none() {
         return Err(Diagnostic::new(
             "BLOT_INTEGER_OVERFLOW",
             format!("{operation} produced {value}, outside signed i64."),
@@ -1452,7 +1532,7 @@ fn integer_binary(
     span: Span,
     phase: Phase,
     operation: &str,
-    apply: impl FnOnce(BigInt, BigInt) -> BigInt,
+    apply: impl FnOnce(Integer, Integer) -> Integer,
 ) -> Result<Value, Diagnostic> {
     integer_result(
         apply(
@@ -2275,7 +2355,7 @@ fn json_to_value(value: serde_json::Value, span: Span) -> Result<Value, Diagnost
         serde_json::Value::Number(number) => {
             let spelling = number.to_string();
             if !spelling.contains('.') && !spelling.contains('e') && !spelling.contains('E') {
-                let value = spelling.parse::<BigInt>().map_err(|error| {
+                let value = spelling.parse::<Integer>().map_err(|error| {
                     Diagnostic::new(
                         "BLOT_JSON_NUMBER",
                         format!("JSON integer {spelling} is not representable: {error}."),
@@ -2340,7 +2420,7 @@ mod tests {
     #[test]
     fn text_cursor_rejects_invalid_byte_offsets_with_source_evidence() {
         let span = Span { start: 4, end: 9 };
-        let invalid = [(-1).into(), 1.into(), 3.into(), BigInt::from(1) << 80];
+        let invalid = [(-1).into(), 1.into(), 3.into(), Integer::from(1) << 80];
         for byte in invalid {
             let error = run_primitive(
                 "@text.next_byte",
@@ -2401,7 +2481,7 @@ mod tests {
         let span = Span { start: 1, end: 2 };
         let converted = run_primitive(
             "@f32.of_int",
-            vec![Value::Int(BigInt::from(16_777_217))],
+            vec![Value::Int(Integer::from(16_777_217))],
             span,
             Phase::Comptime,
         )
@@ -2441,22 +2521,22 @@ mod tests {
     #[test]
     fn large_type_unions_preserve_first_occurrence_order_and_remove_duplicates() {
         const MEMBER_COUNT: usize = 4_096;
-        let mut value = Value::Int(BigInt::from(0));
+        let mut value = Value::Int(Integer::from(0));
         for member in 1..MEMBER_COUNT {
-            value = union(value, Value::Int(BigInt::from(member)));
+            value = union(value, Value::Int(Integer::from(member)));
         }
-        value = union(value, Value::Int(BigInt::from(MEMBER_COUNT / 2)));
+        value = union(value, Value::Int(Integer::from(MEMBER_COUNT / 2)));
 
         let Value::Union(members) = value else {
             panic!("large type union collapsed to one member");
         };
         assert_eq!(members.len(), MEMBER_COUNT);
         for (expected, member) in members.iter().enumerate() {
-            assert!(matches!(member, Value::Int(value) if value == &BigInt::from(expected)));
+            assert!(matches!(member, Value::Int(value) if value == &Integer::from(expected)));
         }
         let original = members.clone();
         let mut extended = members;
-        assert!(extended.insert_unique(Value::Int(BigInt::from(MEMBER_COUNT))));
+        assert!(extended.insert_unique(Value::Int(Integer::from(MEMBER_COUNT))));
         assert_eq!(original.len(), MEMBER_COUNT);
         assert_eq!(extended.len(), MEMBER_COUNT + 1);
     }
@@ -2466,7 +2546,7 @@ mod tests {
         let span = Span { start: 1, end: 2 };
         let mut scratch = run_primitive(
             "@scratch.with_capacity",
-            vec![Value::Int(BigInt::from(1))],
+            vec![Value::Int(Integer::from(1))],
             span,
             Phase::Comptime,
         )
@@ -2474,7 +2554,7 @@ mod tests {
         for value in [1, 2, 3] {
             scratch = run_primitive(
                 "@scratch.push",
-                vec![scratch, Value::Int(BigInt::from(value))],
+                vec![scratch, Value::Int(Integer::from(value))],
                 span,
                 Phase::Comptime,
             )

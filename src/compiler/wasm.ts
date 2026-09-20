@@ -442,6 +442,10 @@ export interface CompilerEvalTelemetry {
   readonly hotOverflow: number;
   readonly runs: number;
   readonly steps: number;
+  readonly instructions: number;
+  readonly instructionsCompiled: number;
+  readonly semanticSteps: number;
+  readonly peakFrames: number;
   readonly closureApplications: number;
   readonly moduleApplications: number;
   readonly moduleResultHits: number;

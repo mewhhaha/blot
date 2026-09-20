@@ -317,7 +317,7 @@ impl Expansion<'_> {
     }
 }
 
-fn integer(value: num_bigint::BigInt) -> Operand {
+fn integer(value: crate::integer::Integer) -> Operand {
     let term = Term::Literal(value);
     Operand {
         term: Some(term.clone()),
@@ -378,7 +378,7 @@ fn resolved_value(
             }
         }
         Expression::Intrinsic { name, .. } => Some(Value::Primitive {
-            name: name.clone(),
+            name: name.clone().into(),
             arity: crate::primitives::primitive_arity(name)?,
             applied: Vec::new(),
         }),

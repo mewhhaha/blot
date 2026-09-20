@@ -187,7 +187,7 @@ mod tests {
 
     fn unsupported() -> Value {
         Value::Primitive {
-            name: "@int.add".to_owned(),
+            name: "@int.add".into(),
             arity: 2,
             applied: Vec::new(),
         }

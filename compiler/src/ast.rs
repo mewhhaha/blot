@@ -1,4 +1,4 @@
-use num_bigint::BigInt;
+use crate::integer::Integer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -55,7 +55,7 @@ pub enum Pattern {
             serialize_with = "serialize_big_int",
             deserialize_with = "deserialize_big_int"
         )]
-        value: BigInt,
+        value: Integer,
         span: Span,
     },
     Float {
@@ -140,7 +140,7 @@ pub enum Expression {
             serialize_with = "serialize_big_int",
             deserialize_with = "deserialize_big_int"
         )]
-        value: BigInt,
+        value: Integer,
         span: Span,
     },
     Float {
@@ -641,14 +641,14 @@ fn validate_span(span: Span, location: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn serialize_big_int<S>(value: &BigInt, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_big_int<S>(value: &Integer, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     serializer.serialize_str(&value.to_string())
 }
 
-fn deserialize_big_int<'de, D>(deserializer: D) -> Result<BigInt, D::Error>
+fn deserialize_big_int<'de, D>(deserializer: D) -> Result<Integer, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

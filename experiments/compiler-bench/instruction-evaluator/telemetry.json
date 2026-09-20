@@ -1,0 +1,694 @@
+{
+  "baseline": {
+    "schema": 2,
+    "operation": "analysis",
+    "fixture": "full",
+    "telemetryMode": "on",
+    "prelude": "snapshot",
+    "wasmSha256": "da52e10c08f6532a2b3a9ceb07509ffcfe564e88e4aa8d02f3108e271822be8d",
+    "inputs": {
+      "prelude": "257f18f8fbcd0b7d7c991d0f6cf6af4f51e0c1f5b7704fb11e99845848e1064f",
+      "snapshot": "d16f061b9bb08557cc6d3712f6feff61404d68738d3688a354dc67f26aff6765",
+      "framework": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15",
+      "main": "8ec9d28a1c8c6b9bd4a345881e91a0c2c6b55f147f5e535d217459289d324054"
+    },
+    "node": "v24.12.0",
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "platform": "linux",
+    "arch": "x64",
+    "creationMs": 8.676462,
+    "preparationMs": 98.774463,
+    "analysisMs": 6646.31256,
+    "type": "{ .run = Int -> Int }",
+    "effects": "",
+    "interfaceKey": "[\"{ .run = Int -> Int }\",\"\"]",
+    "targetPreflight": {
+      "supported": true,
+      "code": null,
+      "export": null,
+      "inferredType": "{ .run = Int -> Int }",
+      "unsupportedComponent": null,
+      "alternatives": []
+    },
+    "telemetry": {
+      "schema": 2,
+      "clock": "host-imported blot.now_ms (performance.now)",
+      "peakSemantics": "solverWorklistPeak in each workDelta is the cumulative request peak observed at that phase boundary (monotonic within a request), not a phase-local maximum",
+      "deltaSemantics": "deltas are saturating: a counter reset by a nested request inside the span clamps at 0 and is named in counterResets",
+      "spanSemantics": "phase milliseconds are sequential guest wall spans; subSpans charge a phase once (see the other/conversion detail notes); target-preflight evalMsWithinPreflight overlaps its sequential sub-spans and must never be summed with them",
+      "phases": [
+        {
+          "name": "semantic-preparation",
+          "milliseconds": 6216.683072999999,
+          "workDelta": {
+            "schema": 3,
+            "typeNodes": 54368,
+            "typeInterns": 319962,
+            "constraints": 77836,
+            "settleVisits": 443670,
+            "freshenVisits": 36516,
+            "unionVisits": 53694,
+            "boundaryMaterializations": 2561,
+            "captureCandidates": 937,
+            "capturesBridged": 768,
+            "interfaceFieldsDemanded": 21,
+            "solverWorklistPeak": 1187
+          },
+          "counterResets": [],
+          "subSpans": [
+            {
+              "name": "eval",
+              "milliseconds": 4663.674306000004
+            },
+            {
+              "name": "conversion",
+              "milliseconds": 13.682190999999591,
+              "detail": {
+                "insideEvalMs": 0,
+                "outsideEvalMs": 13.682190999999591
+              }
+            },
+            {
+              "name": "coverage",
+              "milliseconds": 2.623981000001578
+            },
+            {
+              "name": "ownership",
+              "milliseconds": 17.201293000000476
+            },
+            {
+              "name": "safety",
+              "milliseconds": 9.73320600000062
+            },
+            {
+              "name": "other",
+              "milliseconds": 1509.7680959999925,
+              "detail": {
+                "note": "phase wall minus disjoint children; inference and biunification live here"
+              }
+            }
+          ]
+        },
+        {
+          "name": "check",
+          "milliseconds": 0.2633990000003905,
+          "workDelta": {
+            "schema": 3,
+            "typeNodes": 0,
+            "typeInterns": 0,
+            "constraints": 0,
+            "settleVisits": 0,
+            "freshenVisits": 0,
+            "unionVisits": 0,
+            "boundaryMaterializations": 0,
+            "captureCandidates": 0,
+            "capturesBridged": 0,
+            "interfaceFieldsDemanded": 0,
+            "solverWorklistPeak": 1187
+          },
+          "counterResets": [],
+          "subSpans": [
+            {
+              "name": "eval",
+              "milliseconds": 0
+            },
+            {
+              "name": "conversion",
+              "milliseconds": 0,
+              "detail": {
+                "insideEvalMs": 0,
+                "outsideEvalMs": 0
+              }
+            },
+            {
+              "name": "coverage",
+              "milliseconds": 0
+            },
+            {
+              "name": "ownership",
+              "milliseconds": 0
+            },
+            {
+              "name": "safety",
+              "milliseconds": 0
+            },
+            {
+              "name": "other",
+              "milliseconds": 0.2633990000003905,
+              "detail": {
+                "note": "phase wall minus disjoint children; inference and biunification live here"
+              }
+            }
+          ]
+        },
+        {
+          "name": "fact-materialization",
+          "milliseconds": 82.15510600000016,
+          "workDelta": {
+            "schema": 3,
+            "typeNodes": 0,
+            "typeInterns": 0,
+            "constraints": 0,
+            "settleVisits": 2,
+            "freshenVisits": 0,
+            "unionVisits": 0,
+            "boundaryMaterializations": 0,
+            "captureCandidates": 0,
+            "capturesBridged": 0,
+            "interfaceFieldsDemanded": 0,
+            "solverWorklistPeak": 1187
+          },
+          "counterResets": [],
+          "subSpans": [
+            {
+              "name": "eval",
+              "milliseconds": 0
+            },
+            {
+              "name": "conversion",
+              "milliseconds": 0,
+              "detail": {
+                "insideEvalMs": 0,
+                "outsideEvalMs": 0
+              }
+            },
+            {
+              "name": "coverage",
+              "milliseconds": 0
+            },
+            {
+              "name": "ownership",
+              "milliseconds": 0
+            },
+            {
+              "name": "safety",
+              "milliseconds": 0
+            },
+            {
+              "name": "other",
+              "milliseconds": 82.15510600000016,
+              "detail": {
+                "note": "phase wall minus disjoint children; inference and biunification live here"
+              }
+            }
+          ]
+        },
+        {
+          "name": "target-preflight",
+          "milliseconds": 338.4011609999998,
+          "workDelta": {
+            "schema": 3,
+            "typeNodes": 0,
+            "typeInterns": 0,
+            "constraints": 0,
+            "settleVisits": 0,
+            "freshenVisits": 0,
+            "unionVisits": 99,
+            "boundaryMaterializations": 0,
+            "captureCandidates": 0,
+            "capturesBridged": 0,
+            "interfaceFieldsDemanded": 0,
+            "solverWorklistPeak": 1187
+          },
+          "counterResets": [
+            "typeNodes",
+            "typeInterns"
+          ],
+          "subSpans": [
+            {
+              "name": "re-prepare",
+              "milliseconds": 36.45260800000051
+            },
+            {
+              "name": "check",
+              "milliseconds": 0.3127989999993588
+            },
+            {
+              "name": "hir-elaborate",
+              "milliseconds": 300.3492290000004
+            },
+            {
+              "name": "backend-close",
+              "milliseconds": 1.1189949999998134
+            },
+            {
+              "name": "other",
+              "milliseconds": 0.16752999999971507
+            }
+          ],
+          "detail": {
+            "evalMsWithinPreflight": 0.02050000000053842,
+            "evalMsNote": "informational overlap with the sequential sub-spans above; never sum it with them",
+            "closedProgramCacheHit": false
+          }
+        }
+      ],
+      "eval": {
+        "expressionCalls": 7456,
+        "bindingCalls": 2059,
+        "cacheHits": 0,
+        "uniqueInputs": 5052,
+        "uniqueInputSemantics": "distinct lossy input fingerprints over Checker-level eval calls (module, pattern/expression, phase, bounded environment walk); a lower bound on truly distinct inputs, never proof of equality",
+        "hotExpressions": [
+          {
+            "module": "framework.blot",
+            "expression": 573,
+            "calls": 93
+          },
+          {
+            "module": "framework.blot",
+            "expression": 596,
+            "calls": 93
+          },
+          {
+            "module": "framework.blot",
+            "expression": 627,
+            "calls": 93
+          },
+          {
+            "module": "prelude.blot",
+            "expression": 9412,
+            "calls": 93
+          },
+          {
+            "module": "prelude.blot",
+            "expression": 9420,
+            "calls": 93
+          },
+          {
+            "module": "prelude.blot",
+            "expression": 9421,
+            "calls": 93
+          },
+          {
+            "module": "prelude.blot",
+            "expression": 9424,
+            "calls": 93
+          },
+          {
+            "module": "prelude.blot",
+            "expression": 9429,
+            "calls": 93
+          }
+        ],
+        "hotOverflow": 0,
+        "runs": 11265,
+        "steps": 2237600,
+        "closureApplications": 332118,
+        "moduleApplications": 4,
+        "moduleResultHits": 0,
+        "memoEligible": 151982,
+        "memoProbes": 151655,
+        "memoHits": 65271,
+        "memoStores": 45053,
+        "memoStoreDroppedAtLimit": 0,
+        "memoNonmemoizableResults": 41273,
+        "memoUniqueMax": 45053,
+        "conversionCalls": 5638,
+        "conversionInsideEvalCalls": 0,
+        "conversionOutsideEvalCalls": 5638,
+        "templateHits": 0,
+        "reconstructionsAdmitted": 3,
+        "reconstructionsDecodedOk": 3,
+        "reconstructionsDecodedErr": 0,
+        "reconstructionsFallbackFullEval": 0
+      },
+      "structural": {
+        "internHits": 266257,
+        "internMisses": 54656,
+        "sameTypeCalls": 72509,
+        "coverageCalls": 674,
+        "ownershipCalls": 2,
+        "safetyCalls": 2
+      },
+      "requestWork": {
+        "schema": 3,
+        "typeNodes": 0,
+        "typeInterns": 0,
+        "constraints": 77836,
+        "settleVisits": 443672,
+        "freshenVisits": 36516,
+        "unionVisits": 53793,
+        "boundaryMaterializations": 2561,
+        "captureCandidates": 937,
+        "capturesBridged": 768,
+        "interfaceFieldsDemanded": 21,
+        "solverWorklistPeak": 1187
+      },
+      "requestCounterResets": [
+        "typeInterns",
+        "typeNodes"
+      ],
+      "failedPhase": null
+    },
+    "memoryBytes": 124846080
+  },
+  "candidate": {
+    "schema": 2,
+    "operation": "analysis",
+    "fixture": "full",
+    "telemetryMode": "on",
+    "prelude": "snapshot",
+    "wasmSha256": "f514ab9c07ad1a94965ddcd6b88ef19b692b01f1673b1c2e0db4b49a50a62b70",
+    "inputs": {
+      "prelude": "257f18f8fbcd0b7d7c991d0f6cf6af4f51e0c1f5b7704fb11e99845848e1064f",
+      "snapshot": "d16f061b9bb08557cc6d3712f6feff61404d68738d3688a354dc67f26aff6765",
+      "framework": "18b5829343fa977c0cea93834352d9b3e418f321a080cc069c68e57fbfe04e15",
+      "main": "8ec9d28a1c8c6b9bd4a345881e91a0c2c6b55f147f5e535d217459289d324054"
+    },
+    "node": "v24.12.0",
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "platform": "linux",
+    "arch": "x64",
+    "creationMs": 8.845490999999999,
+    "preparationMs": 95.70523600000001,
+    "analysisMs": 6016.13439,
+    "type": "{ .run = Int -> Int }",
+    "effects": "",
+    "interfaceKey": "[\"{ .run = Int -> Int }\",\"\"]",
+    "targetPreflight": {
+      "supported": true,
+      "code": null,
+      "export": null,
+      "inferredType": "{ .run = Int -> Int }",
+      "unsupportedComponent": null,
+      "alternatives": []
+    },
+    "telemetry": {
+      "schema": 2,
+      "clock": "host-imported blot.now_ms (performance.now)",
+      "peakSemantics": "solverWorklistPeak in each workDelta is the cumulative request peak observed at that phase boundary (monotonic within a request), not a phase-local maximum",
+      "deltaSemantics": "deltas are saturating: a counter reset by a nested request inside the span clamps at 0 and is named in counterResets",
+      "spanSemantics": "phase milliseconds are sequential guest wall spans; subSpans charge a phase once (see the other/conversion detail notes); target-preflight evalMsWithinPreflight overlaps its sequential sub-spans and must never be summed with them",
+      "phases": [
+        {
+          "name": "semantic-preparation",
+          "milliseconds": 5586.268985,
+          "workDelta": {
+            "schema": 3,
+            "typeNodes": 54368,
+            "typeInterns": 319962,
+            "constraints": 77836,
+            "settleVisits": 443678,
+            "freshenVisits": 36516,
+            "unionVisits": 53689,
+            "boundaryMaterializations": 2561,
+            "captureCandidates": 937,
+            "capturesBridged": 768,
+            "interfaceFieldsDemanded": 21,
+            "solverWorklistPeak": 1187
+          },
+          "counterResets": [],
+          "subSpans": [
+            {
+              "name": "eval",
+              "milliseconds": 4060.4229979999986
+            },
+            {
+              "name": "conversion",
+              "milliseconds": 13.973926999996394,
+              "detail": {
+                "insideEvalMs": 0,
+                "outsideEvalMs": 13.973926999996394
+              }
+            },
+            {
+              "name": "coverage",
+              "milliseconds": 2.621977999997682
+            },
+            {
+              "name": "ownership",
+              "milliseconds": 16.87292500000001
+            },
+            {
+              "name": "safety",
+              "milliseconds": 9.194979999999589
+            },
+            {
+              "name": "other",
+              "milliseconds": 1483.182177000007,
+              "detail": {
+                "note": "phase wall minus disjoint children; inference and biunification live here"
+              }
+            }
+          ]
+        },
+        {
+          "name": "check",
+          "milliseconds": 0.2634090000001379,
+          "workDelta": {
+            "schema": 3,
+            "typeNodes": 0,
+            "typeInterns": 0,
+            "constraints": 0,
+            "settleVisits": 0,
+            "freshenVisits": 0,
+            "unionVisits": 0,
+            "boundaryMaterializations": 0,
+            "captureCandidates": 0,
+            "capturesBridged": 0,
+            "interfaceFieldsDemanded": 0,
+            "solverWorklistPeak": 1187
+          },
+          "counterResets": [],
+          "subSpans": [
+            {
+              "name": "eval",
+              "milliseconds": 0
+            },
+            {
+              "name": "conversion",
+              "milliseconds": 0,
+              "detail": {
+                "insideEvalMs": 0,
+                "outsideEvalMs": 0
+              }
+            },
+            {
+              "name": "coverage",
+              "milliseconds": 0
+            },
+            {
+              "name": "ownership",
+              "milliseconds": 0
+            },
+            {
+              "name": "safety",
+              "milliseconds": 0
+            },
+            {
+              "name": "other",
+              "milliseconds": 0.2634090000001379,
+              "detail": {
+                "note": "phase wall minus disjoint children; inference and biunification live here"
+              }
+            }
+          ]
+        },
+        {
+          "name": "fact-materialization",
+          "milliseconds": 80.42742400000043,
+          "workDelta": {
+            "schema": 3,
+            "typeNodes": 0,
+            "typeInterns": 0,
+            "constraints": 0,
+            "settleVisits": 2,
+            "freshenVisits": 0,
+            "unionVisits": 0,
+            "boundaryMaterializations": 0,
+            "captureCandidates": 0,
+            "capturesBridged": 0,
+            "interfaceFieldsDemanded": 0,
+            "solverWorklistPeak": 1187
+          },
+          "counterResets": [],
+          "subSpans": [
+            {
+              "name": "eval",
+              "milliseconds": 0
+            },
+            {
+              "name": "conversion",
+              "milliseconds": 0,
+              "detail": {
+                "insideEvalMs": 0,
+                "outsideEvalMs": 0
+              }
+            },
+            {
+              "name": "coverage",
+              "milliseconds": 0
+            },
+            {
+              "name": "ownership",
+              "milliseconds": 0
+            },
+            {
+              "name": "safety",
+              "milliseconds": 0
+            },
+            {
+              "name": "other",
+              "milliseconds": 80.42742400000043,
+              "detail": {
+                "note": "phase wall minus disjoint children; inference and biunification live here"
+              }
+            }
+          ]
+        },
+        {
+          "name": "target-preflight",
+          "milliseconds": 339.0317669999995,
+          "workDelta": {
+            "schema": 3,
+            "typeNodes": 0,
+            "typeInterns": 0,
+            "constraints": 0,
+            "settleVisits": 0,
+            "freshenVisits": 0,
+            "unionVisits": 99,
+            "boundaryMaterializations": 0,
+            "captureCandidates": 0,
+            "capturesBridged": 0,
+            "interfaceFieldsDemanded": 0,
+            "solverWorklistPeak": 1187
+          },
+          "counterResets": [
+            "typeNodes",
+            "typeInterns"
+          ],
+          "subSpans": [
+            {
+              "name": "re-prepare",
+              "milliseconds": 36.771577000000434
+            },
+            {
+              "name": "check",
+              "milliseconds": 0.35712899999998626
+            },
+            {
+              "name": "hir-elaborate",
+              "milliseconds": 300.6290369999997
+            },
+            {
+              "name": "backend-close",
+              "milliseconds": 1.1082949999999983
+            },
+            {
+              "name": "other",
+              "milliseconds": 0.16572899999937363
+            }
+          ],
+          "detail": {
+            "evalMsWithinPreflight": 0.0761000000011336,
+            "evalMsNote": "informational overlap with the sequential sub-spans above; never sum it with them",
+            "closedProgramCacheHit": false
+          }
+        }
+      ],
+      "eval": {
+        "expressionCalls": 7456,
+        "bindingCalls": 2059,
+        "cacheHits": 0,
+        "uniqueInputs": 5052,
+        "uniqueInputSemantics": "distinct lossy input fingerprints over Checker-level eval calls (module, pattern/expression, phase, bounded environment walk); a lower bound on truly distinct inputs, never proof of equality",
+        "hotExpressions": [
+          {
+            "module": "framework.blot",
+            "expression": 573,
+            "calls": 93
+          },
+          {
+            "module": "framework.blot",
+            "expression": 596,
+            "calls": 93
+          },
+          {
+            "module": "framework.blot",
+            "expression": 627,
+            "calls": 93
+          },
+          {
+            "module": "prelude.blot",
+            "expression": 9412,
+            "calls": 93
+          },
+          {
+            "module": "prelude.blot",
+            "expression": 9420,
+            "calls": 93
+          },
+          {
+            "module": "prelude.blot",
+            "expression": 9421,
+            "calls": 93
+          },
+          {
+            "module": "prelude.blot",
+            "expression": 9424,
+            "calls": 93
+          },
+          {
+            "module": "prelude.blot",
+            "expression": 9429,
+            "calls": 93
+          }
+        ],
+        "hotOverflow": 0,
+        "runs": 11265,
+        "steps": 5175,
+        "instructions": 1753050,
+        "instructionsCompiled": 4166,
+        "semanticSteps": 270817,
+        "peakFrames": 613,
+        "closureApplications": 332118,
+        "moduleApplications": 4,
+        "moduleResultHits": 0,
+        "memoEligible": 151982,
+        "memoProbes": 151655,
+        "memoHits": 65271,
+        "memoStores": 45053,
+        "memoStoreDroppedAtLimit": 0,
+        "memoNonmemoizableResults": 41273,
+        "memoUniqueMax": 45053,
+        "conversionCalls": 5638,
+        "conversionInsideEvalCalls": 0,
+        "conversionOutsideEvalCalls": 5638,
+        "templateHits": 0,
+        "reconstructionsAdmitted": 3,
+        "reconstructionsDecodedOk": 3,
+        "reconstructionsDecodedErr": 0,
+        "reconstructionsFallbackFullEval": 0
+      },
+      "structural": {
+        "internHits": 266257,
+        "internMisses": 54656,
+        "sameTypeCalls": 72499,
+        "coverageCalls": 674,
+        "ownershipCalls": 2,
+        "safetyCalls": 2
+      },
+      "requestWork": {
+        "schema": 3,
+        "typeNodes": 0,
+        "typeInterns": 0,
+        "constraints": 77836,
+        "settleVisits": 443680,
+        "freshenVisits": 36516,
+        "unionVisits": 53788,
+        "boundaryMaterializations": 2561,
+        "captureCandidates": 937,
+        "capturesBridged": 768,
+        "interfaceFieldsDemanded": 21,
+        "solverWorklistPeak": 1187
+      },
+      "requestCounterResets": [
+        "typeInterns",
+        "typeNodes"
+      ],
+      "failedPhase": null
+    },
+    "memoryBytes": 126222336
+  }
+}

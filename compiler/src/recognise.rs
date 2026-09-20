@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
-use num_bigint::BigInt;
+use crate::integer::Integer;
 
 use crate::ast::{Declaration, Expression, ExpressionId, Module, Pattern, PatternId, Span};
 use crate::diagnostic::{Diagnostic, FailureClass};
@@ -537,7 +537,7 @@ fn probe_int(context: &Rc<Context>, value: &Value, left: i64, right: i64) -> Opt
     let partial = recognition_result(run(apply(
         context.clone(),
         value.clone(),
-        Value::Int(BigInt::from(left)),
+        Value::Int(Integer::from(left)),
         nowhere(),
         runtime.clone(),
         application
@@ -547,7 +547,7 @@ fn probe_int(context: &Rc<Context>, value: &Value, left: i64, right: i64) -> Opt
     let answer = recognition_result(run(apply(
         context.clone(),
         partial,
-        Value::Int(BigInt::from(right)),
+        Value::Int(Integer::from(right)),
         nowhere(),
         runtime,
         application.compiler(CompilerApplication::RecognitionArgument { probe, position: 1 }),

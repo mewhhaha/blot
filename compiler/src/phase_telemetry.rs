@@ -162,6 +162,10 @@ struct Collector {
     run_depth: u32,
     run_calls: u64,
     eval_steps: u64,
+    eval_instructions: u64,
+    eval_instructions_compiled: u64,
+    eval_semantic_steps: u64,
+    eval_peak_frames: usize,
     eval_expression_calls: u64,
     eval_binding_calls: u64,
     eval_cache_hits: u64,
@@ -292,6 +296,18 @@ pub(crate) fn run_exit(frame: &RunFrame, steps: u64) {
         {
             collector.sub_ms[SubSpan::Eval.index()][phase] += now_ms() - frame.start_ms;
         }
+    });
+}
+
+pub(crate) fn note_instruction_compiled() {
+    update(|collector| collector.eval_instructions_compiled += 1);
+}
+
+pub(crate) fn note_machine(instructions: u64, semantic_steps: u64, peak_frames: usize) {
+    update(|collector| {
+        collector.eval_instructions += instructions;
+        collector.eval_semantic_steps += semantic_steps;
+        collector.eval_peak_frames = collector.eval_peak_frames.max(peak_frames);
     });
 }
 
@@ -582,6 +598,10 @@ pub(crate) fn snapshot() -> Option<serde_json::Value> {
                 "hotOverflow": collector.hot_overflow,
                 "runs": collector.run_calls,
                 "steps": collector.eval_steps,
+                "instructions": collector.eval_instructions,
+                "instructionsCompiled": collector.eval_instructions_compiled,
+                "semanticSteps": collector.eval_semantic_steps,
+                "peakFrames": collector.eval_peak_frames,
                 "closureApplications": collector.closure_applications,
                 "moduleApplications": collector.module_applications,
                 "moduleResultHits": collector.module_result_hits,

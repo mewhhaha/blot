@@ -6,7 +6,7 @@ use std::rc::Rc;
 #[cfg(test)]
 use std::cell::Cell;
 
-use num_bigint::BigInt;
+use crate::integer::Integer;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
@@ -437,7 +437,7 @@ struct CapsuleClosure {
 
 #[derive(Deserialize, Serialize)]
 enum CapsuleValue {
-    Int(BigInt),
+    Int(Integer),
     Float(f64),
     Float32(f32),
     Vector([f32; 4]),
@@ -1734,7 +1734,7 @@ impl CapsuleEncoder {
             } => {
                 self.claim_bytes(name.len())?;
                 CapsuleValue::Primitive {
-                    name: name.clone(),
+                    name: name.to_string(),
                     arity: u32::try_from(*arity).map_err(|_| {
                         CapsuleEncodingFailure::Invalid(format!(
                             "primitive {name} arity {arity} exceeds u32"
@@ -2058,8 +2058,7 @@ impl EffectScopeDecoder<'_> {
             self.decoded[id as usize] = Some(self.base_effect_scope.clone());
             return Ok(self.base_effect_scope.clone());
         }
-        let mut effect_scope = Vec::with_capacity(self.base_effect_scope.len() + frame_count);
-        effect_scope.extend(self.base_effect_scope.iter().cloned());
+        let mut effect_scope = self.base_effect_scope.as_ref().clone();
         for frame_index in 0..frame_count {
             let (application, creation_scope) = {
                 let frame = &self.encoded[id as usize][frame_index];
@@ -2409,7 +2408,7 @@ fn decode_value(
             arity,
             applied,
         } => Value::Primitive {
-            name: name.clone(),
+            name: name.clone().into(),
             arity: usize::try_from(*arity)
                 .map_err(|_| format!("primitive {name} arity {arity} exceeds usize"))?,
             applied: decode_values(
@@ -2755,7 +2754,7 @@ mod tests {
                 &loaded.revision(),
                 &context,
                 &Vec::new(),
-                &Rc::new(Vec::new()),
+                &Rc::new(crate::eval::EffectScope::default()),
             )
             .expect("matching source closure decodes");
         let index = loaded
@@ -2770,7 +2769,7 @@ mod tests {
                 &loaded.revision(),
                 &context,
                 &Vec::new(),
-                &Rc::new(Vec::new()),
+                &Rc::new(crate::eval::EffectScope::default()),
             )
             .expect("repeated closure decodes");
         assert!(Rc::ptr_eq(
@@ -2813,7 +2812,7 @@ mod tests {
                 &loaded.revision(),
                 &context,
                 &occurrence,
-                &Rc::new(Vec::new()),
+                &Rc::new(crate::eval::EffectScope::default()),
             )
             .expect("a distinct import occurrence decodes");
         let Value::Closure {
@@ -2846,7 +2845,7 @@ mod tests {
                 &loaded.revision(),
                 &context,
                 &Vec::new(),
-                &Rc::new(Vec::new()),
+                &Rc::new(crate::eval::EffectScope::default()),
             )
             .expect_err("replaced source cannot inherit the old closure index");
         assert!(error.contains("no matching source lambda"), "{error}");
@@ -2895,7 +2894,7 @@ mod tests {
                         Value::Closure {
                             module: Rc::new(PATH.to_owned()),
                             module_instances: Rc::new(Vec::new()),
-                            effect_scope: Rc::new(Vec::new()),
+                            effect_scope: Rc::new(crate::eval::EffectScope::default()),
                             parameter: PatternId(0),
                             body: module.result,
                             environment,
@@ -2958,12 +2957,12 @@ mod tests {
     fn effect_scope_depth_is_bounded_before_recursive_encoding() {
         const PATH: &str = "effect-scope-depth.blot";
         let (module, revision) = test_module(PATH);
-        let mut effect_scope = Rc::new(Vec::new());
+        let mut effect_scope = Rc::new(crate::eval::EffectScope::default());
         for _ in 0..VALUE_CAPSULE_MAX_DEPTH {
-            effect_scope = Rc::new(vec![ClosureApplication {
+            effect_scope = Rc::new(crate::eval::EffectScope::from(vec![ClosureApplication {
                 application: application(&revision, module.result),
                 creation_scope: effect_scope,
-            }]);
+            }]));
         }
         let environment = child_env(None);
         environment.names.borrow_mut().insert(
@@ -3016,7 +3015,7 @@ mod tests {
                     application: provenance,
                     imported: revision.clone(),
                 }]),
-                effect_scope: Rc::new(Vec::new()),
+                effect_scope: Rc::new(crate::eval::EffectScope::default()),
                 parameter: PatternId(0),
                 body: module.result,
                 environment: child_env(None),
@@ -3229,7 +3228,7 @@ mod tests {
         };
         let context = Context::default();
         let module_instances = Vec::new();
-        let effect_scope = Rc::new(Vec::new());
+        let effect_scope = Rc::new(crate::eval::EffectScope::default());
         take_structural_budget_scan_count();
         let reconstruction = match capsule.admit_reconstruction(0, 0) {
             Ok(Some(reconstruction)) => reconstruction,
@@ -3477,7 +3476,7 @@ mod tests {
             Value::Closure {
                 module: Rc::new("cycle.blot".to_owned()),
                 module_instances: Rc::new(Vec::new()),
-                effect_scope: Rc::new(Vec::new()),
+                effect_scope: Rc::new(crate::eval::EffectScope::default()),
                 parameter: PatternId(0),
                 body: result,
                 environment: environment.clone(),

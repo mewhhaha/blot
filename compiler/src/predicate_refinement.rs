@@ -8,7 +8,7 @@ use std::cmp::Ordering as SortOrdering;
 use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;
 
-use num_bigint::BigInt;
+use crate::integer::Integer;
 
 use crate::ast::{Expression, ExpressionId, Module, Pattern, PatternId, Qualifier, Span};
 use crate::diagnostic::Diagnostic;
@@ -20,8 +20,8 @@ const MAX_PREDICATE_NODES: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Interval {
-    low: Option<BigInt>,
-    high: Option<BigInt>,
+    low: Option<Integer>,
+    high: Option<Integer>,
 }
 
 pub fn refine(
@@ -323,7 +323,7 @@ fn integer_witness(
     expression: ExpressionId,
     subject: &str,
     environment: &Environment,
-) -> Option<BigInt> {
+) -> Option<Integer> {
     match &module.arena.expressions[expression.0 as usize] {
         Expression::Int { value, .. } => Some(value.clone()),
         Expression::Var { name, .. } if name != subject => match lookup(environment, name) {
@@ -334,8 +334,8 @@ fn integer_witness(
     }
 }
 
-fn comparison_intervals(orderings: BTreeSet<Ordering>, witness: BigInt) -> Vec<Interval> {
-    let one = BigInt::from(1_u8);
+fn comparison_intervals(orderings: BTreeSet<Ordering>, witness: Integer) -> Vec<Interval> {
+    let one = Integer::from(1_u8);
     let mut intervals = Vec::new();
     if orderings.contains(&Ordering::Less) {
         intervals.push(Interval {
@@ -419,7 +419,7 @@ fn base_intervals(base: &Value, span: Span) -> Result<Vec<Interval>, Diagnostic>
     Ok(normalize(intervals))
 }
 
-fn bound(value: &Value, span: Span) -> Result<Option<BigInt>, Diagnostic> {
+fn bound(value: &Value, span: Span) -> Result<Option<Integer>, Diagnostic> {
     match value {
         Value::Unbounded => Ok(None),
         Value::Int(value) => Ok(Some(value.clone())),
@@ -449,7 +449,7 @@ fn normalize(mut intervals: Vec<Interval>) -> Vec<Interval> {
         };
         let touches = match (&previous.high, &next.low) {
             (None, _) | (_, None) => true,
-            (Some(high), Some(low)) => low <= &(high + BigInt::from(1_u8)),
+            (Some(high), Some(low)) => low <= &(high + Integer::from(1_u8)),
         };
         if !touches {
             merged.push(next);
@@ -515,38 +515,38 @@ fn complement(intervals: &[Interval]) -> Vec<Interval> {
         if let Some(interval_low) = interval.low {
             pieces.push(Interval {
                 low,
-                high: Some(interval_low - BigInt::from(1_u8)),
+                high: Some(interval_low - Integer::from(1_u8)),
             });
         }
         let Some(interval_high) = interval.high else {
             return normalize(pieces);
         };
-        low = Some(interval_high + BigInt::from(1_u8));
+        low = Some(interval_high + Integer::from(1_u8));
     }
     pieces.push(Interval { low, high: None });
     normalize(pieces)
 }
 
-fn maximum_low(left: &Option<BigInt>, right: &Option<BigInt>) -> Option<BigInt> {
+fn maximum_low(left: &Option<Integer>, right: &Option<Integer>) -> Option<Integer> {
     match (left, right) {
         (None, value) | (value, None) => value.clone(),
         (Some(left), Some(right)) => Some(std::cmp::max(left.clone(), right.clone())),
     }
 }
 
-fn minimum_high(left: &Option<BigInt>, right: &Option<BigInt>) -> Option<BigInt> {
+fn minimum_high(left: &Option<Integer>, right: &Option<Integer>) -> Option<Integer> {
     match (left, right) {
         (None, value) | (value, None) => value.clone(),
         (Some(left), Some(right)) => Some(std::cmp::min(left.clone(), right.clone())),
     }
 }
 
-fn minimum_i64() -> BigInt {
-    -(BigInt::from(1_u8) << 63_usize)
+fn minimum_i64() -> Integer {
+    -(Integer::from(1_u8) << 63_usize)
 }
 
-fn maximum_i64() -> BigInt {
-    (BigInt::from(1_u8) << 63_usize) - BigInt::from(1_u8)
+fn maximum_i64() -> Integer {
+    (Integer::from(1_u8) << 63_usize) - Integer::from(1_u8)
 }
 
 fn interval_value(intervals: Vec<Interval>) -> Value {

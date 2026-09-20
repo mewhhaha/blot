@@ -4309,6 +4309,13 @@ from integer representation and phase restrictions. A valid compiled program
 must agree between the Rust evaluator and emitted WebAssembly. Independent
 oracles may consume validated Runtime HIR, but they do not define acceptance.
 
+Compile-time source may execute through cached compiler instructions. Such code
+reuse preserves ordinary evaluation order, type checking, phase restrictions,
+and fresh effect identities; it does not memoize arbitrary function results.
+Compile-time integers retain arbitrary precision even when their common small
+values use machine storage internally. Runtime integer arithmetic still traps
+outside signed 64-bit bounds.
+
 Before Runtime-HIR lowering, Blot:
 
 - evaluates and erases compile-time-only values;

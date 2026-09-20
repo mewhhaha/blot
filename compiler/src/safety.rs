@@ -3,7 +3,7 @@ mod predicate_summary;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use num_bigint::BigInt;
+use crate::integer::Integer;
 
 use crate::ast::{
     Declaration, DeclarationId, Expression, ExpressionId, Module, Pattern, PatternId, ShapeMember,
@@ -190,7 +190,7 @@ impl Analysis<'_> {
                     scope.constraints.push(Constraint {
                         left: Node::Zero,
                         right: Node::Variable(identity),
-                        bound: BigInt::from(0),
+                        bound: Integer::from(0),
                     });
                     match length {
                         Term::Literal(length) => scope.constraints.push(Constraint {
@@ -335,7 +335,7 @@ impl Analysis<'_> {
                                 .expect("a bound name has an affine identity");
                             let subject = Term::Variable {
                                 identity,
-                                offset: BigInt::from(0),
+                                offset: Integer::from(0),
                             };
                             scope
                                 .constraints
@@ -372,7 +372,7 @@ impl Analysis<'_> {
                     if let Some(affine) = affine {
                         let subject = Term::Variable {
                             identity,
-                            offset: BigInt::from(0),
+                            offset: Integer::from(0),
                         };
                         scope
                             .constraints
@@ -822,7 +822,7 @@ impl Analysis<'_> {
                     .copied()
                     .map(|identity| Term::Variable {
                         identity,
-                        offset: BigInt::from(0),
+                        offset: Integer::from(0),
                     })
             }
             Expression::Apply { .. } => {
@@ -918,7 +918,7 @@ impl Analysis<'_> {
             Expression::Array { elements, .. }
                 if elements.iter().all(|element| !element.spread) =>
             {
-                Some(Term::Literal(BigInt::from(elements.len())))
+                Some(Term::Literal(Integer::from(elements.len())))
             }
             Expression::Var { name, .. } => scope.lengths.get(name).cloned().or_else(|| {
                 scope
@@ -927,7 +927,7 @@ impl Analysis<'_> {
                     .copied()
                     .map(|identity| Term::Variable {
                         identity,
-                        offset: BigInt::from(0),
+                        offset: Integer::from(0),
                     })
             }),
             Expression::Field { target, name, .. } => {
@@ -938,7 +938,7 @@ impl Analysis<'_> {
                     .copied()
                     .map(|identity| Term::Variable {
                         identity,
-                        offset: BigInt::from(0),
+                        offset: Integer::from(0),
                     })
             }
             Expression::Apply { .. } => {
@@ -965,7 +965,7 @@ impl Analysis<'_> {
                 if name == "@array.push" && arguments.len() == 2 {
                     return self
                         .array_length(arguments[0], scope)
-                        .map(|length| shift(length, BigInt::from(1)));
+                        .map(|length| shift(length, Integer::from(1)));
                 }
                 None
             }
@@ -982,7 +982,7 @@ impl Analysis<'_> {
                     .copied()
                     .map(|identity| Term::Variable {
                         identity,
-                        offset: BigInt::from(0),
+                        offset: Integer::from(0),
                     })
             }
             Expression::Apply { .. } => {
@@ -1530,12 +1530,12 @@ mod tests {
             Constraint {
                 left: Node::Variable(1),
                 right: Node::Variable(2),
-                bound: BigInt::from(3),
+                bound: Integer::from(3),
             },
             Constraint {
                 left: Node::Variable(2),
                 right: Node::Variable(3),
-                bound: BigInt::from(4),
+                bound: Integer::from(4),
             },
         ];
 
@@ -1545,7 +1545,7 @@ mod tests {
             &[Constraint {
                 left: Node::Variable(1),
                 right: Node::Variable(3),
-                bound: BigInt::from(7),
+                bound: Integer::from(7),
             }],
             &constraints,
         ));
@@ -1560,19 +1560,19 @@ mod tests {
             .map(|identity| Constraint {
                 left: Node::Variable(identity),
                 right: Node::Variable(identity + 1),
-                bound: BigInt::from(1),
+                bound: Integer::from(1),
             })
             .collect::<Vec<_>>();
         constraints.extend([
             Constraint {
                 left: Node::Variable(1),
                 right: Node::Variable(2),
-                bound: BigInt::from(3),
+                bound: Integer::from(3),
             },
             Constraint {
                 left: Node::Variable(2),
                 right: Node::Variable(3),
-                bound: BigInt::from(4),
+                bound: Integer::from(4),
             },
         ]);
 
@@ -1583,7 +1583,7 @@ mod tests {
             &[Constraint {
                 left: Node::Variable(1),
                 right: Node::Variable(3),
-                bound: BigInt::from(7),
+                bound: Integer::from(7),
             }],
             &constraints,
         ));

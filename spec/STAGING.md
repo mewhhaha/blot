@@ -136,6 +136,28 @@ or expansion bound. Such exhaustion is a `LimitDiagnostic`, including
 A semantic bridge failure, forbidden phase dependency, or effectful compile-time
 expression is instead a `SourceDiagnostic`.
 
+Executable instruction reuse and semantic result reuse are separate judgments.
+An instruction body can be reused across environments and fresh effect
+occurrences; each execution still receives its own bindings, evidence,
+module-instance provenance, and generative scope. Result reuse continues to
+require the complete existing memoization premises. An immutable code cache
+cannot certify closure purity, equate captured environments, or reuse fresh type
+variables or effect identities.
+
+An invocation's numbered binding slots and compact captures are evaluation
+state, never part of an executable-code cache. A deferred expression starts
+without the forcing function's local slots. A module evaluation also starts
+without its importer's local slots. Fresh scalar-type descriptors may share
+immutable storage; fresh effects, aggregate values and quantified variables must
+still be produced by execution. Persistent effect histories preserve structural
+equality and module revisions, including after capsule reconstruction.
+
+Fuel counts source-expression entry, including entries executed by cached
+instructions. Administrative evaluation frames and instruction compilation do
+not consume source fuel. Promoting an integer to arbitrary precision or
+normalizing it back to machine storage changes neither the mathematical result
+nor the runtime overflow rule.
+
 Optional speculative evaluation has a weaker contract. Failure to evaluate an
 otherwise residual empty-row expression does not authorize erasure; the
 expression remains residual unless the language requires compile-time

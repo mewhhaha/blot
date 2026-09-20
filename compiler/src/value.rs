@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Deref, DerefMut};
 use std::rc::{Rc, Weak};
 
-use num_bigint::BigInt;
+use crate::integer::Integer;
 
 use crate::ast::{ExpressionId, PatternId};
 use crate::eval::Computation;
@@ -555,6 +555,85 @@ pub(crate) fn declaration_env(environment: &Environment) -> Environment {
     environment.clone()
 }
 
+/// Retain only the lexical captures from this invocation. The inherited scope
+/// still owns module bindings and evidence; recursive groups keep their identity.
+pub(crate) fn capture_before(
+    environment: &Environment,
+    base: &Environment,
+    names: &[String],
+) -> Environment {
+    let mut frames = Vec::new();
+    let mut current = environment.clone();
+    while !Rc::ptr_eq(&current, base) {
+        if current.recursive_bindings.is_some() {
+            capture_env(environment);
+            return environment.clone();
+        }
+        let Some(parent) = current.parent.borrow().clone() else {
+            capture_env(environment);
+            return environment.clone();
+        };
+        frames.push(current);
+        current = parent;
+    }
+    let captured = child_env(Some(base.clone()));
+    let mut missing = names.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    for frame in frames {
+        let bindings = frame.names.borrow();
+        missing.retain(|name| {
+            if let Some(value) = bindings.get(*name) {
+                captured
+                    .names
+                    .borrow_mut()
+                    .insert((*name).to_owned(), value.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for opened in frame.opens.borrow().iter().rev() {
+            let mut fields = OrderedFields::default();
+            missing.retain(|name| {
+                if let Some(value) = opened.fields.get(name) {
+                    fields.insert((*name).to_owned(), value.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            if !fields.is_empty() {
+                captured.opens.borrow_mut().push(OpenedValues {
+                    fields,
+                    used: opened.used.clone(),
+                });
+            }
+        }
+        for (name, value) in frame.signatures.borrow().iter() {
+            captured
+                .signatures
+                .borrow_mut()
+                .entry(name.clone())
+                .or_insert_with(|| value.clone());
+        }
+        for (variable, value) in frame.type_substitutions.borrow().iter() {
+            captured
+                .type_substitutions
+                .borrow_mut()
+                .entry(*variable)
+                .or_insert_with(|| value.clone());
+        }
+        for (effect, value) in frame.effect_substitutions.borrow().iter() {
+            captured
+                .effect_substitutions
+                .borrow_mut()
+                .entry(*effect)
+                .or_insert_with(|| value.clone());
+        }
+    }
+    capture_env(&captured);
+    captured
+}
+
 pub fn lookup_signature(environment: &Environment, name: &str) -> Option<Value> {
     let mut scope = Some(environment.clone());
     while let Some(current) = scope {
@@ -715,7 +794,7 @@ pub type RegionStore = Rc<RefCell<Vec<Value>>>;
 #[derive(Clone, Debug)]
 pub struct ArrayValues {
     identity: Rc<()>,
-    values: Vec<Value>,
+    values: Rc<Vec<Value>>,
 }
 
 impl ArrayValues {
@@ -724,7 +803,7 @@ impl ArrayValues {
     }
 
     fn iter_mut_preserving_identity(&mut self) -> std::slice::IterMut<'_, Value> {
-        self.values.iter_mut()
+        Rc::make_mut(&mut self.values).iter_mut()
     }
 }
 
@@ -732,7 +811,7 @@ impl From<Vec<Value>> for ArrayValues {
     fn from(values: Vec<Value>) -> Self {
         Self {
             identity: Rc::new(()),
-            values,
+            values: Rc::new(values),
         }
     }
 }
@@ -756,7 +835,7 @@ impl DerefMut for ArrayValues {
         if Rc::strong_count(&self.identity) > 1 {
             self.identity = Rc::new(());
         }
-        &mut self.values
+        Rc::make_mut(&mut self.values)
     }
 }
 
@@ -765,7 +844,7 @@ impl IntoIterator for ArrayValues {
     type IntoIter = std::vec::IntoIter<Value>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.values.into_iter()
+        Rc::unwrap_or_clone(self.values).into_iter()
     }
 }
 
@@ -1086,7 +1165,7 @@ impl EffectOperationContract {
 
 #[derive(Clone)]
 pub enum Value {
-    Int(BigInt),
+    Int(Integer),
     Float(f64),
     Float32(f32),
     Vector([f32; 4]),
@@ -1182,7 +1261,7 @@ pub enum Value {
         elements: Vec<Value>,
     },
     Primitive {
-        name: String,
+        name: crate::primitives::Primitive,
         arity: usize,
         applied: Vec<Value>,
     },
@@ -2116,7 +2195,7 @@ mod type_value_tests {
         let mut closure = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter: PatternId(0),
             body: ExpressionId(0),
             environment: child_env(None),
@@ -2149,7 +2228,7 @@ mod type_value_tests {
         let captured = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter: PatternId(0),
             body: ExpressionId(0),
             environment: environment.clone(),
@@ -2162,7 +2241,7 @@ mod type_value_tests {
         let member = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
             module_instances: Rc::new(Vec::new()),
-            effect_scope: Rc::new(Vec::new()),
+            effect_scope: Rc::new(crate::eval::EffectScope::default()),
             parameter: PatternId(1),
             body: ExpressionId(1),
             environment,
@@ -2448,6 +2527,49 @@ mod show_tests {
         drop(original);
         assert_eq!(cloned.chars().count(), 65_536);
         assert!(cloned.ends_with("α🐱\u{feff}\0"));
+    }
+
+    #[test]
+    fn array_clones_share_storage_until_mutation_without_changing_alias_rules() {
+        let original: ArrayValues = vec![Value::Int(1.into()), Value::Int(2.into())].into();
+        let mut changed = original.clone();
+        assert!(Rc::ptr_eq(&original.values, &changed.values));
+        assert!(original.same_identity(&changed));
+        changed[0] = Value::Int(3.into());
+        assert_eq!(show(&original[0]), "1");
+        assert_eq!(show(&changed[0]), "3");
+        assert!(!original.same_identity(&changed));
+        let mut annotated = original.clone();
+        let _ = annotated.iter_mut_preserving_identity();
+        assert!(original.same_identity(&annotated));
+        assert!(!Rc::ptr_eq(&original.values, &annotated.values));
+    }
+
+    #[test]
+    fn compact_capture_releases_unused_invocation_bindings_and_observes_opens_on_demand() {
+        let base = child_env(None);
+        base.names
+            .borrow_mut()
+            .insert("base".to_owned(), Value::Int(1.into()));
+        let invocation = child_env(Some(base.clone()));
+        invocation.names.borrow_mut().insert(
+            "unused".to_owned(),
+            Value::Array(vec![Value::Unit; 128].into()),
+        );
+        let used = Rc::new(RefCell::new(BTreeSet::new()));
+        invocation.opens.borrow_mut().push(OpenedValues::tracked(
+            OrderedFields::from([("kept".to_owned(), Value::Int(7.into()))]),
+            used.clone(),
+        ));
+        let original = Rc::downgrade(&invocation);
+        let captured = capture_before(&invocation, &base, &["kept".to_owned(), "base".to_owned()]);
+        assert!(used.borrow().is_empty());
+        drop(invocation);
+        assert!(original.upgrade().is_none());
+        assert_eq!(show(&lookup(&captured, "kept").unwrap()), "7");
+        assert!(used.borrow().contains("kept"));
+        assert_eq!(show(&lookup(&captured, "base").unwrap()), "1");
+        assert!(lookup(&captured, "unused").is_none());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use num_bigint::BigInt;
+use crate::integer::Integer;
 
 use crate::ast::{ExpressionId, Module, Span};
 use crate::qcore_generated::{
@@ -1531,11 +1531,11 @@ fn arena_offset(index: u32) -> usize {
     usize::try_from(index).expect("QCore u32 indices fit every supported target")
 }
 
-fn canonical_integer_bound(bound: &ScalarBound) -> Option<Option<BigInt>> {
+fn canonical_integer_bound(bound: &ScalarBound) -> Option<Option<Integer>> {
     match bound {
         ScalarBound::Unbounded => Some(None),
         ScalarBound::Integer { decimal } => {
-            let value = decimal.parse::<BigInt>().ok()?;
+            let value = decimal.parse::<Integer>().ok()?;
             if value.to_string() != *decimal {
                 return None;
             }

@@ -1,7 +1,7 @@
 //! Difference constraints shared by relational inference and proof replay.
 use crate::ast::Span;
 use crate::diagnostic::Diagnostic;
-use num_bigint::BigInt;
+use crate::integer::Integer;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub(crate) type Identity = u32;
@@ -11,15 +11,15 @@ pub(crate) const REFINEMENT_EDGE_BUDGET: usize = 2_048;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) enum Term {
-    Literal(BigInt),
-    Variable { identity: Identity, offset: BigInt },
+    Literal(Integer),
+    Variable { identity: Identity, offset: Integer },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Constraint {
     pub(crate) left: Node,
     pub(crate) right: Node,
-    pub(crate) bound: BigInt,
+    pub(crate) bound: Integer,
 }
 
 #[derive(
@@ -117,7 +117,7 @@ impl Constraints {
     }
 }
 
-pub(crate) fn shift(term: Term, offset: BigInt) -> Term {
+pub(crate) fn shift(term: Term, offset: Integer) -> Term {
     match term {
         Term::Literal(value) => Term::Literal(value + offset),
         Term::Variable {
@@ -131,28 +131,28 @@ pub(crate) fn shift(term: Term, offset: BigInt) -> Term {
 }
 
 pub(crate) fn constraints_less_than(left: &Term, right: &Term) -> Vec<Constraint> {
-    constraints_difference(left, right, BigInt::from(-1))
+    constraints_difference(left, right, Integer::from(-1))
 }
 
 pub(crate) fn constraints_at_least(left: &Term, right: &Term) -> Vec<Constraint> {
-    constraints_difference(right, left, BigInt::from(0))
+    constraints_difference(right, left, Integer::from(0))
 }
 
 pub(crate) fn constraints_at_most(left: &Term, right: &Term) -> Vec<Constraint> {
-    constraints_difference(left, right, BigInt::from(0))
+    constraints_difference(left, right, Integer::from(0))
 }
 
 pub(crate) fn constraints_greater_than(left: &Term, right: &Term) -> Vec<Constraint> {
-    constraints_difference(right, left, BigInt::from(-1))
+    constraints_difference(right, left, Integer::from(-1))
 }
 
 pub(crate) fn constraints_equal(left: &Term, right: &Term) -> Vec<Constraint> {
-    let mut constraints = constraints_difference(left, right, BigInt::from(0));
-    constraints.extend(constraints_difference(right, left, BigInt::from(0)));
+    let mut constraints = constraints_difference(left, right, Integer::from(0));
+    constraints.extend(constraints_difference(right, left, Integer::from(0)));
     constraints
 }
 
-pub(crate) fn constraints_difference(left: &Term, right: &Term, delta: BigInt) -> Vec<Constraint> {
+pub(crate) fn constraints_difference(left: &Term, right: &Term, delta: Integer) -> Vec<Constraint> {
     let (left_node, left_offset) = term_node(left);
     let (right_node, right_offset) = term_node(right);
     vec![Constraint {
@@ -162,7 +162,7 @@ pub(crate) fn constraints_difference(left: &Term, right: &Term, delta: BigInt) -
     }]
 }
 
-pub(crate) fn term_node(term: &Term) -> (Node, BigInt) {
+pub(crate) fn term_node(term: &Term) -> (Node, Integer) {
     match term {
         Term::Literal(value) => (Node::Zero, value.clone()),
         Term::Variable { identity, offset } => (Node::Variable(*identity), offset.clone()),
@@ -170,7 +170,7 @@ pub(crate) fn term_node(term: &Term) -> (Node, BigInt) {
 }
 
 pub(crate) fn term_at_least_zero(term: &Term, constraints: &[Constraint]) -> bool {
-    term_at_least(term, &Term::Literal(BigInt::from(0)), constraints)
+    term_at_least(term, &Term::Literal(Integer::from(0)), constraints)
 }
 
 pub(crate) fn term_less_than(left: &Term, right: &Term, constraints: &[Constraint]) -> bool {
@@ -188,7 +188,7 @@ pub(crate) fn entails(required: &[Constraint], constraints: &[Constraint]) -> bo
         .chain(std::iter::once(Node::Zero))
         .collect::<HashSet<_>>()
         .len();
-    let mut distances = HashMap::<Node, HashMap<Node, BigInt>>::new();
+    let mut distances = HashMap::<Node, HashMap<Node, Integer>>::new();
     for required in required {
         let from = distances
             .entry(required.right)
@@ -207,8 +207,8 @@ pub(crate) fn shortest_paths_from(
     source: Node,
     constraints: &[Constraint],
     node_count: usize,
-) -> HashMap<Node, BigInt> {
-    let mut distances = HashMap::from([(source, BigInt::from(0))]);
+) -> HashMap<Node, Integer> {
+    let mut distances = HashMap::from([(source, Integer::from(0))]);
     for _ in 0..node_count {
         let mut changed = false;
         for constraint in constraints {
@@ -240,9 +240,9 @@ pub(crate) fn forget_identity(constraints: &mut Vec<Constraint>, identity: Ident
     {
         return;
     }
-    let mut into_dead = BTreeMap::<Node, BigInt>::new();
-    let mut from_dead = BTreeMap::<Node, BigInt>::new();
-    let mut projected = BTreeMap::<(Node, Node), BigInt>::new();
+    let mut into_dead = BTreeMap::<Node, Integer>::new();
+    let mut from_dead = BTreeMap::<Node, Integer>::new();
+    let mut projected = BTreeMap::<(Node, Node), Integer>::new();
     for constraint in constraints.iter() {
         if constraint.left == dead && constraint.right != dead {
             into_dead

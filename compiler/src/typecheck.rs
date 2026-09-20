@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use num_bigint::BigInt;
+use crate::integer::Integer;
 use serde::{Deserialize, Serialize};
 
 thread_local! {
@@ -403,7 +403,7 @@ struct WrapperTarget {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
 pub enum Scalar {
-    Int(BigInt),
+    Int(Integer),
     Text(String),
 }
 
@@ -2661,7 +2661,7 @@ struct SyntheticCallFact {
 
 #[derive(Clone)]
 enum NumericLiteralKind {
-    Integer(BigInt),
+    Integer(Integer),
     Float,
 }
 
@@ -6240,7 +6240,7 @@ impl Checker {
                             span,
                         ));
                     };
-                    if lane < BigInt::from(0_u8) || lane > BigInt::from(3_u8) {
+                    if lane < Integer::from(0_u8) || lane > Integer::from(3_u8) {
                         return Err(Diagnostic::new(
                             "BLOT_SIMD_IMMEDIATE_RANGE",
                             format!("I32x4 lane {lane} is outside 0..3."),
@@ -12050,7 +12050,7 @@ impl Checker {
                 domain: Domain::Int,
                 low: Some(Scalar::Int(low)),
                 high: Some(Scalar::Int(high)),
-            } if low == &BigInt::from(i64::MIN) && high == &BigInt::from(i64::MAX) => {
+            } if low == &Integer::from(i64::MIN) && high == &Integer::from(i64::MAX) => {
                 "Int".to_owned()
             }
             Type::Range {
@@ -13791,21 +13791,21 @@ fn curried(parameters: Vec<Type>, result: Type) -> Type {
 fn int_type() -> Type {
     Type::Range {
         domain: Domain::Int,
-        low: Some(Scalar::Int(-(BigInt::from(1_u64) << 63_usize))),
-        high: Some(Scalar::Int((BigInt::from(1_u64) << 63_usize) - 1)),
+        low: Some(Scalar::Int(-(Integer::from(1_u64) << 63_usize))),
+        high: Some(Scalar::Int((Integer::from(1_u64) << 63_usize) - 1)),
     }
 }
 
 fn integer_range(low: i64, high: i64) -> Type {
     Type::Range {
         domain: Domain::Int,
-        low: Some(Scalar::Int(BigInt::from(low))),
-        high: Some(Scalar::Int(BigInt::from(high))),
+        low: Some(Scalar::Int(Integer::from(low))),
+        high: Some(Scalar::Int(Integer::from(high))),
     }
 }
 
 fn signed_lane_type(bits: u8) -> Type {
-    let bound = BigInt::from(1_u8) << usize::from(bits - 1);
+    let bound = Integer::from(1_u8) << usize::from(bits - 1);
     Type::Range {
         domain: Domain::Int,
         low: Some(Scalar::Int(-bound.clone())),
@@ -14216,7 +14216,7 @@ fn complement_orderings(
         .collect()
 }
 
-fn ordering_type(orderings: &BTreeSet<crate::recognise::Ordering>, witness: &BigInt) -> Type {
+fn ordering_type(orderings: &BTreeSet<crate::recognise::Ordering>, witness: &Integer) -> Type {
     use crate::recognise::Ordering;
     let semantic_basis = [Ordering::Less, Ordering::Equal, Ordering::Greater];
     let mut start = None;
@@ -14246,8 +14246,8 @@ fn ordering_type(orderings: &BTreeSet<crate::recognise::Ordering>, witness: &Big
 
 #[derive(Clone)]
 struct IntegerInterval {
-    low: Option<BigInt>,
-    high: Option<BigInt>,
+    low: Option<Integer>,
+    high: Option<Integer>,
 }
 
 fn intersect_integer_types(left: &Type, right: &Type) -> Option<Type> {
@@ -14634,7 +14634,7 @@ enum CoveragePattern {
     Any,
     Refutable,
     Unit,
-    Int(BigInt),
+    Int(Integer),
     Text(String),
     Constructor(String, Option<Rc<CoveragePattern>>),
     Tuple(Rc<[Rc<CoveragePattern>]>),
@@ -14755,7 +14755,7 @@ fn coverage_integer_range(
     high: &Option<Scalar>,
 ) -> bool {
     let defaults = default_rows(rows);
-    let mut literals = BTreeMap::<BigInt, Vec<CoverageRow>>::new();
+    let mut literals = BTreeMap::<Integer, Vec<CoverageRow>>::new();
     for row in rows {
         if let Some(CoveragePattern::Int(value)) = row.first().map(Rc::as_ref) {
             literals
@@ -14781,7 +14781,7 @@ fn coverage_integer_range(
         }
     }
     let width = high - low + 1;
-    width == BigInt::from(named) || coverage_matrix(&defaults, rest)
+    width == Integer::from(named) || coverage_matrix(&defaults, rest)
 }
 
 fn coverage_text_values(rows: &[CoverageRow], rest: &[Type], values: &[String]) -> bool {
@@ -14907,7 +14907,7 @@ fn coverage_union(rows: &[CoverageRow], rest: &[Type], members: &[Type]) -> bool
         .collect::<Option<BTreeSet<_>>>();
     if let Some(integers) = integers {
         let defaults = default_rows(rows);
-        let mut literals = BTreeMap::<BigInt, Vec<CoverageRow>>::new();
+        let mut literals = BTreeMap::<Integer, Vec<CoverageRow>>::new();
         for row in rows {
             if let Some(CoveragePattern::Int(value)) = row.first().map(Rc::as_ref) {
                 literals
@@ -16394,14 +16394,14 @@ fn unrepresentable_integer(type_: &Type) -> Option<&Type> {
             let below = low
                 .as_ref()
                 .and_then(|bound| match bound {
-                    Scalar::Int(value) => Some(value < &BigInt::from(i64::MIN)),
+                    Scalar::Int(value) => Some(value < &Integer::from(i64::MIN)),
                     Scalar::Text(_) => None,
                 })
                 .unwrap_or(false);
             let above = high
                 .as_ref()
                 .and_then(|bound| match bound {
-                    Scalar::Int(value) => Some(value > &BigInt::from(i64::MAX)),
+                    Scalar::Int(value) => Some(value > &Integer::from(i64::MAX)),
                     Scalar::Text(_) => None,
                 })
                 .unwrap_or(false);
@@ -19072,7 +19072,7 @@ mod tests {
         use crate::recognise::Ordering;
         let non_zero = ordering_type(
             &BTreeSet::from([Ordering::Less, Ordering::Greater]),
-            &BigInt::from(0),
+            &Integer::from(0),
         );
         assert!(same_type(
             &non_zero,
@@ -19099,11 +19099,11 @@ mod tests {
         use crate::recognise::Ordering;
         let at_least_zero = ordering_type(
             &BTreeSet::from([Ordering::Equal, Ordering::Greater]),
-            &BigInt::from(0),
+            &Integer::from(0),
         );
         let at_most_byte = ordering_type(
             &BTreeSet::from([Ordering::Less, Ordering::Equal]),
-            &BigInt::from(255),
+            &Integer::from(255),
         );
         let byte = intersect_integer_types(&at_least_zero, &at_most_byte)
             .expect("both sides are integer regions");
