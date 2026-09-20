@@ -1,0 +1,14 @@
+open import "blot:prelude"
+
+// A runtime parameter shadows the identically named compile-time value.
+const upper = 5
+let clamp :: (Int, Int) -> range (0, 5)
+let clamp = fn (value, upper) => do:
+  if value < 0:
+    return 0
+
+  if value > upper:
+    return 5
+
+  return value
+return clamp (9, 10)

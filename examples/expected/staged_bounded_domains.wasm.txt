@@ -1,0 +1,1 @@
+{ .admitted_lower = #Some 5; .admitted_middle = #Some 17; .clamped_lower = 5; .clamped_upper = 25; .percent_boundary = true; .percent_over = false; .priority = 5; .rejected_lower = #None; .rejected_upper = #None; .temperature = -40; .widened = "25%" }

@@ -1,0 +1,6 @@
+open import "blot:prelude"
+const Domain = import "../../../examples/lib/bounded_int_domain.blot"
+
+const Priority = Domain.bounded (range (1, 5))
+
+return { .default = Priority.admit "3"; }

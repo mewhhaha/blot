@@ -789,7 +789,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 19212
+      "lines": 19230
     },
     {
       "path": "compiler/src/hir.rs",
@@ -797,7 +797,7 @@
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 13346
+      "lines": 13405
     },
     {
       "path": "compiler/src/backend.rs",

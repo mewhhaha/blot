@@ -2582,6 +2582,16 @@ predicate. No refinement object reaches inference, Runtime HIR, WebAssembly, or
 the ABI. Branch comparison facts can prove that an `Int` inhabits such a type in
 exactly the same way they prove an explicitly written range.
 
+A recognized integer comparison may use a literal bound or an integer stored in
+a stable compile-time binding, including a field projected from a compile-time
+record. For example, a staged range descriptor can bind `const low = info.low`
+and use `value >= low` to prove its lower bound. The comparison's other operand
+must still be an integer-valued binding or immutable field path. A runtime
+parameter or a shadowing runtime binding is not a compile-time witness, and an
+unrecognized comparison callback contributes no ordering evidence. Reversing the
+operands reverses the proven ordering; it does not change the requirement for
+stable evidence.
+
 Comparisons also refine immutable field paths, such as `raw.port` or
 `settings.http.port`. Repeating that same projection in the guarded branch uses
 the fact; another field does not. Shadowing or rebinding the root record

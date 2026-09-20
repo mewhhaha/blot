@@ -12881,6 +12881,65 @@ return { .go; }
     }
 
     #[test]
+    fn comptime_integer_comparison_bounds_require_stable_values_and_real_orderings() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .expect("prelude installs");
+            for (name, text, accepted) in [
+                (
+                    "stable-bounds.blot",
+                    include_str!("../../src/node/fixtures/bounded_domain_comptime_bounds.blot"),
+                    true,
+                ),
+                (
+                    "runtime-bound.blot",
+                    include_str!("../../src/node/fixtures/bounded_domain_runtime_bound.blot"),
+                    false,
+                ),
+                (
+                    "unrecognized-comparator.blot",
+                    include_str!(
+                        "../../src/node/fixtures/bounded_domain_unrecognized_comparator.blot"
+                    ),
+                    false,
+                ),
+            ] {
+                session
+                    .add_source(name.to_owned(), source(text))
+                    .expect("fixture parses");
+                session
+                    .configure_module(
+                        name,
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("fixture configures");
+                let checked = session.check_module(name);
+                assert_eq!(checked["ok"], accepted, "{name}: {checked}");
+                if accepted {
+                    let compiled = session
+                        .compile_module(name)
+                        .expect("stable bounds emit Wasm");
+                    wasmparser::Validator::new()
+                        .validate_all(&compiled.wasm)
+                        .expect("valid Wasm");
+                } else {
+                    assert_eq!(
+                        checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
+                        "{name}: {checked}"
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
     fn short_circuit_bounds_refine_direct_array_access() {
         run_with_compiler_test_stack(|| {
             let mut session = CompilerSession::default();

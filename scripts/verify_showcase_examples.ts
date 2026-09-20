@@ -59,6 +59,7 @@ const abstractionExamples = [
   "typed_traversals.blot",
   "typed_record_projections.blot",
   "composable_event_aggregates.blot",
+  "staged_bounded_domains.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

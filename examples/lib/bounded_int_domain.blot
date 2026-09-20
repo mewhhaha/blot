@@ -1,0 +1,41 @@
+open import "blot:prelude"
+
+// Reflect one closed range once; the type and generated runtime operations
+// therefore share the same endpoints rather than maintaining parallel bounds.
+const bounded = fn T => do:
+  const info = case Reflect.of T of
+    #Range interval => case interval.domain of
+      #Int => interval
+      _ => @fail "bounded requires an integer range type"
+
+    _ => @fail "bounded requires a range type"
+
+  const low :: T
+  const low = info.low
+  const high :: T
+  const high = info.high
+
+  let contains :: Int -> Bool
+  let contains = fn value => value >= low && value <= high
+
+  let admit :: Int -> Option T
+  let admit = fn value => do:
+    if value < low:
+      return None
+    else if value > high:
+      return None
+    else:
+      return #Some value
+
+  let clamp :: Int -> T
+  let clamp = fn value => do:
+    if value < low:
+      return low
+    else if value > high:
+      return high
+    else:
+      return value
+
+  return { .Type = T; .lower = low; .upper = high; .contains; .admit; .clamp; }
+
+return { .bounded; }
