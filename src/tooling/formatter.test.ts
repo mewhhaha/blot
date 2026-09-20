@@ -1010,3 +1010,24 @@ return build ()
     }
   }
 });
+
+Deno.test("formatting many signatures shares layout without changing their trees", async () => {
+  const declarations = Array.from(
+    { length: 32 },
+    (_, index) =>
+      `const step${index} ::
+  @forall (fn T => @forall (fn S => do:
+      return ([T], S, (S, T) -> S) -> S
+    ))
+const step${index} = fn value => value
+`,
+  );
+  const source = `${declarations.join("\n")}return step31\n`;
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("signature corpus did not format");
+  assertEquals(
+    semanticTree(await parse(formatted.source)),
+    semanticTree(await parse(source)),
+  );
+  assertEquals(await formatSource(formatted.source), formatted);
+});
