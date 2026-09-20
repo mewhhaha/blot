@@ -600,11 +600,14 @@ Deno.test("pending inventory exactly matches its executable probes", () => {
 for (const name of pendingFiles) {
   const stem = basename(name, ".blot");
   const expected = PENDING[stem];
-  const label = expected === undefined
-    ? "an unrecorded limitation"
-    : expected.stage === "type"
-    ? expected.type
-    : expected.code;
+  let label: string;
+  if (expected === undefined) {
+    label = "an unrecorded limitation";
+  } else if (expected.stage === "type") {
+    label = expected.type;
+  } else {
+    label = expected.code;
+  }
   Deno.test(`examples/pending/${name} records ${label}`, async () => {
     if (expected === undefined) {
       throw new Error(`add \`${stem}\` to PENDING with its result and stage`);
