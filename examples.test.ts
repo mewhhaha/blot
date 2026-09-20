@@ -457,6 +457,10 @@ const PENDING: Record<
     "stage": "type",
     "type": "⊥",
   },
+  "record_edit_guarded_increment": {
+    "stage": "check",
+    "code": "BLOT_TYPE_ERROR",
+  },
 };
 
 async function blotFiles(directory: string): Promise<string[]> {
