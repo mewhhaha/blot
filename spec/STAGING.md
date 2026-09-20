@@ -90,6 +90,20 @@ continuations do not consume source-expression fuel. Omitting one must preserve
 source evaluation order, effect and module identities, diagnostic origin and
 span, and the existing trampoline boundaries for real continuations.
 
+Syntactic closure free names may be memoized on the immutable loaded AST, keyed
+by parameter, body, and recursive self binder. Replacing or removing that AST
+replaces or releases its cache. This is not a cache of captured values, types,
+effects, or environments: those remain current-instance inputs on every use.
+
+An already selected signature that definitively requires ordinary staging may
+reject optional residualization before capture planning or environment identity
+construction. A signature requiring instance-specific checking must still be
+checked first; its provisional shape cannot authorize that shortcut. Checked
+capture types are demanded only by that instance check. Recursive,
+host-callback, and development-boundary policies are unchanged. Cheap
+source/representation discriminants may precede exact environment comparisons,
+but cannot replace them.
+
 ## 3. Checked bridges
 
 A compile-time value acquires semantic authority only through the bridge owned
@@ -742,3 +756,51 @@ members have a shared runtime representation under the existing representation
 join. In particular, integer singleton bounds and `Int` share the signed-i64
 carrier. This does not authorize an untagged integer/float union, invent a tag,
 or change any canonical ABI layout.
+
+### Traversal-local residual evidence sharing
+
+Residual identity construction retains immutable function/range edges and
+attached signature roots as owned structural chunks. Repeated chunks do not
+replace exact value evidence with pointer equality: comparison checks their
+contents, and portable identity encoding observes the same flattened sequence.
+Chunks containing new closure definitions are not reused until their closure
+references are stable. Owners remain alive for the traversal so storage
+addresses cannot be recycled.
+
+Collecting inherited type and effect substitutions may share immutable snapshots
+of a lexical frame's ancestry within one synchronous identity traversal. A
+nearer binding shadows its ancestor. Such a traversal executes no source code
+and cannot mutate environment bindings or substitutions. No frame snapshot
+survives into a later key construction: later value, signature, substitution,
+and parent changes must be observed again. Runtime capture slots and ownership
+meanings remain exact.
+
+Only demanded substitution maps and their unchanged empty-frame suffixes are
+retained. A single request through a chain of nonempty frames must not
+materialize and retain a complete map for every prefix of that chain.
+
+### Request-local capture graph traversal
+
+Runtime capture discovery and rebinding preserve sharing of immutable record
+storage and persistent function/range type edges. Within one traversal, an
+eligible completed source node is processed once. The traversal retains each
+indexed owner, so an allocation address cannot be reused while its entry is
+live. Addresses detect repeated storage; they do not establish equality between
+independently allocated source values.
+
+Discovery retains the existing traversal order, runtime slot identities,
+`RuntimeMeaning`, and staging requirements. A node is marked complete only after
+its children have been visited. Recursive closure captures therefore still use
+the existing closure-cycle guard and first-encounter ordering.
+
+Rebinding uses one fixed runtime-slot substitution map per request. Repeated
+immutable input nodes share their rewritten output; field order, closure
+signature evidence, effect identities, and the existing recursive environment
+knot-tying behavior are unchanged. This is graph-preserving renaming, not
+memoization of source execution. No capture or replacement cache survives the
+request, and subsequent requests observe current bindings and mutable cells.
+
+The existing rebinding operation creates fresh copies of mutable region stores.
+A record or type-edge rewrite that creates such a copy is not memoized. Repeated
+region-bearing paths therefore retain their original independent-copy behavior;
+this optimization does not coalesce mutable authority.

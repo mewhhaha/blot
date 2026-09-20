@@ -32,13 +32,15 @@ impl Checker {
             closure.parameter,
             closure.body,
             closure.self_name,
-        )? {
-            if let Some(value) = lookup(closure.captures, &name) {
+        )?
+        .iter()
+        {
+            if let Some(value) = lookup(closure.captures, name) {
                 captures.names.borrow_mut().insert(name.clone(), value);
             }
-            if let Some(signature) = crate::value::lookup_signature(closure.captures, &name) {
+            if let Some(signature) = crate::value::lookup_signature(closure.captures, name) {
                 captures.signatures.borrow_mut().insert(
-                    name,
+                    name.clone(),
                     crate::eval::substitute_signature(&signature, closure.captures),
                 );
             }

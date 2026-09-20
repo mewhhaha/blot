@@ -11,8 +11,8 @@ use crate::eval::{
     ModuleInstanceScope, closure_free_names,
 };
 use crate::value::{
-    ChoiceSource, Domain, EffectOperationContract, OrderedFields, RuntimeMeaning, RuntimeValue,
-    Value, lookup, lookup_signature,
+    ChoiceSource, Domain, EffectOperationContract, Environment, OrderedFields, RuntimeMeaning,
+    RuntimeValue, TypeValue, Value, lookup, lookup_signature,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -669,11 +669,35 @@ pub(super) fn residual_environment_key(
     Ok(Some(ResidualEnvironmentKey(key.parts.into())))
 }
 
+// All owners are retained for this synchronous traversal. No evidence or
+// environment snapshot survives into another key construction.
+enum SharedValueOwner {
+    Type(TypeValue),
+    Signature(Rc<Value>),
+}
+
+impl SharedValueOwner {
+    fn value(&self) -> &Value {
+        match self {
+            Self::Type(value) => value,
+            Self::Signature(value) => value,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct InheritedSubstitutions {
+    types: Rc<BTreeMap<u32, Value>>,
+    effects: Rc<BTreeMap<u32, Value>>,
+}
+
 struct Builder<'a> {
     context: &'a Rc<Context>,
     slots: HashMap<(usize, usize), usize>,
     closures: HashMap<(String, u32, usize), usize>,
     fields: HashMap<*const (), (Rc<[Part]>, OrderedFields)>,
+    shared_values: HashMap<*const Value, (Rc<[Part]>, SharedValueOwner)>,
+    inherited: HashMap<usize, (Environment, Rc<InheritedSubstitutions>)>,
     parts: Vec<Part>,
 }
 
@@ -688,6 +712,8 @@ impl<'a> Builder<'a> {
                 .collect(),
             closures: HashMap::new(),
             fields: HashMap::new(),
+            shared_values: HashMap::new(),
+            inherited: HashMap::new(),
             parts: Vec::new(),
         }
     }
@@ -749,6 +775,82 @@ impl<'a> Builder<'a> {
         Ok(supported)
     }
 
+    fn shared_value(&mut self, owner: SharedValueOwner) -> Result<bool, Diagnostic> {
+        let identity = owner.value() as *const Value;
+        if let Some((parts, _)) = self.shared_values.get(&identity) {
+            self.parts.push(Part::Fields(parts.clone()));
+            return Ok(true);
+        }
+        let outer = std::mem::take(&mut self.parts);
+        let closures = self.closures.len();
+        let supported = self.value(owner.value())?;
+        let parts: Rc<[Part]> = std::mem::replace(&mut self.parts, outer).into();
+        // As for record evidence, a first closure definition is not a stable
+        // reference. Keep exact evidence and only share reference-stable chunks.
+        if supported && closures == self.closures.len() {
+            self.shared_values.insert(identity, (parts.clone(), owner));
+        }
+        self.parts.push(Part::Fields(parts));
+        Ok(supported)
+    }
+
+    fn type_edge(&mut self, value: &TypeValue) -> Result<bool, Diagnostic> {
+        self.shared_value(SharedValueOwner::Type(value.clone()))
+    }
+
+    fn optional_signature(&mut self, signature: Option<&Rc<Value>>) -> Result<bool, Diagnostic> {
+        self.number(u64::from(signature.is_some()));
+        match signature {
+            Some(signature) => self.shared_value(SharedValueOwner::Signature(signature.clone())),
+            None => Ok(true),
+        }
+    }
+
+    fn substitutions(&mut self, environment: &Environment) -> Rc<InheritedSubstitutions> {
+        let identity = Rc::as_ptr(environment) as usize;
+        if let Some((_, snapshot)) = self.inherited.get(&identity) {
+            return snapshot.clone();
+        }
+        let mut pending = Vec::new();
+        let mut scope = Some(environment.clone());
+        let mut inherited = Rc::new(InheritedSubstitutions::default());
+        while let Some(current) = scope {
+            let identity = Rc::as_ptr(&current) as usize;
+            if let Some((_, snapshot)) = self.inherited.get(&identity) {
+                inherited = snapshot.clone();
+                break;
+            }
+            scope = current.parent.borrow().clone();
+            pending.push(current);
+        }
+        // Only the nearest nonempty frame and its empty descendants have the
+        // final snapshot. Memoizing a complete map at every nonempty ancestor
+        // would copy all preceding bindings at every depth (quadratic space).
+        // Construct one requested snapshot, then share its unchanged suffix.
+        let mut shared_frames = pending.len();
+        for (index, current) in pending.iter().enumerate().rev() {
+            let types = current.type_substitutions.borrow();
+            let effects = current.effect_substitutions.borrow();
+            if !types.is_empty() || !effects.is_empty() {
+                shared_frames = index + 1;
+                let updated = Rc::make_mut(&mut inherited);
+                if !types.is_empty() {
+                    Rc::make_mut(&mut updated.types)
+                        .extend(types.iter().map(|(key, value)| (*key, value.clone())));
+                }
+                if !effects.is_empty() {
+                    Rc::make_mut(&mut updated.effects)
+                        .extend(effects.iter().map(|(key, value)| (*key, value.clone())));
+                }
+            }
+        }
+        for current in pending.into_iter().take(shared_frames) {
+            self.inherited
+                .insert(Rc::as_ptr(&current) as usize, (current, inherited.clone()));
+        }
+        inherited
+    }
+
     fn runtime(&mut self, value: &RuntimeValue) -> Result<bool, Diagnostic> {
         if matches!(
             value.meaning,
@@ -789,33 +891,18 @@ impl<'a> Builder<'a> {
 
         // These substitutions are read by specialization independently of free
         // term variables. Retain the nearest lexical value of every variable.
-        let mut substitutions = BTreeMap::new();
-        let mut effect_substitutions = BTreeMap::new();
-        let mut environment = Some(closure.environment.clone());
-        while let Some(current) = environment {
-            for (effect, value) in current.effect_substitutions.borrow().iter() {
-                effect_substitutions
-                    .entry(*effect)
-                    .or_insert_with(|| value.clone());
-            }
-            for (variable, value) in current.type_substitutions.borrow().iter() {
-                substitutions
-                    .entry(*variable)
-                    .or_insert_with(|| value.clone());
-            }
-            environment = current.parent.borrow().clone();
-        }
-        self.number(substitutions.len() as u64);
-        for (variable, value) in substitutions {
-            self.parts.push(Part::Variable(variable));
-            if !self.value(&value)? {
+        let substitutions = self.substitutions(closure.environment);
+        self.number(substitutions.types.len() as u64);
+        for (variable, value) in substitutions.types.iter() {
+            self.parts.push(Part::Variable(*variable));
+            if !self.value(value)? {
                 return Ok(false);
             }
         }
-        self.number(effect_substitutions.len() as u64);
-        for (effect, value) in effect_substitutions {
-            self.number(u64::from(effect));
-            if !self.value(&value)? {
+        self.number(substitutions.effects.len() as u64);
+        for (effect, value) in substitutions.effects.iter() {
+            self.number(u64::from(*effect));
+            if !self.value(value)? {
                 return Ok(false);
             }
         }
@@ -827,12 +914,12 @@ impl<'a> Builder<'a> {
             closure.self_name,
         )?;
         self.number(names.len() as u64);
-        for name in names {
-            self.text(&name);
+        for name in names.iter() {
+            self.text(name);
             // An absent binding is recorded explicitly, not conflated with a
             // value. Demand may make a syntactic free occurrence unreachable.
-            if !self.optional_value(lookup(closure.environment, &name).as_ref())?
-                || !self.optional_value(lookup_signature(closure.environment, &name).as_ref())?
+            if !self.optional_value(lookup(closure.environment, name).as_ref())?
+                || !self.optional_value(lookup_signature(closure.environment, name).as_ref())?
             {
                 return Ok(false);
             }
@@ -912,7 +999,7 @@ impl<'a> Builder<'a> {
             }
             Value::Range { low, high, domain } => {
                 self.parts.push(Part::Domain(*domain));
-                return Ok(self.value(low)? && self.value(high)?);
+                return Ok(self.type_edge(low)? && self.type_edge(high)?);
             }
             Value::Arrow {
                 deferred,
@@ -926,8 +1013,8 @@ impl<'a> Builder<'a> {
                 if let Some(tail) = effect_tail {
                     self.parts.push(Part::Variable(*tail));
                 }
-                return Ok(self.value(domain)?
-                    && self.value(codomain)?
+                return Ok(self.type_edge(domain)?
+                    && self.type_edge(codomain)?
                     && self.values(effects.iter())?);
             }
             Value::Forall { variable, body } => {
@@ -993,7 +1080,7 @@ impl<'a> Builder<'a> {
                         self.text(path);
                     }
                 }
-                if !self.optional_value(signature.as_deref())? {
+                if !self.optional_signature(signature.as_ref())? {
                     return Ok(false);
                 }
                 return self.closure(LexicalClosure {
@@ -1098,6 +1185,390 @@ mod tests {
             type_id: 4,
             meaning,
         }
+    }
+
+    fn binary_type_graph(depth: usize, leaf: Value) -> Value {
+        let mut edge = TypeValue::new(leaf);
+        for _ in 0..depth {
+            edge = TypeValue::new(Value::Arrow {
+                deferred: false,
+                domain: edge.clone(),
+                codomain: edge,
+                effects: Vec::new(),
+                effect_tail: None,
+            });
+        }
+        edge.into_owned()
+    }
+
+    #[test]
+    fn shared_type_identity_stays_linear_and_independent_of_allocations() {
+        let context = Rc::new(Context::default());
+        let graph = binary_type_graph(18, Value::Unit);
+        let mut builder = Builder::new(&context, &[]);
+        assert!(builder.value(&graph).unwrap());
+        assert!(builder.shared_values.len() <= 19);
+        let stored_parts: usize = builder
+            .shared_values
+            .values()
+            .map(|(parts, _)| parts.len())
+            .sum();
+        assert!(
+            stored_parts < 150,
+            "shared graph expanded into {stored_parts} parts"
+        );
+        let original = ResidualEnvironmentKey(builder.parts.into());
+        assert!(Some(original.clone()) == key(&binary_type_graph(18, Value::Unit), &[]));
+        assert!(Some(original) != key(&binary_type_graph(18, Value::TypeVariable(2)), &[]));
+    }
+
+    #[test]
+    fn repeated_signature_roots_reuse_owned_exact_evidence() {
+        let context = Rc::new(Context::default());
+        let signature = Rc::new(binary_type_graph(8, Value::Unit));
+        let weak = Rc::downgrade(&signature);
+        let mut builder = Builder::new(&context, &[]);
+        for _ in 0..2048 {
+            assert!(builder.optional_signature(Some(&signature)).unwrap());
+        }
+        assert_eq!(builder.parts.len(), 4096);
+        assert!(builder.shared_values.len() <= 10);
+        let Part::Fields(first) = &builder.parts[1] else {
+            panic!("signature chunk")
+        };
+        let Part::Fields(last) = &builder.parts[4095] else {
+            panic!("signature chunk")
+        };
+        assert!(Rc::ptr_eq(first, last));
+        drop(signature);
+        assert!(
+            weak.upgrade().is_some(),
+            "traversal must retain pointer owners"
+        );
+        drop(builder);
+        assert!(
+            weak.upgrade().is_none(),
+            "signature owner escaped the traversal"
+        );
+    }
+
+    #[test]
+    fn shared_type_identity_observes_copy_on_write_mutation() {
+        let context = Rc::new(Context::default());
+        let first = TypeValue::new(Value::Unit);
+        let mut changed = first.clone();
+        let mut builder = Builder::new(&context, &[]);
+        assert!(builder.type_edge(&first).unwrap());
+        *changed = Value::TypeVariable(7);
+        assert!(builder.type_edge(&changed).unwrap());
+        assert!(builder.type_edge(&first).unwrap());
+        let Part::Fields(before) = &builder.parts[0] else {
+            panic!("type chunk")
+        };
+        let Part::Fields(after) = &builder.parts[1] else {
+            panic!("type chunk")
+        };
+        let Part::Fields(again) = &builder.parts[2] else {
+            panic!("type chunk")
+        };
+        assert!(Rc::ptr_eq(before, again));
+        assert!(!Rc::ptr_eq(before, after));
+        assert!(before != after);
+    }
+
+    #[test]
+    fn inherited_substitution_frames_share_empty_ancestry_and_release_owners() {
+        use crate::value::child_env;
+        let context = Rc::new(Context::default());
+        let root = child_env(None);
+        root.type_substitutions
+            .borrow_mut()
+            .insert(4, Value::Int(42.into()));
+        let mut leaf = root.clone();
+        for _ in 0..4096 {
+            leaf = child_env(Some(leaf));
+        }
+        let weak = Rc::downgrade(&leaf);
+        let mut builder = Builder::new(&context, &[]);
+        let snapshot = builder.substitutions(&leaf);
+        assert_eq!(builder.inherited.len(), 4097);
+        assert!(Rc::ptr_eq(&snapshot, &builder.substitutions(&root)));
+        for _ in 0..2048 {
+            assert!(Rc::ptr_eq(&snapshot, &builder.substitutions(&leaf)));
+        }
+        assert_eq!(builder.inherited.len(), 4097);
+        drop(leaf);
+        assert!(weak.upgrade().is_some());
+        drop(builder);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn deep_substitution_demand_does_not_retain_quadratic_prefix_maps() {
+        use crate::value::child_env;
+        let context = Rc::new(Context::default());
+        let mut leaf = child_env(None);
+        for variable in 0..1024 {
+            let child = child_env(Some(leaf));
+            child
+                .type_substitutions
+                .borrow_mut()
+                .insert(variable, Value::Unit);
+            child
+                .effect_substitutions
+                .borrow_mut()
+                .insert(variable, Value::Unit);
+            leaf = child;
+        }
+        let mut builder = Builder::new(&context, &[]);
+        let snapshot = builder.substitutions(&leaf);
+        assert_eq!(snapshot.types.len(), 1024);
+        assert_eq!(snapshot.effects.len(), 1024);
+        assert_eq!(
+            builder.inherited.len(),
+            1,
+            "undemanded prefixes were materialized"
+        );
+        let retained_bindings: usize = builder
+            .inherited
+            .values()
+            .map(|(_, snapshot)| snapshot.types.len() + snapshot.effects.len())
+            .sum();
+        assert_eq!(
+            retained_bindings, 2048,
+            "one demand must retain one linear snapshot"
+        );
+        let empty = child_env(Some(leaf));
+        assert!(Rc::ptr_eq(&snapshot, &builder.substitutions(&empty)));
+        assert_eq!(builder.inherited.len(), 2);
+    }
+
+    #[test]
+    fn inherited_substitutions_keep_nearest_shadowing_and_reobserve_next_traversal() {
+        use crate::value::child_env;
+        let context = Rc::new(Context::default());
+        let root = child_env(None);
+        root.type_substitutions
+            .borrow_mut()
+            .insert(7, Value::Int(1.into()));
+        root.effect_substitutions
+            .borrow_mut()
+            .insert(9, Value::Text("outer".into()));
+        let child = child_env(Some(root.clone()));
+        child
+            .type_substitutions
+            .borrow_mut()
+            .insert(7, Value::Int(2.into()));
+        child
+            .effect_substitutions
+            .borrow_mut()
+            .insert(9, Value::Text("inner".into()));
+        let mut builder = Builder::new(&context, &[]);
+        let inner = builder.substitutions(&child);
+        let outer = builder.substitutions(&root);
+        assert!(matches!(inner.types.get(&7), Some(Value::Int(n)) if *n == 2.into()));
+        assert!(matches!(outer.types.get(&7), Some(Value::Int(n)) if *n == 1.into()));
+        assert!(matches!(inner.effects.get(&9), Some(Value::Text(t)) if t.as_ref() == "inner"));
+        assert!(matches!(outer.effects.get(&9), Some(Value::Text(t)) if t.as_ref() == "outer"));
+        drop(builder);
+        child.type_substitutions.borrow_mut().clear();
+        root.type_substitutions
+            .borrow_mut()
+            .insert(7, Value::Int(3.into()));
+        let fresh = Builder::new(&context, &[]).substitutions(&child);
+        assert!(matches!(fresh.types.get(&7), Some(Value::Int(n)) if *n == 3.into()));
+        *child.parent.borrow_mut() = None;
+        let detached = Builder::new(&context, &[]).substitutions(&child);
+        assert!(detached.types.is_empty());
+    }
+
+    #[test]
+    fn shared_signature_chunks_preserve_first_closure_definitions() {
+        use crate::ast::{AstArena, Expression, Module, Pattern, ResultEffects, Span};
+        use crate::eval::LoadedModule;
+        use crate::value::child_env;
+        let path = "identity-signature.blot";
+        let span = Span { start: 0, end: 1 };
+        let mut arena = AstArena::default();
+        let parameter = arena.pattern(Pattern::Unit { span });
+        let body = arena.expression(Expression::Unit { span });
+        let context = Rc::new(Context::default());
+        context.modules.borrow_mut().insert(
+            path.into(),
+            LoadedModule::new(
+                path,
+                Rc::new(Module {
+                    parameter: None,
+                    declarations: Vec::new(),
+                    result: body,
+                    result_effects: ResultEffects::Pure,
+                    span,
+                    arena,
+                }),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+        );
+        let signature = Rc::new(Value::Closure {
+            module: Rc::new(path.to_owned()),
+            module_instances: Rc::new(Vec::new()),
+            effect_scope: Rc::new(EffectScope::default()),
+            parameter,
+            body,
+            environment: child_env(None),
+            self_name: None,
+            imports: None,
+            signature: None,
+            reuse_assertion: None,
+            deferred: false,
+        });
+        let mut builder = Builder::new(&context, &[]);
+        assert!(builder.optional_signature(Some(&signature)).unwrap());
+        assert!(
+            builder.shared_values.is_empty(),
+            "a first closure definition is not reusable"
+        );
+        assert!(builder.optional_signature(Some(&signature)).unwrap());
+        assert_eq!(builder.shared_values.len(), 1);
+        assert!(builder.optional_signature(Some(&signature)).unwrap());
+        let Part::Fields(first) = &builder.parts[1] else {
+            panic!("signature chunk")
+        };
+        let Part::Fields(second) = &builder.parts[3] else {
+            panic!("signature chunk")
+        };
+        let Part::Fields(third) = &builder.parts[5] else {
+            panic!("signature chunk")
+        };
+        assert!(first != second);
+        assert!(Rc::ptr_eq(second, third));
+    }
+
+    #[test]
+    fn shared_type_chunks_preserve_flat_portable_identity() {
+        let context = Rc::new(Context::default());
+        let mut builder = Builder::new(&context, &[]);
+        assert!(
+            builder
+                .value(&binary_type_graph(7, Value::TypeVariable(42)))
+                .unwrap()
+        );
+        fn flatten(parts: &[Part], out: &mut Vec<Part>) {
+            for part in parts {
+                match part {
+                    Part::Fields(children) => flatten(children, out),
+                    _ => out.push(part.clone()),
+                }
+            }
+        }
+        let mut flat = Vec::new();
+        flatten(&builder.parts, &mut flat);
+        let encode = |parts: &[Part]| {
+            portable_evidence(&context, &[], parts.iter(), HashMap::new())
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(encode(&builder.parts).digest, encode(&flat).digest);
+        assert_eq!(
+            encode(&builder.parts).encoded_bytes,
+            encode(&flat).encoded_bytes
+        );
+    }
+
+    #[test]
+    fn cached_free_names_do_not_cache_environment_values_or_signatures() {
+        use crate::ast::{AstArena, Expression, Module, Pattern, ResultEffects, Span};
+        use crate::eval::LoadedModule;
+        use crate::value::child_env;
+
+        let path = "current-captures.blot";
+        let span = Span { start: 0, end: 1 };
+        let mut arena = AstArena::default();
+        let parameter = arena.pattern(Pattern::Unit { span });
+        let body = arena.expression(Expression::Var {
+            name: "captured".into(),
+            span,
+        });
+        let context = Rc::new(Context::default());
+        context.modules.borrow_mut().insert(
+            path.into(),
+            LoadedModule::new(
+                path,
+                Rc::new(Module {
+                    parameter: None,
+                    declarations: Vec::new(),
+                    result: body,
+                    result_effects: ResultEffects::Pure,
+                    span,
+                    arena,
+                }),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+        );
+        let environment = child_env(None);
+        let instances = Rc::new(Vec::new());
+        let scope = Rc::new(EffectScope::default());
+        let encode = || {
+            residual_environment_key(
+                &context,
+                LexicalClosure {
+                    module: path,
+                    parameter,
+                    body,
+                    environment: &environment,
+                    self_name: None,
+                },
+                &[],
+                &instances,
+                &scope,
+                false,
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let missing = encode();
+        environment
+            .names
+            .borrow_mut()
+            .insert("captured".into(), Value::Int(1.into()));
+        let first = encode();
+        assert!(missing != first);
+        environment
+            .names
+            .borrow_mut()
+            .insert("captured".into(), Value::Int(2.into()));
+        let changed_value = encode();
+        assert!(first != changed_value);
+        environment
+            .names
+            .borrow_mut()
+            .insert("captured".into(), Value::Int(1.into()));
+        assert!(first == encode());
+        environment
+            .signatures
+            .borrow_mut()
+            .insert("captured".into(), Value::OpaqueType("Int".into()));
+        let with_signature = encode();
+        assert!(first != with_signature);
+        environment
+            .signatures
+            .borrow_mut()
+            .insert("captured".into(), Value::OpaqueType("Text".into()));
+        assert!(with_signature != encode());
+        environment.signatures.borrow_mut().clear();
+        assert!(first == encode());
+        environment
+            .type_substitutions
+            .borrow_mut()
+            .insert(7, Value::Int(3.into()));
+        assert!(first != encode());
+        environment.type_substitutions.borrow_mut().clear();
+        environment
+            .effect_substitutions
+            .borrow_mut()
+            .insert(9, Value::Int(4.into()));
+        assert!(first != encode());
     }
 
     #[test]
