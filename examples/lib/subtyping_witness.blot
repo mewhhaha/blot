@@ -1,0 +1,42 @@
+// A witness is an ordinary function packaged with the relationship it proves.
+// `Source` may be more precise than `Target`; applying the witness performs no
+// runtime conversion, it only exposes the statically safe view.
+const Witness = fn (Source, Target) => {
+  .apply = Source -> Target;
+}
+
+// The identity implementation is checked against the requested arrow. That
+// makes the compiler's actual subtype relation the authority, including closed
+// sums, rather than duplicating it through a reflection predicate.
+const derive = fn (Source, Target) => do:
+  let apply :: Source -> Target
+  let apply = fn value => value
+  let witness :: Witness (Source, Target)
+  let witness = { .apply; }
+  return witness
+
+const identity :: @forall (fn Value => Witness (Value, Value))
+const identity = {
+  .apply = fn value => value;
+}
+
+// Composition shares the exact middle type. A pair of unrelated coercions
+// cannot be joined merely because their runtime representations happen to fit.
+const compose :: @forall (fn Source => @forall (fn Middle => @forall (fn Target => (Witness (Source, Middle), Witness (Middle, Target)) -> Witness (Source, Target))))
+const compose = fn (first, second) => {
+  .apply = fn value => second.apply (first.apply value);
+}
+
+// Consumers can be adapted contravariantly without knowing why the source is a
+// subtype. This is the practical payoff: APIs written against the least
+// capability can consume richer values through reusable checked evidence.
+const adapt :: @forall (fn Source => @forall (fn Target => @forall (fn Output => (Witness (Source, Target), (Target -> Output)) -> Source -> Output)))
+const adapt = fn (witness, consume) => fn value => consume (witness.apply value)
+
+return {
+  .Witness;
+  .derive;
+  .identity;
+  .compose;
+  .adapt;
+}

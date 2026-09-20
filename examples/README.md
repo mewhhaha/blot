@@ -299,3 +299,9 @@ the aggregate example in PR #143.
 The deliberately heterogeneous endpoint instantiations currently emit one
 `BLOT_LINT_SPECIALIZATION_COUNT` advisory in `hoist`. The repair does not
 suppress that representation-count warning or claim a performance measurement.
+
+### Checked subtyping witnesses
+
+[`typed_subtyping_witnesses.blot`](typed_subtyping_witnesses.blot) derives and
+composes checked no-op views for refined records and closed sums. See the
+[design and test instructions](typed_subtyping_witnesses.md).
