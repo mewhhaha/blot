@@ -1,0 +1,1 @@
+{ .default = { .required_api = #Ok 443; .required_missing = #Error "missing"; .observed_admin = #Ok { .value = 8443; .source = "registry"; }; .observed_owner = #Ok { .value = "Żaneta"; .source = "registry"; }; .observed_owner_missing = #Error "missing"; }; }

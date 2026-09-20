@@ -1,0 +1,1 @@
+{ .observed_admin = #Ok { .source = "registry"; .value = 8443 }; .observed_owner = #Ok { .source = "registry"; .value = "Żaneta" }; .observed_owner_missing = #Error "missing"; .required_api = #Ok 443; .required_missing = #Error "missing" }
