@@ -1,0 +1,9 @@
+open import "blot:prelude"
+const S = import "../../../examples/lib/state_action.blot"
+const App = { .count = Int; }
+const Profile = { .name = Text; }
+const app :: S.Action (App, Int)
+const app = fn state => { .state; .value = state.count; }
+const profile :: S.Action (Profile, Text)
+const profile = fn state => { .state; .value = state.name; }
+return S.sequence (app, profile)

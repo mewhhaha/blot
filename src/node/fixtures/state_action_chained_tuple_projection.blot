@@ -1,0 +1,3 @@
+open import "blot:prelude"
+const value = { .result = ("left", (1, 2)); }
+return value.result.1.0

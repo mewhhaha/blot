@@ -46,6 +46,7 @@ const suites = [
   "src/node/shared_service_contracts.test.ts",
   "src/node/stateful_processors.test.ts",
   "src/node/reversible_protocols.test.ts",
+  "src/node/zoomable_state_actions.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 
