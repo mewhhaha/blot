@@ -4006,7 +4006,7 @@ impl Checker {
             &dependency_types,
         )?;
         effects = self.join_effects(effects, inferred.effects)?;
-        self.resolve_numeric_literals(0)?;
+        self.resolve_numeric_literals(0, true)?;
         if let Some(diagnostic) = self.editor_hole_diagnostics(path).into_iter().next() {
             return Err(diagnostic);
         }
@@ -5354,7 +5354,7 @@ impl Checker {
                     })?;
                     inferred.effects = Type::Effects(BTreeSet::new());
                 }
-                self.resolve_numeric_literals(first_literal)?;
+                self.resolve_numeric_literals(first_literal, true)?;
                 let evaluated = if kind == DeclarationKind::Const {
                     match self.evaluate_binding(
                         path,
@@ -5498,6 +5498,14 @@ impl Checker {
                             *captured_parameter = checked_parameter;
                             *captured_result = checked_result;
                         }
+                    }
+                    let checked = self.settle(inferred.type_.clone(), true);
+                    if matches!(checked, Type::Forall { .. })
+                        && closed_checked_type(&checked, &mut HashSet::new())
+                        && !contains_bottom(&checked)
+                        && !self.contains_unevidenced(&checked, &mut HashSet::new())
+                    {
+                        selected = checked;
                     }
                     inferred.type_ = selected;
                 }
@@ -5811,7 +5819,7 @@ impl Checker {
                             span,
                         )
                     })?;
-                self.resolve_numeric_literals(first_literal)?;
+                self.resolve_numeric_literals(first_literal, true)?;
                 let exact_record = self.exact_record_expression(module, value, types);
                 let exact_record_order =
                     self.exact_record_order_expression(module, value, types, values);
@@ -5844,7 +5852,7 @@ impl Checker {
             Declaration::Open { value, span } => {
                 *recursive_bindings = None;
                 let inferred = self.infer(path, module, value, types, values, dependencies)?;
-                self.resolve_numeric_literals(first_literal)?;
+                self.resolve_numeric_literals(first_literal, true)?;
                 let opened = self.evaluate(path, value, values, Phase::Comptime)?;
                 let Some(fields) = opened_members(&opened) else {
                     return Err(Diagnostic::new(
@@ -6571,6 +6579,7 @@ impl Checker {
                     return Ok(Inferred::pure(imported));
                 }
                 let statically_known = statically_known_callee(module, function, environment);
+                let first_argument_literal = self.variables.borrow().len() as VariableId;
                 let contextual_argument = if self.specialization_depth.get() == 0
                     && statically_known
                 {
@@ -6645,7 +6654,7 @@ impl Checker {
                         dependencies,
                         Some(argument.type_.clone()),
                     )?;
-                    let result = self.fresh();
+                    let result = closed_rank_n_result(&function).unwrap_or_else(|| self.fresh());
                     let performed = self.fresh();
                     let deferred = self.deferred_call(&function);
                     self.constrain(
@@ -6665,6 +6674,10 @@ impl Checker {
                             signature,
                         );
                     }
+                    // A signature can already force a literal's representation. Resolve
+                    // only unique choices before freezing its result graph; ambiguous
+                    // literals must still receive their enclosing expected type.
+                    self.resolve_numeric_literals(first_argument_literal, false)?;
                     let mut checked_result = self.settle(checked_result, true);
                     if let (
                         Type::Function { effects, .. },
@@ -6758,7 +6771,7 @@ impl Checker {
                         effects: self.join_effects(argument.effects, call.effects)?,
                     });
                 }
-                let result = self.fresh();
+                let result = closed_rank_n_result(&function.type_).unwrap_or_else(|| self.fresh());
                 let performed = self.fresh();
                 let deferred = self.deferred_call(&function.type_);
                 self.constrain(
@@ -6934,7 +6947,7 @@ impl Checker {
                     if contains_bottom(&settled)
                         && self.mentions_pending_numeric_literal(&subject.type_)
                     {
-                        self.resolve_numeric_literals(0)?;
+                        self.resolve_numeric_literals(0, true)?;
                     }
                     let Some(settled) = self.member_lookup_subject(&subject.type_) else {
                         self.defer_current_closure();
@@ -7188,7 +7201,7 @@ impl Checker {
                                 dependencies,
                             )?;
                             if self.mentions_pending_numeric_literal(&inferred_name.type_) {
-                                self.resolve_numeric_literals(0)?;
+                                self.resolve_numeric_literals(0, true)?;
                             }
                             self.constrain(inferred_name.type_, text_type(), span)?;
                             let inferred =
@@ -8432,7 +8445,7 @@ impl Checker {
                 if contains_bottom(&settled)
                     && self.mentions_pending_numeric_literal(&subject.type_)
                 {
-                    self.resolve_numeric_literals(0)?;
+                    self.resolve_numeric_literals(0, true)?;
                     settled = self.settle(subject.type_.clone(), true);
                 }
                 if contains_bottom(&settled) && self.active_closure_contains_computed_field() {
@@ -9180,7 +9193,11 @@ impl Checker {
         result
     }
 
-    fn resolve_numeric_literals(&self, first_variable: VariableId) -> Result<(), Diagnostic> {
+    fn resolve_numeric_literals(
+        &self,
+        first_variable: VariableId,
+        allow_default: bool,
+    ) -> Result<(), Diagnostic> {
         debug_assert!(self.bound_insertions.borrow().is_empty());
         let literals = self
             .numeric_literals
@@ -9195,12 +9212,19 @@ impl Checker {
             }
             let candidates = Self::numeric_literal_candidates(&literal.kind);
             let mut selected = None;
+            let mut ambiguous = false;
             let mut error = None;
             for candidate in candidates {
                 match self.numeric_literal_candidate_fits(variable, &candidate, literal.span) {
                     Ok(()) => {
+                        if selected.is_some() {
+                            ambiguous = true;
+                            break;
+                        }
                         selected = Some(candidate);
-                        break;
+                        if allow_default {
+                            break;
+                        }
                     }
                     Err(candidate_error) => {
                         if error.is_none() {
@@ -9208,6 +9232,9 @@ impl Checker {
                         }
                     }
                 }
+            }
+            if ambiguous {
+                continue;
             }
             let Some(candidate) = selected else {
                 return Err(error.expect("numeric literals have at least one candidate"));
@@ -12422,6 +12449,19 @@ fn operator_dispatch_type_is_concrete(type_: &Type) -> bool {
         | Type::Opaque(_)
         | Type::Top
         | Type::Bottom => true,
+    }
+}
+
+fn closed_rank_n_result(type_: &Type) -> Option<Type> {
+    let Type::Function { result, .. } = type_ else {
+        return None;
+    };
+    if matches!(result.as_ref(), Type::Forall { .. })
+        && closed_checked_type(result, &mut HashSet::new())
+    {
+        Some(result.as_ref().clone())
+    } else {
+        None
     }
 }
 
@@ -16219,12 +16259,13 @@ fn call_site_diagnostic(
     expression: ExpressionId,
     mut diagnostic: Diagnostic,
 ) -> Diagnostic {
-    if matches!(diagnostic.code, "BLOT_TYPE_ERROR" | "BLOT_NO_FIELD")
-        && matches!(
-            module.arena.expressions[expression.0 as usize],
-            Expression::Apply { .. }
-        )
-        && !module.arena.synthetic_expressions.contains(&expression)
+    if matches!(
+        diagnostic.code,
+        "BLOT_TYPE_ERROR" | "BLOT_NO_FIELD" | "BLOT_ARGUMENT_MISMATCH"
+    ) && matches!(
+        module.arena.expressions[expression.0 as usize],
+        Expression::Apply { .. }
+    ) && !module.arena.synthetic_expressions.contains(&expression)
         && let Some(origin) = diagnostic.origin.as_deref()
         && origin != path
     {
@@ -16232,7 +16273,12 @@ fn call_site_diagnostic(
             "{} Required by {origin} at source span [{}, {}).",
             diagnostic.message, diagnostic.span.start, diagnostic.span.end,
         );
-        diagnostic.span = module.arena.expression_span(expression);
+        diagnostic.span = match &module.arena.expressions[expression.0 as usize] {
+            Expression::Apply { argument, .. } if diagnostic.code == "BLOT_ARGUMENT_MISMATCH" => {
+                module.arena.expression_span(*argument)
+            }
+            _ => module.arena.expression_span(expression),
+        };
         diagnostic.origin = Some(path.to_owned());
     }
     diagnostic

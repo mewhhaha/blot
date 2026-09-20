@@ -93,7 +93,7 @@ impl Checker {
             &BTreeMap::new(),
             Some(parameter),
         )?;
-        checker.resolve_numeric_literals(0)?;
+        checker.resolve_numeric_literals(0, true)?;
         checker.constrain(Type::Unit, Type::Unit, loaded.module.span)?;
         let signature = checker.residual_signature(signature);
         let Some(signature) = checker.reify_runtime_type(&signature) else {

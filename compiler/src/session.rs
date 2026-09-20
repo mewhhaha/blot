@@ -13267,6 +13267,58 @@ return { .go; }
         });
     }
 
+    fn check_pr_fixture(
+        library_path: &str,
+        library_source: &str,
+        fixture: &str,
+    ) -> serde_json::Value {
+        let snapshot = snapshot_from_source(
+            "prelude.blot",
+            include_str!("../../src/prelude/prelude.blot"),
+        );
+        let mut session = CompilerSession::default();
+        session
+            .install_trusted_module_snapshot("prelude.blot", &snapshot)
+            .unwrap();
+        session
+            .add_source("library.blot".to_owned(), source(library_source))
+            .unwrap();
+        session
+            .configure_module(
+                "library.blot",
+                BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                BTreeMap::new(),
+            )
+            .unwrap();
+        session
+            .add_source("probe.blot".to_owned(), source(fixture))
+            .unwrap();
+        session
+            .configure_module(
+                "probe.blot",
+                BTreeMap::from([
+                    ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                    (library_path.to_owned(), "library.blot".to_owned()),
+                ]),
+                BTreeMap::new(),
+            )
+            .unwrap();
+        session.check_module("probe.blot")
+    }
+
+    #[test]
+    fn pr143_unannotated_aggregate_keeps_result_carriers() {
+        run_with_compiler_test_stack(|| {
+            let checked = check_pr_fixture(
+                "../../../examples/lib/event_aggregate.blot",
+                include_str!("../../examples/lib/event_aggregate.blot"),
+                include_str!("../../src/node/fixtures/event_aggregate_unannotated_right.blot"),
+            );
+            assert_eq!(checked["ok"], true, "{checked}");
+            assert_ne!(checked["type"], "{ .value = ⊥ }", "{checked}");
+        });
+    }
+
     fn source(value: &str) -> Vec<u16> {
         let mut raw = String::with_capacity(value.len());
         for character in value.chars() {

@@ -14333,6 +14333,7 @@ fn representative_value(type_: &Type) -> Option<Value> {
             domain: Domain::Float32,
             ..
         } => Some(Value::Float32(0.0)),
+        Type::Union(members) => members.iter().find_map(representative_value),
         Type::Record(fields) => Some(Value::Shape(
             fields
                 .iter()
@@ -14900,6 +14901,52 @@ mod tests {
             false,
             false
         ));
+    }
+
+    #[test]
+    fn constant_sum_alternatives_keep_record_union_payload_layouts() {
+        let union = Type::Union(
+            vec![
+                type_from_value(&Value::Shape(
+                    vec![("value".to_owned(), Value::Int(1.into()))]
+                        .into_iter()
+                        .collect(),
+                )),
+                type_from_value(&Value::Shape(
+                    vec![("value".to_owned(), Value::Int(2.into()))]
+                        .into_iter()
+                        .collect(),
+                )),
+            ]
+            .into(),
+        );
+        let type_ = Type::Variant {
+            cases: vec![
+                (
+                    "Ok".to_owned(),
+                    Type::Record(vec![("state".to_owned(), union)].into()),
+                ),
+                ("Error".to_owned(), Type::Unit),
+            ]
+            .into(),
+            open: false,
+        };
+        let value = Value::Tag {
+            name: "Error".to_owned(),
+            payload: None,
+        };
+        let module = HirBuilder::new("constant-union-payload.blot")
+            .build(
+                vec![StagedExport {
+                    name: "run".to_owned(),
+                    runtime: Some((value, type_)),
+                }],
+                Vec::new(),
+            )
+            .unwrap()
+            .into_runtime()
+            .unwrap();
+        module.graph.validate(module.tables()).unwrap();
     }
 
     #[test]
