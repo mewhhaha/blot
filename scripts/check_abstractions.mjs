@@ -49,6 +49,7 @@ const suites = [
   "src/node/zoomable_state_actions.test.ts",
   "src/node/renderable_observations.test.ts",
   "src/node/typed_record_edits.test.ts",
+  "src/node/typed_transducers.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 

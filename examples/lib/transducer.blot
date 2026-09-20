@@ -1,0 +1,34 @@
+const { .Option; } = import "blot:prelude"
+const R = import "./reducer.blot"
+
+// A transducer changes the input carrier expected by a reducer without owning
+// the reducer's accumulator or final result type.
+const Transducer = fn (Input, Output) => @forall (fn State => @forall (fn Final => R.Reducer (Output, State, Final) -> R.Reducer (Input, State, Final)))
+
+const identity :: @forall (fn Value => Transducer (Value, Value))
+const identity = fn reducer => reducer
+
+const map :: @forall (fn Input => @forall (fn Output => (Input -> Output) -> Transducer (Input, Output)))
+const map = fn project => fn reducer => R.contramap (reducer, project)
+
+const choose_map :: @forall (fn Input => @forall (fn Output => (Input -> Option Output) -> Transducer (Input, Output)))
+const choose_map = fn project => fn reducer => {
+  .initial = reducer.initial;
+  .step = fn (state, value) => (
+    case project value of
+      #Some output => reducer.step (state, output)
+      #None => state
+  );
+  .finish = reducer.finish;
+}
+
+const compose :: @forall (fn Input => @forall (fn Middle => @forall (fn Output => (Transducer (Input, Middle), Transducer (Middle, Output)) -> Transducer (Input, Output))))
+const compose = fn (left, right) => fn reducer => left (right reducer)
+
+return {
+  .Transducer;
+  .identity;
+  .map;
+  .choose_map;
+  .compose;
+}

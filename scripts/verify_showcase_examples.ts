@@ -66,6 +66,7 @@ const abstractionExamples = [
   "zoomable_state_actions.blot",
   "renderable_observations.blot",
   "typed_record_edits.blot",
+  "typed_transducers.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [
