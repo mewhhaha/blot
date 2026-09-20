@@ -469,6 +469,10 @@ const PENDING: Record<
     "stage": "check",
     "code": "BLOT_TYPE_ERROR",
   },
+  "nominal_domain_projected_eliminator": {
+    "stage": "check",
+    "code": "BLOT_TYPE_ERROR",
+  },
 };
 
 async function blotFiles(directory: string): Promise<string[]> {

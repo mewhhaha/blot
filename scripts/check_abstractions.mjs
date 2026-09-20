@@ -56,6 +56,7 @@ const suites = [
   "src/node/interpretable_policies.test.ts",
   "src/node/typed_resource_leases.test.ts",
   "src/node/packed_keys.test.ts",
+  "src/node/applicative_nominal_domains.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 
