@@ -1,0 +1,102 @@
+open import "blot:prelude"
+const Retry = import "./lib/retry_strategy.blot"
+
+const FetchError = #Transient Text | #Rejected Text
+const Request = { .key = Text; .attempt = Int; }
+const Remote = @effect { .fetch = Request -> Result (Int, FetchError); }
+
+let retryable_fetch :: FetchError -> Bool
+let retryable_fetch = fn error => case error of
+  #Transient _ => True
+  #Rejected _ => False
+
+const FetchRetry :: Retry.Strategy (Int, FetchError)
+const FetchRetry = Retry.bounded (2, retryable_fetch)
+
+let fetch :: (Text, Int) -> Result (Int, FetchError) ~ { Remote }
+let fetch = fn (key, attempt) => Remote.fetch {
+  .key;
+  .attempt;
+}
+
+const simulate :: Request -> Result (Int, FetchError)
+const simulate = fn request => do:
+  if request.key == "flaky":
+    if request.attempt < 2:
+      return #Error (#Transient "temporarily unavailable")
+
+    return #Ok 204
+
+  if request.key == "rejected":
+    return #Error (#Rejected "permission denied")
+
+  return #Ok 200
+
+let remote_handler =
+  {
+    .fetch = fn (request, ?resume) => do:
+      use result <- resume (simulate request)
+      return result
+    ;
+    .return = fn result => result;
+  }
+
+let remote_program :: Text -> Result (Int, FetchError) ~ { Remote }
+let remote_program = fn key => Retry.run (FetchRetry, fetch, key)
+
+let flaky =
+  (fn () => remote_program "flaky")
+    |> @handle (Remote, remote_handler)
+use flaky_result <- flaky
+
+let rejected =
+  (fn () => remote_program "rejected")
+    |> @handle (Remote, remote_handler)
+use rejected_result <- rejected
+
+let stable =
+  (fn () => remote_program "stable")
+    |> @handle (Remote, remote_handler)
+use stable_result <- stable
+
+const ParseError = #Incomplete Text | #Invalid Text
+
+let retryable_parse :: ParseError -> Bool
+let retryable_parse = fn error => case error of
+  #Incomplete _ => True
+  #Invalid _ => False
+
+const ParseRetry :: Retry.Strategy (Int, ParseError)
+const ParseRetry = Retry.bounded (1, retryable_parse)
+
+let parse :: (Text, Int) -> Result (Int, ParseError)
+let parse = fn (text, attempt) => do:
+  if text == "eventual":
+    if attempt == 0:
+      return #Error (#Incomplete text)
+
+    return #Ok 42
+
+  return #Error (#Invalid text)
+
+let pure_retry = Retry.run (ParseRetry, parse, "eventual")
+let pure_stop = Retry.run (ParseRetry, parse, "bad")
+
+const NoRetry :: Retry.Strategy (Int, ParseError)
+const NoRetry = Retry.bounded (0, fn _ => True)
+let zero_budget = Retry.run (NoRetry, parse, "eventual")
+
+// Pain point: the strategy guarantees error/state compatibility and `run`
+// preserves the callback's exact effect row, but the type does not prove that a
+// user-defined `Strategy.next` eventually returns `#Stop`. Termination remains a
+// library law for arbitrary strategies; `bounded` is the finite constructor.
+return {
+  .default = {
+    .flaky = flaky_result;
+    .rejected = rejected_result;
+    .stable = stable_result;
+    .pure_retry;
+    .pure_stop;
+    .zero_budget;
+  };
+}
