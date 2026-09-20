@@ -1,0 +1,11 @@
+open import "blot:prelude"
+
+const Port = import "../../../examples/lib/shared_service_port.blot"
+const Directory =
+  Port.unary (
+    "example.directory.lookup.v1",
+    Int,
+    Option Text
+  )
+
+return Directory.call "seven"

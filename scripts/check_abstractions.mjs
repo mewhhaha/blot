@@ -43,6 +43,7 @@ const suites = [
   "src/node/staged_bounded_domains.test.ts",
   "src/node/staged_endpoint_adapters.test.ts",
   "src/node/versioned_schema_migrations.test.ts",
+  "src/node/shared_service_contracts.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 

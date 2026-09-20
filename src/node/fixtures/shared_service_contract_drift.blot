@@ -1,0 +1,22 @@
+open import "blot:prelude"
+
+const Port = import "../../../examples/lib/shared_service_port.blot"
+const Consumer =
+  Port.unary (
+    "example.directory.lookup.v1",
+    Int,
+    Option Text
+  )
+const DriftedProvider =
+  Port.unary (
+    "example.directory.lookup.v1",
+    Int,
+    Text
+  )
+
+let lookup = fn () => Consumer.call 7
+return @handle (
+  DriftedProvider,
+  lookup,
+  { .call = fn (_, ?resume) => resume "Ada"; }
+)
