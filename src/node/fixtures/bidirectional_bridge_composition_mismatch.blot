@@ -1,0 +1,24 @@
+open import "blot:prelude"
+const B = import "../../../examples/lib/bidirectional_bridge.blot"
+
+const Left = #Left Int
+const Middle = #Middle Int
+const Other = #Other Int
+const Right = #Right Int
+const E = #Failure Int
+
+const first :: B.Bridge (Left, Middle, E, E)
+const first =
+  {
+    .to_right = fn #Left value => #Ok (#Middle value);
+    .to_left = fn #Middle value => #Ok (#Left value);
+  }
+
+const second :: B.Bridge (Other, Right, E, E)
+const second =
+  {
+    .to_right = fn #Other value => #Ok (#Right value);
+    .to_left = fn #Right value => #Ok (#Other value);
+  }
+
+return B.compose (first, second)

@@ -75,6 +75,7 @@ const abstractionExamples = [
   "typed_resource_leases.blot",
   "packed_keys.blot",
   "applicative_nominal_domains.blot",
+  "bidirectional_compatibility.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

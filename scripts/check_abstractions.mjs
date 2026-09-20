@@ -58,6 +58,7 @@ const suites = [
   "src/node/typed_resource_leases.test.ts",
   "src/node/packed_keys.test.ts",
   "src/node/applicative_nominal_domains.test.ts",
+  "src/node/bidirectional_compatibility.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 
