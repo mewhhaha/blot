@@ -64,6 +64,7 @@ shared array snapshots, guarded runtime indices, and large record-update folds.
 | [`typed_traversals.blot`](typed_traversals.blot)                 | Composable zero-or-more focuses preserve the relationship between whole values and their parts                                       | nested arrays, empty waves, Unicode labels, incompatible modifiers  |
 | [`typed_record_projections.blot`](typed_record_projections.blot) | A staged field selection derives a shared shape for typed observation and replacement                                                | refinements, unselected fields, empty selections, unknown names     |
 | [`staged_endpoint_adapters.blot`](staged_endpoint_adapters.blot) | Staged higher-kinded constructors generate Rank-N adapters that change endpoint result context without changing payload types        | refined ports, missing values, Unicode text, static carrier checks  |
+| [`stateful_processors.blot`](stateful_processors.blot)           | Staged processor descriptors compose stateful zero-or-one emission stages through an exact intermediate carrier                      | duplicate suppression, thresholded jumps, empty and silent streams  |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
