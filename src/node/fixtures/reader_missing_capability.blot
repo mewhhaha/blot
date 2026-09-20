@@ -5,13 +5,13 @@ const Left = { .left = Int; }
 const Right = { .right = Int; }
 const Both = { ...Left; ...Right; }
 
-const left :: R.Reader (Left, Int)
+const left: R.Reader (Left, Int)
 const left = fn environment => environment.left
 
-const right :: R.Reader (Right, Int)
+const right: R.Reader (Right, Int)
 const right = fn environment => environment.right
 
-const total :: R.Reader (Both, Int)
+const total: R.Reader (Both, Int)
 const total = R.zip_with (fn (a, b) => a + b, left, right)
 
 // Composition requires both structural capabilities; width subtyping may add

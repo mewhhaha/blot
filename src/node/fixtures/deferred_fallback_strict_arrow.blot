@@ -5,7 +5,7 @@ const CacheError = #CacheMiss Text
 const StoreError = #StoreMiss Text
 const ResolutionError = Fallback.BothFailed (CacheError, StoreError)
 
-const strict ::
+const strict:
   Result (Int, StoreError) -> Result (Int, CacheError) -> Result (Int, ResolutionError)
 const strict = Fallback.recover_with_context
 return strict

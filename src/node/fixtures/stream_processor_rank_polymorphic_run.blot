@@ -12,7 +12,7 @@ const Result = fn (State, Output) => {
   .outputs = [Output];
 }
 
-let run_generic ::
+let run_generic:
   @forall (fn State => @forall (fn Input => @forall (fn Output => (
     Generic (State, Input, Output),
     [Input]

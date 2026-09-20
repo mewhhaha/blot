@@ -45,105 +45,160 @@ pub(crate) fn substitute_signature(signature: &Value, environment: &Environment)
     if !TypeValue::needs_substitution(signature) {
         return signature.clone();
     }
+    SignatureSubstitution::new(environment).value(signature)
+}
 
-    fn substitution(environment: &Environment, variable: u32) -> Option<Value> {
-        let mut scope = Some(environment.clone());
-        while let Some(current) = scope {
-            if let Some(value) = current.type_substitutions.borrow().get(&variable) {
-                return Some(value.clone());
-            }
-            scope = current.parent.borrow().clone();
+// One synchronous environment read. Shared input owners stay alive until the
+// traversal ends; addresses identify repeated storage, not type equivalence.
+// Substitution results must never survive an environment change or another call.
+struct SignatureSubstitution<'a> {
+    environment: &'a Environment,
+    edges: std::collections::HashMap<*const Value, (TypeValue, TypeValue)>,
+    records: std::collections::HashMap<*const (), (OrderedFields, OrderedFields)>,
+    #[cfg(test)]
+    value_visits: usize,
+}
+
+impl<'a> SignatureSubstitution<'a> {
+    fn new(environment: &'a Environment) -> Self {
+        Self {
+            environment,
+            edges: Default::default(),
+            records: Default::default(),
+            #[cfg(test)]
+            value_visits: 0,
         }
-        None
     }
 
-    match signature {
-        Value::Effect { id, .. } => {
-            let mut scope = Some(environment.clone());
-            while let Some(current) = scope {
-                if let Some(value) = current.effect_substitutions.borrow().get(id) {
-                    return value.clone();
+    fn edge(&mut self, edge: &TypeValue) -> TypeValue {
+        if !edge.requires_substitution() {
+            return edge.clone();
+        }
+        // Unaliased input storage cannot be visited by another incoming edge.
+        // Leave the common tree-shaped case free of memo-table allocations.
+        if !edge.has_shared_storage() {
+            return TypeValue::new(self.value(edge));
+        }
+        let identity = edge.as_ref() as *const Value;
+        if let Some((_, result)) = self.edges.get(&identity) {
+            return result.clone();
+        }
+        let result = TypeValue::new(self.value(edge));
+        self.edges.insert(identity, (edge.clone(), result.clone()));
+        result
+    }
+
+    fn fields(&mut self, fields: &OrderedFields) -> OrderedFields {
+        let shared = fields.has_shared_storage();
+        let identity = fields.storage_identity();
+        if shared && let Some((_, result)) = self.records.get(&identity) {
+            return result.clone();
+        }
+        let result: OrderedFields = fields
+            .iter()
+            .map(|(name, value)| (name.clone(), self.value(value)))
+            .collect();
+        if shared {
+            self.records
+                .insert(identity, (fields.clone(), result.clone()));
+        }
+        result
+    }
+
+    fn value(&mut self, signature: &Value) -> Value {
+        if let Value::Shape(fields) = signature
+            && fields.has_shared_storage()
+            && let Some((_, result)) = self.records.get(&fields.storage_identity())
+        {
+            return Value::Shape(result.clone());
+        }
+        #[cfg(test)]
+        {
+            self.value_visits += 1;
+        }
+        if !TypeValue::needs_substitution(signature) {
+            return signature.clone();
+        }
+
+        match signature {
+            Value::Effect { id, .. } => {
+                let mut scope = Some(self.environment.clone());
+                while let Some(current) = scope {
+                    if let Some(value) = current.effect_substitutions.borrow().get(id) {
+                        return value.clone();
+                    }
+                    scope = current.parent.borrow().clone();
                 }
-                scope = current.parent.borrow().clone();
+                signature.clone()
             }
-            signature.clone()
-        }
-        Value::TypeVariable(variable) => {
-            substitution(environment, *variable).unwrap_or_else(|| signature.clone())
-        }
-        Value::Shape(fields) => Value::Shape(
-            fields
-                .iter()
-                .map(|(name, value)| (name.clone(), substitute_signature(value, environment)))
-                .collect(),
-        ),
-        Value::Array(elements) => Value::Array(
-            elements
-                .iter()
-                .map(|value| substitute_signature(value, environment))
-                .collect(),
-        ),
-        Value::ScratchType(element) => {
-            Value::ScratchType(Box::new(substitute_signature(element, environment)))
-        }
-        Value::ResourceType { family, payload } => Value::ResourceType {
-            family: family.clone(),
-            payload: Box::new(substitute_signature(payload, environment)),
-        },
-        Value::EmptyArray { element } => Value::EmptyArray {
-            element: Box::new(substitute_signature(element, environment)),
-        },
-        Value::Union(members) => {
-            members
+            Value::TypeVariable(variable) => {
+                substitution(self.environment, *variable).unwrap_or_else(|| signature.clone())
+            }
+            Value::Shape(fields) => Value::Shape(self.fields(fields)),
+            Value::Array(elements) => {
+                Value::Array(elements.iter().map(|value| self.value(value)).collect())
+            }
+            Value::ScratchType(element) => Value::ScratchType(Box::new(self.value(element))),
+            Value::ResourceType { family, payload } => Value::ResourceType {
+                family: family.clone(),
+                payload: Box::new(self.value(payload)),
+            },
+            Value::EmptyArray { element } => Value::EmptyArray {
+                element: Box::new(self.value(element)),
+            },
+            Value::Union(members) => members
                 .iter()
                 .fold(Value::Union(Default::default()), |union, member| {
-                    crate::primitives::union(union, substitute_signature(member, environment))
-                })
+                    crate::primitives::union(union, self.value(member))
+                }),
+            Value::Tag { name, payload } => Value::Tag {
+                name: name.clone(),
+                payload: payload.as_deref().map(|value| Box::new(self.value(value))),
+            },
+            Value::Range { low, high, domain } => Value::Range {
+                low: self.edge(low),
+                high: self.edge(high),
+                domain: *domain,
+            },
+            Value::Arrow {
+                deferred,
+                domain,
+                codomain,
+                effects,
+                effect_tail,
+            } => Value::Arrow {
+                deferred: *deferred,
+                domain: self.edge(domain),
+                codomain: self.edge(codomain),
+                effects: effects.iter().map(|effect| self.value(effect)).collect(),
+                effect_tail: *effect_tail,
+            },
+            Value::Forall { variable, body } => Value::Forall {
+                variable: *variable,
+                body: Box::new(self.value(body)),
+            },
+            Value::Extended { inner, members } => Value::Extended {
+                inner: Box::new(self.value(inner)),
+                members: self.fields(members),
+            },
+            Value::Sealed { name, inner } => Value::Sealed {
+                name: name.clone(),
+                inner: Box::new(self.value(inner)),
+            },
+            _ => signature.clone(),
         }
-        Value::Tag { name, payload } => Value::Tag {
-            name: name.clone(),
-            payload: payload
-                .as_deref()
-                .map(|value| Box::new(substitute_signature(value, environment))),
-        },
-        Value::Range { low, high, domain } => Value::Range {
-            low: substitute_edge(low, environment),
-            high: substitute_edge(high, environment),
-            domain: *domain,
-        },
-        Value::Arrow {
-            deferred,
-            domain,
-            codomain,
-            effects,
-            effect_tail,
-        } => Value::Arrow {
-            deferred: *deferred,
-            domain: substitute_edge(domain, environment),
-            codomain: substitute_edge(codomain, environment),
-            effects: effects
-                .iter()
-                .map(|effect| substitute_signature(effect, environment))
-                .collect(),
-            effect_tail: *effect_tail,
-        },
-        Value::Forall { variable, body } => Value::Forall {
-            variable: *variable,
-            body: Box::new(substitute_signature(body, environment)),
-        },
-        Value::Extended { inner, members } => Value::Extended {
-            inner: Box::new(substitute_signature(inner, environment)),
-            members: members
-                .iter()
-                .map(|(name, value)| (name.clone(), substitute_signature(value, environment)))
-                .collect(),
-        },
-        Value::Sealed { name, inner } => Value::Sealed {
-            name: name.clone(),
-            inner: Box::new(substitute_signature(inner, environment)),
-        },
-        _ => signature.clone(),
     }
+}
+
+fn substitution(environment: &Environment, variable: u32) -> Option<Value> {
+    let mut scope = Some(environment.clone());
+    while let Some(current) = scope {
+        if let Some(value) = current.type_substitutions.borrow().get(&variable) {
+            return Some(value.clone());
+        }
+        scope = current.parent.borrow().clone();
+    }
+    None
 }
 
 pub(crate) fn record_signature_substitutions(
@@ -397,13 +452,6 @@ pub(crate) fn record_signature_substitutions(
     }
 }
 
-fn substitute_edge(edge: &TypeValue, environment: &Environment) -> TypeValue {
-    if !edge.requires_substitution() {
-        return edge.clone();
-    }
-    TypeValue::new(substitute_signature(edge, environment))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +474,216 @@ mod tests {
             operation_ownership: BTreeMap::new(),
             host: false,
         }
+    }
+
+    fn shared_arrow(edge: TypeValue) -> Value {
+        Value::Arrow {
+            deferred: false,
+            domain: edge.clone(),
+            codomain: edge,
+            effects: Vec::new(),
+            effect_tail: None,
+        }
+    }
+
+    #[test]
+    fn substitution_visits_open_function_graph_nodes_not_expanded_paths() {
+        let environment = child_env(None);
+        environment
+            .type_substitutions
+            .borrow_mut()
+            .insert(7, int_type());
+        let mut input = TypeValue::new(Value::TypeVariable(7));
+        for _ in 0..24 {
+            input = TypeValue::new(shared_arrow(input));
+        }
+        let mut operation = SignatureSubstitution::new(&environment);
+        let result = operation.value(&input);
+        assert!(
+            operation.value_visits <= 26,
+            "{} visits",
+            operation.value_visits
+        );
+        assert_eq!(operation.edges.len(), 24);
+        let mut current = &result;
+        for _ in 0..24 {
+            let Value::Arrow {
+                domain, codomain, ..
+            } = current
+            else {
+                panic!("arrow");
+            };
+            assert!(std::ptr::eq(domain.as_ref(), codomain.as_ref()));
+            current = domain;
+        }
+        assert!(equal(current, &int_type()));
+    }
+
+    #[test]
+    fn substitution_preserves_open_record_diamonds() {
+        let environment = child_env(None);
+        environment
+            .type_substitutions
+            .borrow_mut()
+            .insert(7, int_type());
+        let mut input = Value::TypeVariable(7);
+        for _ in 0..24 {
+            input = Value::Shape(OrderedFields::from([
+                ("left".into(), input.clone()),
+                ("right".into(), input),
+            ]));
+        }
+        let mut operation = SignatureSubstitution::new(&environment);
+        let result = operation.value(&input);
+        assert!(
+            operation.value_visits <= 50,
+            "{} visits",
+            operation.value_visits
+        );
+        assert_eq!(operation.records.len(), 23);
+        let mut current = &result;
+        for depth in 0..24 {
+            let Value::Shape(fields) = current else {
+                panic!("shape");
+            };
+            let left = fields.get("left").unwrap();
+            let right = fields.get("right").unwrap();
+            if depth < 23 {
+                let (Value::Shape(left), Value::Shape(right)) = (left, right) else {
+                    panic!("shapes");
+                };
+                assert_eq!(left.storage_identity(), right.storage_identity());
+            } else {
+                assert!(equal(left, &int_type()) && equal(right, &int_type()));
+            }
+            current = left;
+        }
+    }
+
+    #[test]
+    fn substitution_graph_memo_is_local_to_current_lexical_environment() {
+        let parent = child_env(None);
+        let child = child_env(Some(parent.clone()));
+        let signature = shared_arrow(TypeValue::new(Value::TypeVariable(7)));
+        let result_leaf = |environment: &Environment| {
+            let Value::Arrow { domain, .. } = substitute_signature(&signature, environment) else {
+                panic!("arrow");
+            };
+            domain.into_owned()
+        };
+        assert!(matches!(result_leaf(&child), Value::TypeVariable(7)));
+        parent
+            .type_substitutions
+            .borrow_mut()
+            .insert(7, Value::Unit);
+        assert!(matches!(result_leaf(&child), Value::Unit));
+        child.type_substitutions.borrow_mut().insert(7, int_type());
+        assert!(equal(&result_leaf(&child), &int_type()));
+        child.type_substitutions.borrow_mut().clear();
+        let replacement = child_env(None);
+        replacement
+            .type_substitutions
+            .borrow_mut()
+            .insert(7, Value::OpaqueType("Text".into()));
+        *child.parent.borrow_mut() = Some(replacement);
+        assert!(matches!(result_leaf(&child), Value::OpaqueType(name) if name == "Text"));
+    }
+
+    #[test]
+    fn substitution_graph_preserves_single_step_replacement_and_quantifier_identity() {
+        let environment = child_env(None);
+        environment
+            .type_substitutions
+            .borrow_mut()
+            .extend([(7, Value::TypeVariable(8)), (8, int_type())]);
+        let signature = Value::Forall {
+            variable: 11,
+            body: Box::new(shared_arrow(TypeValue::new(Value::TypeVariable(7)))),
+        };
+        let Value::Forall { variable, body } = substitute_signature(&signature, &environment)
+        else {
+            panic!("forall");
+        };
+        assert_eq!(variable, 11);
+        let Value::Arrow {
+            domain, codomain, ..
+        } = body.as_ref()
+        else {
+            panic!("arrow");
+        };
+        assert!(matches!(domain.as_ref(), Value::TypeVariable(8)));
+        assert!(std::ptr::eq(domain.as_ref(), codomain.as_ref()));
+    }
+
+    #[test]
+    fn substitution_graph_observes_copy_on_write_and_effect_replacements() {
+        let environment = child_env(None);
+        environment
+            .effect_substitutions
+            .borrow_mut()
+            .insert(7, effect(9));
+        let original = TypeValue::new(effect(7));
+        let mut changed = original.clone();
+        *changed = effect(8);
+        let signature = Value::Arrow {
+            deferred: true,
+            domain: original.clone(),
+            codomain: changed,
+            effects: vec![effect(7)],
+            effect_tail: Some(12),
+        };
+        let Value::Arrow {
+            deferred,
+            domain,
+            codomain,
+            effects,
+            effect_tail,
+        } = substitute_signature(&signature, &environment)
+        else {
+            panic!("arrow");
+        };
+        assert!(deferred);
+        assert_eq!(effect_tail, Some(12));
+        assert!(matches!(domain.as_ref(), Value::Effect { id: 9, .. }));
+        assert!(matches!(codomain.as_ref(), Value::Effect { id: 8, .. }));
+        assert!(matches!(&effects[0], Value::Effect { id: 9, .. }));
+        assert!(matches!(original.as_ref(), Value::Effect { id: 7, .. }));
+        environment
+            .effect_substitutions
+            .borrow_mut()
+            .insert(7, effect(10));
+        let result = substitute_signature(&shared_arrow(original), &environment);
+        assert!(
+            matches!(result, Value::Arrow { domain, .. } if matches!(domain.as_ref(), Value::Effect { id: 10, .. }))
+        );
+    }
+
+    #[test]
+    fn substitution_graph_still_normalizes_unions_and_shares_closed_edges() {
+        let environment = child_env(None);
+        let union = TypeValue::new(Value::Union(
+            vec![Value::Unit, Value::Union(vec![Value::Unit].into())].into(),
+        ));
+        let Value::Arrow {
+            domain, codomain, ..
+        } = substitute_signature(&shared_arrow(union), &environment)
+        else {
+            panic!("arrow");
+        };
+        assert!(matches!(domain.as_ref(), Value::Unit));
+        assert!(std::ptr::eq(domain.as_ref(), codomain.as_ref()));
+        let closed = TypeValue::new(int_type());
+        let signature = Value::Arrow {
+            deferred: false,
+            domain: closed.clone(),
+            codomain: TypeValue::new(Value::TypeVariable(7)),
+            effects: Vec::new(),
+            effect_tail: None,
+        };
+        let Value::Arrow { domain, .. } = substitute_signature(&signature, &environment) else {
+            panic!("arrow");
+        };
+        assert!(std::ptr::eq(closed.as_ref(), domain.as_ref()));
     }
 
     #[test]

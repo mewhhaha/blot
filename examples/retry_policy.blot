@@ -15,7 +15,7 @@ const RetryState =
     .result = RetryResult;
   }
 
-let advance :: (RetryState, Outcome) -> RetryState
+let advance: (RetryState, Outcome) -> RetryState
 let advance = fn (state, outcome) => case outcome of
   #Succeeded status => {
     .attempts = state.attempts + 1;
@@ -46,11 +46,11 @@ let advance = fn (state, outcome) => case outcome of
       .result = #Pending;
     }
 
-let outcomes :: [Outcome]
+let outcomes: [Outcome]
 let outcomes =
   [#TimedOut, #TimedOut, #Succeeded 204, #Rejected "not reached"]
 
-let state :: RetryState
+let state: RetryState
 let state =
   {
     .attempts = 0;

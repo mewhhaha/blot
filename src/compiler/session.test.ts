@@ -59,7 +59,7 @@ test("typed multi-subject Boolean matrix rejects its missing combination", async
       compiler.checkSource(
         join(tmpdir(), "blot-typed-incomplete-matrix.blot"),
         'open import "blot:prelude"\n' +
-          "let choose :: (Bool, Bool) -> Int\n" +
+          "let choose: (Bool, Bool) -> Int\n" +
           "let choose = fn (first, second) => case first, second of\n" +
           "  #True, _ => 1\n" +
           "  _, #True => 2\n" +
@@ -777,7 +777,7 @@ test("branch restoration still rejects two moves along one path", async () => {
         "examples/double_move.test.blot",
         `
 open import "blot:prelude"
-const bad :: Int -> [Int]
+const bad: Int -> [Int]
 const bad = fn count => do:
   let heads = [0, 1]
   for index in Iter.range (0, count):
@@ -930,6 +930,44 @@ test("canonical syntax snapshots expose parser bypass and node reuse", async () 
     assert.ok(edited.reuse.length > 0);
   } finally {
     compiler.destroy();
+  }
+});
+
+test("relocated grammar observes width edits, renamed uses and shifted diagnostics", async () => {
+  const compiler = await Compiler.create();
+  const fresh = await Compiler.create();
+  const path = join(tmpdir(), "blot-relocated-grammar.blot");
+  const original = "const value = 1\nreturn value\n";
+  const changed = "// shifted 😀\nconst longer = 123456\nreturn longer\n";
+  try {
+    assert.equal((await compiler.checkSource(path, original)).type, "1");
+    const edited = await compiler.checkSource(path, changed);
+    assert.equal(edited.type, "123456");
+    assert.deepEqual(
+      edited.type,
+      (await fresh.checkSource(path, changed)).type,
+    );
+    const snapshot = await compiler.syntaxSnapshot(path, changed);
+    const freshSnapshot = await fresh.syntaxSnapshot(path, changed);
+    assert.equal(snapshot.portableAstDigest, freshSnapshot.portableAstDigest);
+
+    const unknown = changed.replace("return longer", "return missing");
+    const diagnose = async (instance: Compiler) => {
+      try {
+        await instance.checkSource(path, unknown);
+        assert.fail(
+          "a renamed unresolved use must not reuse its former binding",
+        );
+      } catch (error) {
+        assert(error instanceof BlotError);
+        return error.diagnostic;
+      }
+    };
+    assert.deepEqual(await diagnose(compiler), await diagnose(fresh));
+    assert.equal((await compiler.checkSource(path, changed)).type, "123456");
+  } finally {
+    compiler.destroy();
+    fresh.destroy();
   }
 });
 

@@ -19,7 +19,7 @@ try {
   await writeFile(constantPath, header + "return 1 == 1\n");
   await writeFile(
     runtimePath,
-    header + `let same :: Int -> Int
+    header + `let same: Int -> Int
 let same = fn value => case value == value of
   #True => 1
   #False => 0

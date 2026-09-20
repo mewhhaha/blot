@@ -8,13 +8,13 @@ const Invoice = Nominal.domain ("example.invoice-id.v1", Int)
 const CustomerId = Customer.type
 const InvoiceId = Invoice.type
 
-const customer_raw :: CustomerId -> Int
+const customer_raw: CustomerId -> Int
 const customer_raw = fn id => Customer.value id
 
-const invoice_for :: CustomerId -> InvoiceId
+const invoice_for: CustomerId -> InvoiceId
 const invoice_for = fn customer => Invoice.of (Customer.value customer + 1000)
 
-const invoice_raw :: InvoiceId -> Int
+const invoice_raw: InvoiceId -> Int
 const invoice_raw = fn id => Invoice.value id
 
 return {

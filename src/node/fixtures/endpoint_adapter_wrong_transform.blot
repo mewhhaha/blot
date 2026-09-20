@@ -6,12 +6,12 @@ const Checked = fn Value => #Ok Value | #Error Text
 const Observed =
   fn Value => #Ok { .value = Value; .source = Text; } | #Error Text
 
-const observe :: Adapter.Natural (Checked, Observed)
+const observe: Adapter.Natural (Checked, Observed)
 const observe = fn candidate => case candidate of
   #Ok value => #Ok { .value; .source = "fixture"; }
   #Error error => #Error error
 
-const lookup :: Int -> Maybe Text
+const lookup: Int -> Maybe Text
 const lookup = fn _ => #Found "Ada"
 
 const hoist = Adapter.hoist (Maybe, Checked)

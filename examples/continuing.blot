@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-const run :: Int -> Int = fn limit => do:
+const run: Int -> Int = fn limit => do:
   let total = 0
   for outer in Iter.range (0, limit):
     total := total + 1

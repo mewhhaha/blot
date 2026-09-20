@@ -2,9 +2,9 @@ open import "blot:prelude"
 
 const upper = 5
 // The name and signature do not prove that this callback orders integers.
-let less_equal :: Int -> Int -> Bool
+let less_equal: Int -> Int -> Bool
 let less_equal = fn value => fn bound => True
-let accept :: Int -> range (0, 5)
+let accept: Int -> range (0, 5)
 let accept = fn value => do:
   if value < 0:
     return 0

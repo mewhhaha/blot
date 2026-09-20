@@ -4,7 +4,7 @@ const A = import "../../../examples/lib/event_aggregate.blot"
 const CounterCommand = #Step Int
 const CounterEvent = #Changed Int
 const CounterError = #Rejected
-const counter :: A.Aggregate (Int, CounterCommand, CounterEvent, CounterError)
+const counter: A.Aggregate (Int, CounterCommand, CounterEvent, CounterError)
 const counter =
   {
     .initial = 0;

@@ -2,7 +2,7 @@ open import "blot:prelude"
 
 const relations = import "./lib/relational_inference.blot"
 
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn index => do:
   let values = [10, 20, 30]
   return

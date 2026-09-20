@@ -28,12 +28,12 @@ const lock_handler =
     ;
   }
 
-let one_file :: Unit -> FileReceipt ~ { Files }
+let one_file: Unit -> FileReceipt ~ { Files }
 let one_file = fn () => do:
   use file <- Files.acquire ()
   return Files.close (!file)
 
-let deploy ::
+let deploy:
   Unit -> { .file = FileReceipt; .lock = LockReceipt; } ~ { Files, Locks }
 let deploy = fn () => do:
   use file <- Files.acquire ()
@@ -42,7 +42,7 @@ let deploy = fn () => do:
   use closed <- Files.close (!file)
   return { .file = closed; .lock = unlocked; }
 
-let two_files :: Unit -> (FileReceipt, FileReceipt) ~ { Files }
+let two_files: Unit -> (FileReceipt, FileReceipt) ~ { Files }
 let two_files = fn () => do:
   use first <- Files.acquire ()
   use second <- Files.acquire ()

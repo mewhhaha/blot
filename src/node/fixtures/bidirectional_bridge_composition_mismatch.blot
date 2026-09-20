@@ -7,14 +7,14 @@ const Other = #Other Int
 const Right = #Right Int
 const E = #Failure Int
 
-const first :: B.Bridge (Left, Middle, E, E)
+const first: B.Bridge (Left, Middle, E, E)
 const first =
   {
     .to_right = fn #Left value => #Ok (#Middle value);
     .to_left = fn #Middle value => #Ok (#Left value);
   }
 
-const second :: B.Bridge (Other, Right, E, E)
+const second: B.Bridge (Other, Right, E, E)
 const second =
   {
     .to_right = fn #Other value => #Ok (#Right value);

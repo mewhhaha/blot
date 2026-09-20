@@ -11,19 +11,19 @@ const Seconds = quantities.Quantity ("Seconds", "s")
 
 const meters_to_centimeters = quantities.scale (Meters, Centimeters, 100)
 
-let outbound :: Meters.type
+let outbound: Meters.type
 let outbound = Meters.of 1200
 
-let detour :: Meters.type
+let detour: Meters.type
 let detour = Meters.of 350
 
-let distance :: Meters.type
+let distance: Meters.type
 let distance = Meters.add outbound detour
 
-let metric_detail :: Centimeters.type
+let metric_detail: Centimeters.type
 let metric_detail = meters_to_centimeters distance
 
-let elapsed :: Seconds.type
+let elapsed: Seconds.type
 let elapsed = Seconds.of 90
 
 // Pain point: Blot makes this dictionary explicit because attached namespace

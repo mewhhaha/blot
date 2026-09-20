@@ -56,6 +56,10 @@ impl TypeValue {
         self.summary() & VARIABLES != 0
     }
 
+    pub(crate) fn has_shared_storage(&self) -> bool {
+        Rc::strong_count(&self.0) > 1
+    }
+
     pub(crate) fn requires_substitution(&self) -> bool {
         self.summary() != 0
     }

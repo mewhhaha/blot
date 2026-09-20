@@ -1,9 +1,9 @@
 open import "blot:prelude"
 const A = import "../../../examples/lib/service_adapter.blot"
 
-let adapter :: A.Adapter (Int, Text, Text, Int)
+let adapter: A.Adapter (Int, Text, Text, Int)
 let adapter = A.dimap (Text.of_int, Text.length)
-let wrong_service :: Int -> Text
+let wrong_service: Int -> Text
 let wrong_service = Text.of_int
 
 return A.adapt (adapter, wrong_service)

@@ -12,7 +12,7 @@ use crate::eval::{
 };
 use crate::value::{
     ChoiceSource, Domain, EffectOperationContract, Environment, OrderedFields, RuntimeMeaning,
-    RuntimeValue, TypeValue, Value, lookup, lookup_signature,
+    RuntimeValue, TypeValue, Value, with_lookup, with_lookup_signature,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -918,9 +918,11 @@ impl<'a> Builder<'a> {
             self.text(name);
             // An absent binding is recorded explicitly, not conflated with a
             // value. Demand may make a syntactic free occurrence unreachable.
-            if !self.optional_value(lookup(closure.environment, name).as_ref())?
-                || !self.optional_value(lookup_signature(closure.environment, name).as_ref())?
-            {
+            if !with_lookup(closure.environment, name, |value| {
+                self.optional_value(value)
+            })? || !with_lookup_signature(closure.environment, name, |value| {
+                self.optional_value(value)
+            })? {
                 return Ok(false);
             }
         }

@@ -5,7 +5,7 @@ const Payload = { .endpoint = Text; .timeout = Int; }
 const V1 = #V1 Payload
 const V2 = #V2 Payload
 
-let migrate :: M.Migration (V1, V2, #Invalid)
+let migrate: M.Migration (V1, V2, #Invalid)
 let migrate = fn source => case source of
   #V1 value => Ok (#V2 value)
 

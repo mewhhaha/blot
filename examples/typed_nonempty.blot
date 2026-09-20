@@ -6,7 +6,7 @@ const Approver = {
   .weight = Int;
 }
 
-let base_chain :: NonEmpty.of Approver
+let base_chain: NonEmpty.of Approver
 let base_chain = {
   .head = { .name = "Ada"; .weight = 3; };
   .tail = [
@@ -17,12 +17,12 @@ let base_chain = {
 
 let fallback = NonEmpty.singleton { .name = "Margaret"; .weight = 5; }
 
-let combine ::
+let combine:
   Semigroup (NonEmpty.of Approver) ->
   NonEmpty.of Approver -> NonEmpty.of Approver -> NonEmpty.of Approver
 let combine = fn implementation => fn left => fn right => implementation.append left right
 
-let names ::
+let names:
   Mappable (
     NonEmpty.of Approver,
     NonEmpty.of Text,
@@ -31,7 +31,7 @@ let names ::
   ) -> NonEmpty.of Approver -> NonEmpty.of Text
 let names = fn implementation => fn values => implementation.map (values, fn approver => approver.name)
 
-let total_weight ::
+let total_weight:
   Foldable (NonEmpty.of Approver, Approver, Int) ->
   NonEmpty.of Approver -> Int
 let total_weight = fn implementation => fn values => implementation.fold (
@@ -40,10 +40,10 @@ let total_weight = fn implementation => fn values => implementation.fold (
   fn (total, approver) => total + approver.weight
 )
 
-let count :: Length (NonEmpty.of Approver) -> NonEmpty.of Approver -> Int
+let count: Length (NonEmpty.of Approver) -> NonEmpty.of Approver -> Int
 let count = fn implementation => fn values => implementation.length values
 
-let join_names :: NonEmpty.of Text -> Text
+let join_names: NonEmpty.of Text -> Text
 let join_names = fn values => NonEmpty.reduce (
   values,
   fn (left, right) => left <> " > " <> right

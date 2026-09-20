@@ -4,37 +4,37 @@
 
 open import "blot:prelude"
 
-let collect_range :: Int -> [Int]
+let collect_range: Int -> [Int]
 let collect_range = fn count => Iter.collect (Iter.range (0, count))
 
-let map_range :: Int -> [Int]
+let map_range: Int -> [Int]
 let map_range = fn count => do:
   let values = @linear.freeze (Iter.collect (Iter.range (0, count)))
   let transform = fn value => value * 2
   return map ((&values), ?transform)
 
-let filter_range :: Int -> [Int]
+let filter_range: Int -> [Int]
 let filter_range = fn count => do:
   let values = @linear.freeze (Iter.collect (Iter.range (0, count)))
   let keep = fn value => value % 2 == 0
   return filter ((&values), ?keep)
 
-let partition_range :: Int -> ([Int], [Int])
+let partition_range: Int -> ([Int], [Int])
 let partition_range = fn count => do:
   let values = @linear.freeze (Iter.collect (Iter.range (0, count)))
   let belongs_left = fn value => value % 2 == 0
   return partition ((&values), ?belongs_left)
 
-let split_text :: (Text, Text) -> [Text]
+let split_text: (Text, Text) -> [Text]
 let split_text = fn (text, separator) => Text.split (text, separator)
 
-let replace_text :: (Text, Text, Text) -> Text
+let replace_text: (Text, Text, Text) -> Text
 let replace_text =
   fn (text, query, replacement) => Text.replace (text, query, replacement)
 
-let build_map :: Int -> Map.of (Int, Int)
+let build_map: Int -> Map.of (Int, Int)
 let build_map = fn count => do:
-  let entries :: Map.of (Int, Int)
+  let entries: Map.of (Int, Int)
   let entries = [(0, 0)]
   for value in Iter.range (1, count):
     entries := (Map.put (Int.eq, entries, value, value * 2)).1
@@ -43,7 +43,7 @@ let build_map = fn count => do:
 
 // Keep the success constructor first so this fixture also verifies that
 // residual sum layout is independent of source branch order.
-let take_at :: ([Int], Int) -> Option (Int, [Int])
+let take_at: ([Int], Int) -> Option (Int, [Int])
 let take_at = fn (values, index) => do:
   if index >= 0 && index < Array.length (&values):
     return Some (@array.take values index)

@@ -4,9 +4,9 @@ const P = import "../../../examples/lib/interpretable_policy.blot"
 const Quota = refine (Int, fn value => value >= 1 && value <= 100)
 const Request = { .quota = Quota; }
 
-let quota :: P.Policy Request
+let quota: P.Policy Request
 let quota = P.check (fn value => value.quota <= 80, "quota")
 
-let request :: Request
+let request: Request
 let request = { .quota = 0; }
 return request

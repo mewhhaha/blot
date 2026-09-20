@@ -15,7 +15,7 @@ const Compose = fn (First, Middle, Last) => (
 ) -> Natural (First, Last)
 
 const compose = fn (First, Middle, Last) => do:
-  let implementation :: Compose (First, Middle, Last)
+  let implementation: Compose (First, Middle, Last)
   let implementation = fn (left, right) => fn wrapped => right (left wrapped)
   return implementation
 
@@ -25,7 +25,7 @@ const Hoist = fn (Source, Target) => @forall (fn Input => @forall (fn Output => 
 ) -> Endpoint (Target, Input, Output)))
 
 const hoist = fn (Source, Target) => do:
-  let implementation :: Hoist (Source, Target)
+  let implementation: Hoist (Source, Target)
   let implementation = fn (transform, endpoint) => fn input => transform (endpoint input)
   return implementation
 

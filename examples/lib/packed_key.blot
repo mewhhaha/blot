@@ -59,14 +59,14 @@ const derive = fn (domain, schema) => do:
 
     offset := offset + width
 
-  let pack :: schema -> Key
+  let pack: schema -> Key
   let pack = fn value => #PackedKey {
     .domain;
     .bits = layout.bit_size;
     .raw = encode value;
   }
 
-  let raw :: Key -> Int
+  let raw: Key -> Int
   let raw = fn key => case key of
     #PackedKey payload => payload.raw
 

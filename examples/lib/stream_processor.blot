@@ -23,7 +23,7 @@ const make = fn Spec => do:
   const Output = Spec.output_type
   let initial = Spec.initial
   let step = Spec.step
-  let checked :: Processor (State, Input, Output)
+  let checked: Processor (State, Input, Output)
   let checked = { .initial; .step; }
   return {
     .state_type = State;
@@ -36,11 +36,11 @@ const make = fn Spec => do:
 // Sequential composition shares exactly one middle carrier. Suppressed upstream
 // outputs do not run the downstream step, so its state remains unchanged.
 const compose = fn (Left, Right) => do:
-  let pass :: Left.output_type -> Right.input_type
+  let pass: Left.output_type -> Right.input_type
   let pass = fn value => value
 
   const State = PairState (Left.state_type, Right.state_type)
-  let step :: (State, Left.input_type) -> (State, Option Right.output_type)
+  let step: (State, Left.input_type) -> (State, Option Right.output_type)
   let step = fn (state, input) => do:
     let (left_state, middle) = Left.step (state.left, input)
     return case middle of
@@ -62,12 +62,12 @@ const compose = fn (Left, Right) => do:
 // descriptor makes that output type an ordinary compile-time value, so empty and
 // fully suppressed runs remain precise without a cast.
 const run = fn ProcessorValue => do:
-  let execute ::
+  let execute:
     [
       ProcessorValue.input_type
     ] -> Run (ProcessorValue.state_type, ProcessorValue.output_type)
   let execute = fn inputs => do:
-    let result :: Run (ProcessorValue.state_type, ProcessorValue.output_type)
+    let result: Run (ProcessorValue.state_type, ProcessorValue.output_type)
     let result =
       {
         .state = ProcessorValue.initial;

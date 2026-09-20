@@ -5,7 +5,7 @@ const Echo =
     .copy = Effect.suspends (@forall (fn element => element -> element));
   }
 
-let run :: Int -> { .number = Int; .text = Text; } ~ { Echo }
+let run: Int -> { .number = Int; .text = Text; } ~ { Echo }
 let run = fn number => do:
   use copied_number <- Echo.copy number
   use copied_text <- Echo.copy "hello"

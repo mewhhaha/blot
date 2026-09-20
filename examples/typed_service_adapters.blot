@@ -14,41 +14,39 @@ const WireResponse = #Resolved ApiResponse
 let api_request =
   fn request => { .service = request.service; .port = request.port; }
 let api_response = fn response => #Service response
-let api_to_core ::
-  A.Adapter (ApiRequest, CoreRequest, CoreResponse, ApiResponse)
+let api_to_core: A.Adapter (ApiRequest, CoreRequest, CoreResponse, ApiResponse)
 let api_to_core = A.dimap (api_request, api_response)
 
 let wire_request = fn request => case request of
   #Resolve value => value
 let wire_response = fn response => #Resolved response
-let wire_to_api ::
-  A.Adapter (WireRequest, ApiRequest, ApiResponse, WireResponse)
+let wire_to_api: A.Adapter (WireRequest, ApiRequest, ApiResponse, WireResponse)
 let wire_to_api = A.dimap (wire_request, wire_response)
 
-let wire_to_core ::
+let wire_to_core:
   A.Adapter (WireRequest, CoreRequest, CoreResponse, WireResponse)
 let wire_to_core = A.compose (wire_to_api, api_to_core)
 
 let render_endpoint =
   fn request => request.service <> ":" <> Text.of_int request.port
 
-let pure_core :: CoreRequest -> CoreResponse
+let pure_core: CoreRequest -> CoreResponse
 let pure_core = fn request => {
   .endpoint = render_endpoint request;
   .status = #Ready;
 }
 
-let pure_wire :: WireRequest -> WireResponse
+let pure_wire: WireRequest -> WireResponse
 let pure_wire = A.adapt (wire_to_core, pure_core)
 
 const Health = @effect { .probe = Text -> Status; }
 
-let checked_core :: CoreRequest -> CoreResponse ~ { Health }
+let checked_core: CoreRequest -> CoreResponse ~ { Health }
 let checked_core = fn request => do:
   use status <- Health.probe request.service
   return { .endpoint = render_endpoint request; .status; }
 
-let checked_wire :: WireRequest -> WireResponse ~ { Health }
+let checked_wire: WireRequest -> WireResponse ~ { Health }
 let checked_wire = A.adapt (wire_to_core, checked_core)
 
 const health_handler =
@@ -62,7 +60,7 @@ const health_handler =
 
 let unicode = #Resolve { .service = "db-🐱"; .port = 65535; .trace = "żółć"; }
 let ordinary = #Resolve { .service = "api"; .port = 443; .trace = "r-42"; }
-let effectful_program :: Unit -> WireResponse ~ { Health }
+let effectful_program: Unit -> WireResponse ~ { Health }
 let effectful_program = fn () => checked_wire unicode
 let effectful = effectful_program |> @handle (Health, health_handler)
 use checked <- effectful

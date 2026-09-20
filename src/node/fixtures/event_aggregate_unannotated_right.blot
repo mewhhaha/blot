@@ -4,7 +4,7 @@ const A = import "../../../examples/lib/event_aggregate.blot"
 const LeftCommand = #Add Int
 const LeftEvent = #Added Int
 const LeftError = #LeftRejected
-const left :: A.Aggregate (Int, LeftCommand, LeftEvent, LeftError)
+const left: A.Aggregate (Int, LeftCommand, LeftEvent, LeftError)
 const left =
   {
     .initial = 0;
@@ -15,7 +15,7 @@ const left =
 const RightCommand = #Enable
 const RightEvent = #Enabled
 const RightError = #RightRejected
-const right :: A.Aggregate (Bool, RightCommand, RightEvent, RightError)
+const right: A.Aggregate (Bool, RightCommand, RightEvent, RightError)
 const right =
   {
     .initial = #False;

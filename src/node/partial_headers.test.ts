@@ -8,19 +8,19 @@ test("partial function headers infer each omitted component independently", asyn
   try {
     for (
       const header of [
-        "fn (a :: Int, b) => b",
-        "fn (a, b :: Int) => a",
+        "fn (a: Int, b) => b",
+        "fn (a, b: Int) => a",
         "fn (a, b) -> Int => a",
-        "fn (a :: Int, b) -> Int => a",
+        "fn (a: Int, b) -> Int => a",
         "fn a -> Int => a",
-        "fn (a :: Int) => a",
+        "fn (a: Int) => a",
       ]
     ) {
       let calls = '(choose (42, "text"), choose (42, True))';
       let expectedType = '{ .0 = "text"; .1 = #True }';
       let expected = '("text", #True)';
       let wasmExpected = '{ .0 = "text"; .1 = true }';
-      if (header.includes("b :: Int")) {
+      if (header.includes("b: Int")) {
         calls = '(choose ("text", 42), choose (True, 42))';
       }
       if (header.includes("-> Int")) {
@@ -28,7 +28,7 @@ test("partial function headers infer each omitted component independently", asyn
         expected = "(42, 42)";
         wasmExpected = "{ .0 = 42; .1 = 42 }";
       }
-      if (header === "fn a -> Int => a" || header === "fn (a :: Int) => a") {
+      if (header === "fn a -> Int => a" || header === "fn (a: Int) => a") {
         calls = "(choose 42, choose 42)";
         expectedType = "{ .0 = Int; .1 = Int }";
         expected = "(42, 42)";
@@ -53,9 +53,9 @@ return ${calls}
     }
     for (
       const source of [
-        'const f = fn (a :: Int, b) => b\nreturn f ("wrong", 42)',
+        'const f = fn (a: Int, b) => b\nreturn f ("wrong", 42)',
         'const f = fn (a, b) -> Int => a\nreturn f ("wrong", 42)',
-        "const f = fn (a :: Int, b) -> Text => a\nreturn f (42, True)",
+        "const f = fn (a: Int, b) -> Text => a\nreturn f (42, True)",
         "const E = @effect { .ask = Unit -> Int; }\nconst f = fn (a, b) -> Int => do:\n  use answer <- E.ask ()\n  return answer\nreturn 0",
       ]
     ) {
@@ -80,7 +80,7 @@ test("omitting the header result infers performed effects without sharing result
       path,
       `open import "blot:prelude"
 const Read = @effect { .value = Int -> Int; }
-const choose = fn (a :: Int, b) => do:
+const choose = fn (a: Int, b) => do:
   use value <- Read.value a
   return (value, b)
 return @handle (Read, fn () => (choose (1, "text"), choose (2, True)), {

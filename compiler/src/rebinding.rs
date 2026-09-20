@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::cst::{CompactCst, Cursor};
 use crate::diagnostic::Diagnostic;
@@ -6,7 +7,9 @@ use crate::diagnostic::Diagnostic;
 #[derive(Clone)]
 struct ScopeLayer {
     frame: u32,
-    names: HashSet<String>,
+    // Descendants read inherited bindings, never mutate their parent layer.
+    // Sharing prevents every lambda from copying the entire module prefix.
+    names: Rc<HashSet<String>>,
 }
 
 #[derive(Clone)]
@@ -66,7 +69,7 @@ fn new_frame(parent: Option<&Scope>, validation: &mut Validation) -> Scope {
     let mut layers = parent.map_or_else(Vec::new, |parent| parent.layers.clone());
     layers.push(ScopeLayer {
         frame: validation.next_frame,
-        names: HashSet::new(),
+        names: Rc::new(HashSet::new()),
     });
     Scope { layers }
 }
@@ -80,7 +83,7 @@ fn child_scope(parent: &Scope) -> Result<Scope, String> {
     let mut layers = parent.layers.clone();
     layers.push(ScopeLayer {
         frame,
-        names: HashSet::new(),
+        names: Rc::new(HashSet::new()),
     });
     Ok(Scope { layers })
 }
@@ -90,7 +93,7 @@ fn bind_names(scope: &mut Scope, names: Vec<String>) {
         .layers
         .last_mut()
         .expect("rebinding scope has a layer");
-    layer.names.extend(names);
+    Rc::make_mut(&mut layer.names).extend(names);
 }
 
 fn visible(scope: &Scope, name: &str) -> bool {
@@ -686,5 +689,90 @@ fn rule(cursor: Cursor) -> Result<u32, String> {
     match cursor {
         Cursor::Rule(rule) => Ok(rule),
         Cursor::Token(_) => Err("expected a rule".to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn validation() -> Validation {
+        Validation {
+            diagnostics: Vec::new(),
+            next_frame: 0,
+        }
+    }
+
+    #[test]
+    fn nested_scope_entry_shares_large_binding_prefixes() {
+        let mut v = validation();
+        let mut root = new_frame(None, &mut v);
+        bind_names(&mut root, (0..4096).map(|i| format!("name{i}")).collect());
+        for _ in 0..4096 {
+            let mut function = new_frame(Some(&root), &mut v);
+            assert!(Rc::ptr_eq(&root.layers[0].names, &function.layers[0].names));
+            bind_names(&mut function, vec!["parameter".into()]);
+            let branch = child_scope(&function).unwrap();
+            assert!(Rc::ptr_eq(&root.layers[0].names, &branch.layers[0].names));
+            assert!(Rc::ptr_eq(
+                &function.layers[1].names,
+                &branch.layers[1].names
+            ));
+            assert_eq!(
+                branch.layers.iter().map(|l| l.names.len()).sum::<usize>(),
+                4097
+            );
+            assert!(visible(&branch, "name4095"));
+            assert!(!rebindable(&branch, "name4095"));
+            assert!(rebindable(&branch, "parameter"));
+        }
+        assert_eq!(Rc::strong_count(&root.layers[0].names), 1);
+    }
+
+    #[test]
+    fn shared_scope_sets_detach_and_keep_frame_and_branch_boundaries() {
+        let mut v = validation();
+        let mut root = new_frame(None, &mut v);
+        bind_names(&mut root, vec!["outer".into()]);
+        let snapshot = root.clone();
+        bind_names(&mut root, vec!["later".into()]);
+        assert!(!visible(&snapshot, "later"));
+        assert!(visible(&root, "later"));
+        assert!(!Rc::ptr_eq(
+            &root.layers[0].names,
+            &snapshot.layers[0].names
+        ));
+        let mut branch = child_scope(&root).unwrap();
+        bind_names(&mut branch, vec!["branch_only".into()]);
+        assert!(!visible(&root, "branch_only"));
+        assert!(rebindable(&branch, "outer"));
+        let mut closure = new_frame(Some(&branch), &mut v);
+        assert!(visible(&closure, "outer"));
+        assert!(!rebindable(&closure, "outer"));
+        bind_names(&mut closure, vec!["outer".into()]);
+        assert!(rebindable(&closure, "outer"));
+        assert!(!visible(&snapshot, "branch_only"));
+    }
+
+    #[test]
+    fn shared_scope_diagnostics_keep_captured_lineage_rejection() {
+        let rejected =
+            "let outside = 1\nconst f = fn x => do:\n  outside := x\n  return outside\nreturn f\n";
+        let units = rejected.encode_utf16().collect::<Vec<_>>();
+        let error = match crate::source::lower_incremental(&units, None, None) {
+            Err(crate::source::SourceError::Diagnostics(ds)) => ds,
+            _ => panic!("captured rebinding must remain a source diagnostic"),
+        };
+        assert_eq!(error.len(), 1);
+        assert_eq!(error[0].code, "BLOT_REBINDING_FRAME");
+        let allowed = rejected.replace("  outside := x", "  let outside = outside\n  outside := x");
+        assert!(
+            crate::source::lower_incremental(
+                &allowed.encode_utf16().collect::<Vec<_>>(),
+                None,
+                None
+            )
+            .is_ok()
+        );
     }
 }

@@ -14,8 +14,8 @@ const for_state = fn State => do:
       Int
     ]) -> State; .render = State -> Int; }
   const run =
-    fn (game :: Game) => fn (saved :: Option Checkpoint) -> Checkpoint ~ { Clock } => do:
-      let checkpoint :: Checkpoint = case saved of
+    fn (game: Game) => fn (saved: Option Checkpoint) -> Checkpoint ~ { Clock } => do:
+      let checkpoint: Checkpoint = case saved of
         #Some value => value
         #None => { .current = game.initial (); .pending = @satisfies [] [
           Int
@@ -23,7 +23,7 @@ const for_state = fn State => do:
       let current = checkpoint.current
       let pending = @linear.freeze checkpoint.pending
       let tick = checkpoint.tick
-      let previous_time :: Option F64 = None
+      let previous_time: Option F64 = None
       for ever:
         use command <- Clock.next_frame ()
         if let #Frame frame = command else:
@@ -39,7 +39,7 @@ const for_state = fn State => do:
             pending := @linear.freeze (@satisfies [] [Int])
             tick := tick + 1
 
-        let last_time :: F64 = case previous_time of
+        let last_time: F64 = case previous_time of
           #None => frame.time
           #Some time => time
         use Clock.render (tick, game.render current, last_time)
@@ -53,9 +53,9 @@ const Loop = for_state State
 const run =
   Loop.run {
     .initial = fn () -> State => { .total = 0; };
-    .update = fn (state :: State, events :: [Int]) -> State => {
+    .update = fn (state: State, events: [Int]) -> State => {
       .total = fold (events, state.total, fn (total, event) => total + event);
     };
-    .render = fn (state :: State) -> Int => state.total;
+    .render = fn (state: State) -> Int => state.total;
   }
 return { .run; }

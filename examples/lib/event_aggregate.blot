@@ -14,10 +14,10 @@ const Execution = fn (state, event) => {
   .events = [event];
 }
 
-const replay :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), [Event]) -> State))))
+const replay: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), [Event]) -> State))))
 const replay = fn (aggregate, events) => fold (events, aggregate.initial, aggregate.evolve)
 
-const execute :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), State, Command) -> Result (Execution (State, Event), Error)))))
+const execute: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), State, Command) -> Result (Execution (State, Event), Error)))))
 const execute = fn (aggregate, state, command) => case aggregate.decide (state, command) of
   #Error error => Error error
   #Ok events => Ok {
@@ -29,7 +29,7 @@ const ProductCommand = fn (left, right) => #Left left | #Right right
 const ProductEvent = fn (left, right) => #Left left | #Right right
 const ProductError = fn (left, right) => #Left left | #Right right
 
-const product :: @forall (fn LeftState => @forall (fn LeftCommand => @forall (fn LeftEvent => @forall (fn LeftError => @forall (fn RightState => @forall (fn RightCommand => @forall (fn RightEvent => @forall (fn RightError => (Aggregate (LeftState, LeftCommand, LeftEvent, LeftError), Aggregate (RightState, RightCommand, RightEvent, RightError)) -> Aggregate ((LeftState, RightState), ProductCommand (LeftCommand, RightCommand), ProductEvent (LeftEvent, RightEvent), ProductError (LeftError, RightError))))))))))
+const product: @forall (fn LeftState => @forall (fn LeftCommand => @forall (fn LeftEvent => @forall (fn LeftError => @forall (fn RightState => @forall (fn RightCommand => @forall (fn RightEvent => @forall (fn RightError => (Aggregate (LeftState, LeftCommand, LeftEvent, LeftError), Aggregate (RightState, RightCommand, RightEvent, RightError)) -> Aggregate ((LeftState, RightState), ProductCommand (LeftCommand, RightCommand), ProductEvent (LeftEvent, RightEvent), ProductError (LeftError, RightError))))))))))
 const product = fn (left, right) => {
   .initial = (left.initial, right.initial);
   .decide = fn (state, command) => case command of

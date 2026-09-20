@@ -45,7 +45,7 @@ fn select_resource_payloads_close_through_array_and_variant_signatures() {
                 "open import \"blot:prelude\"\n",
                 "const Channel = import \"blot:channel\"\n",
                 "const Select = import \"blot:select\"\n",
-                "let run :: Channel.Receiver Int -> Select.Selection Int ~ { Select.Effect }\n",
+                "let run: Channel.Receiver Int -> Select.Selection Int ~ { Select.Effect }\n",
                 "let run = fn receiver => Select.wait [Select.channel receiver]\n",
                 "return { .run = run; }\n",
             ));
@@ -69,7 +69,7 @@ fn partial_primitive_resource_constructor_consumes_its_family_parameter() {
             "const SelectRuntime = @effect.host {\n",
             "  .wait = Effect.suspends ([#Channel (Channel.Receiver Int)] -> { .index = Int; .outcome = #Message (Option Int) | #Timeout; });\n",
             "}\n",
-            "let run :: Channel.Receiver Int -> { .index = Int; .outcome = #Message (Option Int) | #Timeout; } ~ { SelectRuntime }\n",
+            "let run: Channel.Receiver Int -> { .index = Int; .outcome = #Message (Option Int) | #Timeout; } ~ { SelectRuntime }\n",
             "let run = fn receiver => SelectRuntime.wait [#Channel receiver]\n",
             "return { .run = run; }\n",
         ));
@@ -104,7 +104,7 @@ fn host_array_arguments_retain_checked_variant_representations() {
             let session = session(concat!(
                 "open import \"blot:prelude\"\n",
                 "const Accept = @effect.host { .arms = [#One Int | #Two Int] -> Int; }\n",
-                "let run :: Int -> Int ~ { Accept }\n",
+                "let run: Int -> Int ~ { Accept }\n",
                 "let run = fn count => Accept.arms [#One count, #Two 2]\n",
                 "return { .run = run; }\n",
             ));

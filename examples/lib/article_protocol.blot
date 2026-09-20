@@ -39,7 +39,7 @@ const PublishUndo =
     .reviewer = Text;
   }
 
-const Review ::
+const Review:
   R.Transition { .from = Draft; .input = ReviewInput; .to = Reviewed; .output = Approval; .undo = ReviewUndo; }
 const Review =
   {
@@ -65,7 +65,7 @@ const Review =
     ;
   }
 
-const Publish ::
+const Publish:
   R.Transition { .from = Reviewed; .input = Approval; .to = Published; .output = Receipt; .undo = PublishUndo; }
 const Publish =
   {

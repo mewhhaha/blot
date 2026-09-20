@@ -2,7 +2,7 @@ open import "blot:prelude"
 
 const Matrix = import "../../../examples/lib/semiring_matrix.blot"
 
-const ints :: Matrix.Semiring Int
+const ints: Matrix.Semiring Int
 const ints =
   {
     .zero = 0;
@@ -11,7 +11,7 @@ const ints =
     .multiply = fn (left, right) => left * right;
   }
 
-const texts :: Matrix.Matrix2 Text
+const texts: Matrix.Matrix2 Text
 const texts =
   {
     .m00 = "a";

@@ -95,13 +95,13 @@ test("a concretely specialized transducer preserves an owned array accumulator",
       `open import "blot:prelude"
 const R = import "./lib/reducer.blot"
 const T = import "./lib/transducer.blot"
-const collect :: R.Reducer (Int, [Int], [Int])
+const collect: R.Reducer (Int, [Int], [Int])
 const collect = {
   .initial = @satisfies [] [Int];
   .step = fn (state, value) => @array.push state value;
   .finish = fn state => state;
 }
-const twice :: T.Transducer (Int, Int)
+const twice: T.Transducer (Int, Int)
 const twice = T.map (fn value => value * 2)
 return R.run (twice collect, [1, 2, 3])
 `,

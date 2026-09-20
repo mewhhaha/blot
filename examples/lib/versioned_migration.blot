@@ -7,7 +7,7 @@ const Migration = fn (from, to, error) => from -> Result (to, error)
 // Composition keeps the shared intermediate schema exact while preserving which
 // stage failed. Independent error carriers are tagged instead of widened into an
 // undifferentiated union.
-const and_then :: @forall (fn From => @forall (fn Middle => @forall (fn To => @forall (fn FirstError => @forall (fn SecondError => (Migration (From, Middle, FirstError), Migration (Middle, To, SecondError)) -> Migration (From, To, #First FirstError | #Second SecondError))))))
+const and_then: @forall (fn From => @forall (fn Middle => @forall (fn To => @forall (fn FirstError => @forall (fn SecondError => (Migration (From, Middle, FirstError), Migration (Middle, To, SecondError)) -> Migration (From, To, #First FirstError | #Second SecondError))))))
 const and_then = fn (first, second) => fn input => case first input of
   #Error error => Error (#First error)
   #Ok middle => case second middle of

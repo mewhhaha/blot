@@ -185,11 +185,11 @@ test("mutating an owned literal does not change its pooled peer", async () => {
     await writeFile(
       path,
       `open import "blot:prelude"
-const original :: Int -> Int
+const original: Int -> Int
 const original = fn ignored => Array.expect_get ((&[10, 20, 30]), 0)
-const changed :: Int -> Int
+const changed: Int -> Int
 const changed = fn replacement => do:
-  let values :: [Int]
+  let values: [Int]
   let values = [10, 20, 30]
   let updated = @array.set values 0 replacement
   return Array.expect_get ((&updated), 0)
@@ -346,12 +346,12 @@ test("a deferred effect runs only on a demanding runtime path", async () => {
 
 open import "blot:prelude"
 
-let choose :: Bool -> Int ~> Int
+let choose: Bool -> Int ~> Int
 let choose = fn condition => fn ~fallback => case condition of
   #True => fallback
   #False => 42
 
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn flag => do:
   use value <- choose (flag != 0) (init.read ())
   return value
@@ -450,7 +450,7 @@ test("a module may directly return an effectful computation", async () => {
       path,
       // The test requires an i64 host ABI. An extensible member requirement
       // alone cannot choose the receiver domain of an unknown host result.
-      'module with init\n\nopen import "blot:prelude"\n\nlet read :: Unit -> Int\nlet read = init.read\nreturn read () + 1\n',
+      'module with init\n\nopen import "blot:prelude"\n\nlet read: Unit -> Int\nlet read = init.read\nreturn read () + 1\n',
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);

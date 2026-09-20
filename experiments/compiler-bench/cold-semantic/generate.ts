@@ -321,7 +321,7 @@ function generate(options: Options): string {
 
     // Concrete seed rows with the world's tag literal.
     lines.push(
-      `const seed${suffix} :: (Int, Int) -> [${row}]`,
+      `const seed${suffix}: (Int, Int) -> [${row}]`,
       `const seed${suffix} = fn (count, offset) => Iter.collect (Iter.map (`,
       `  Iter.range (0, count),`,
       `  fn index => {`,
@@ -343,7 +343,7 @@ function generate(options: Options): string {
     }
     lines.push(
       `const render${suffix} = fn row => ${terms.join(" + ")}`,
-      `const checksum${suffix} :: [${row}] -> Int`,
+      `const checksum${suffix}: [${row}] -> Int`,
       `const checksum${suffix} = fn rows => fold (rows, 0, fn (total, row) => total + render${suffix} row)`,
       ``,
     );
@@ -373,7 +373,7 @@ function generate(options: Options): string {
     }
     lines.push(
       `const Loop${suffix} = ForceForWorld${suffix} ${row}`,
-      `const initial${suffix} :: Unit -> ${row}`,
+      `const initial${suffix}: Unit -> ${row}`,
       `const initial${suffix} = fn () => {`,
       ...initialFields,
       `  }`,
@@ -421,8 +421,8 @@ function generate(options: Options): string {
     lines.push(``);
   }
   lines.push(
-    `const run :: Int -> Int`,
-    `const run = fn (count :: Int) -> Int => ${runTerms.join(" + ")}`,
+    `const run: Int -> Int`,
+    `const run = fn (count: Int) -> Int => ${runTerms.join(" + ")}`,
     ``,
     `return { .run; }`,
     ``,

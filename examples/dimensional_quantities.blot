@@ -13,13 +13,13 @@ const distance_from = Dimension.multiply (Speed, Time)
 const area_from = Dimension.multiply (Length, Length)
 const ratio_from = Dimension.divide (Length, Length)
 
-let path :: Length.type
+let path: Length.type
 let path = Length.of 120
-let detour :: Length.type
+let detour: Length.type
 let detour = Length.of 30
-let total :: Length.type
+let total: Length.type
 let total = Length.add (path, detour)
-let elapsed :: Time.type
+let elapsed: Time.type
 let elapsed = Time.of 5
 
 let speed = speed_from.apply (total, elapsed)
@@ -27,7 +27,7 @@ let recovered_distance = case speed of
   #None => Length.of 0
   #Some rate => distance_from.apply (rate, elapsed)
 
-let area :: Area.type
+let area: Area.type
 let area = area_from.apply (Length.of 12, Length.of 9)
 
 let ratio = ratio_from.apply (Length.of 81, Length.of 9)

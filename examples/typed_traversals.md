@@ -38,12 +38,12 @@ use an ordinary reconstructing setter:
 
 ```blot
 const Config = { .items = [[Int]]; .revision = Int; }
-const items :: T.Traversal (Config, [[Int]])
+const items: T.Traversal (Config, [[Int]])
 const items = T.one (
   fn config => config.items,
   fn (config, values) => { ...config; .items = values; }
 )
-let initial :: Config
+let initial: Config
 let initial = { .items = freeze [[1, 2], [3]]; .revision = 7; }
 return T.over (items, initial, fn _ => [[9]])
 ```

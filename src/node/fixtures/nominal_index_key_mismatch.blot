@@ -12,7 +12,7 @@ UserId := UserId <+ {
 const ProjectId = #ProjectId Int
 ProjectId := ProjectId <+ { .of = fn value => #ProjectId value; }
 
-const users :: Store.Index (UserId, Text)
+const users: Store.Index (UserId, Text)
 const users =
   Store.from_entries (UserId.equal, [{ .key = UserId.of 1; .value = "Ada"; }])
 

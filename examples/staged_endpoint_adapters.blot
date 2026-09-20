@@ -11,12 +11,12 @@ const Observed =
 
 const Port = refine (Int, fn value => value >= 1 && value <= 65535)
 
-const require :: Adapter.Natural (Maybe, Checked)
+const require: Adapter.Natural (Maybe, Checked)
 const require = fn candidate => case candidate of
   #Found value => #Ok value
   #Missing => #Error "missing"
 
-const observe :: Adapter.Natural (Checked, Observed)
+const observe: Adapter.Natural (Checked, Observed)
 const observe = fn candidate => case candidate of
   #Ok value => #Ok { .value; .source = "registry"; }
   #Error error => #Error error
@@ -31,13 +31,13 @@ const require_observed =
 const require_endpoint = Adapter.hoist (Maybe, Checked)
 const observe_endpoint = Adapter.hoist (Maybe, Observed)
 
-const lookup_port :: Text -> Maybe Port
+const lookup_port: Text -> Maybe Port
 const lookup_port = fn service => case service of
   "api" => #Found 443
   "admin" => #Found 8443
   _ => #Missing
 
-const lookup_owner :: Int -> Maybe Text
+const lookup_owner: Int -> Maybe Text
 const lookup_owner = fn tenant => case tenant of
   7 => #Found "Żaneta"
   9 => #Found "Ada"

@@ -59,7 +59,7 @@ for (const placement of ["source", "capsule", "offset"]) {
         path,
         `open import "blot:prelude"
 const relations = import "${importPath}"
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn index => do:
   let values = [10, 20, 30]
   return relations.next_at (values, index) + relations.clamped_at (values, index) + relations.optional_at (values, index) + relations.sum values + relations.sum_loop values
@@ -135,7 +135,7 @@ return run
         traversal,
         `open import "blot:prelude"
 const relations = import "${importPath}"
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn count => do:
   let values = Iter.collect (Iter.range (0, count))
   return relations.sum values + relations.sum_loop values
@@ -175,12 +175,12 @@ test("primitive operator resolution does not redispatch through attachments", as
   const compiler = await Compiler.create();
   const directory = await mkdtemp(join(tmpdir(), "blot-relational-operator-"));
   const prefix = `open import "blot:prelude"
-const fake_add :: @type.int -> @type.int -> @type.int
+const fake_add: @type.int -> @type.int -> @type.int
 const fake_add = fn left => fn right => @int.add left 100
 const Scalar = @type.attach @type.int "add" fake_add
-const step :: @type.int -> @type.int
+const step: @type.int -> @type.int
 const step = fn value => @type.resolve_member "add" value 1
-const run :: @type.int -> @type.int
+const run: @type.int -> @type.int
 `;
   try {
     await assert.rejects(
@@ -229,7 +229,7 @@ test("loop state crosses statement conditionals in evaluator and Wasm", async ()
     await writeFile(
       path,
       `open import "blot:prelude"
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn count => do:
   let total = 0
   let value = 100

@@ -19,7 +19,7 @@ const Window =
 const HeaderKey = PackedKey.derive ("example.packet-header.v1", Header)
 const WindowKey = PackedKey.derive ("example.window.v1", Window)
 
-let header :: Header
+let header: Header
 let header =
   {
     .version = 5;
@@ -29,7 +29,7 @@ let header =
     .retries = 15;
   }
 
-let collision :: Header
+let collision: Header
 let collision =
   {
     .version = 5;
@@ -39,7 +39,7 @@ let collision =
     .retries = 0;
   }
 
-let maximum :: Header
+let maximum: Header
 let maximum =
   {
     .version = 7;
@@ -49,7 +49,7 @@ let maximum =
     .retries = 15;
   }
 
-let empty :: Header
+let empty: Header
 let empty =
   {
     .version = 0;
@@ -62,7 +62,7 @@ let empty =
 // This distinct 16-bit domain deliberately encodes to the same raw integer as
 // another legal header could. Its singleton domain label keeps the key types
 // separate even when representation and total width coincide.
-let window :: Window
+let window: Window
 let window = { .channel = 141; .sequence = 0; }
 
 let header_key = HeaderKey.pack header

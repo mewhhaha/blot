@@ -3,7 +3,7 @@ open import "blot:prelude"
 const generated_name = "answer key"
 let generated = { .[generated_name] = 42; }
 
-let original :: { .count = Int; .label = Text; }
+let original: { .count = Int; .label = Text; }
 let original = { .count = 1; .label = "kept"; }
 let updated = Shape.update (original, { .count = 2; })
 let entries = Shape.entries { .left = 1; .right = 2; }

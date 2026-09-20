@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-let sample :: Int -> Int
+let sample: Int -> Int
 let sample = fn seed => do:
   let values = I32x4.of_wrapping (seed, 7, -8, 9)
   let shifted = I32x4.shift_left values 1

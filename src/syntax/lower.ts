@@ -1603,7 +1603,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     if (rowTails.length > 0) {
       fail(
         "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIGNATURE",
-        "An effect-row tail is scoped by a signature header; write `..e` only after `::`.",
+        "An effect-row tail is scoped by a signature header; write `..e` only after `:`.",
         rowTails[0].span,
       );
     }

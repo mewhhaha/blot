@@ -2,7 +2,7 @@ open import "blot:prelude"
 
 const Tick = @effect.host { .next = Effect.suspends (Int -> Int); }
 
-let run :: [Int] -> Int ~ { Tick }
+let run: [Int] -> Int ~ { Tick }
 let run = fn values => do:
   let step = fn (total, value) => do:
     use doubled <- Tick.next value
@@ -13,7 +13,7 @@ let run = fn values => do:
   use result <- Result.map Tick.next (Ok selected)
   return Result.unwrap_or_else (fn _ => Tick.next 200) result
 
-let each :: [Int] -> Unit ~ { Tick }
+let each: [Int] -> Unit ~ { Tick }
 let each = fn values => do:
   let visit = fn value => do:
     use Tick.next value

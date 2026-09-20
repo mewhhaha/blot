@@ -2078,7 +2078,7 @@ impl EffectScopeDecoder<'_> {
             });
         }
         self.visiting.remove(&id);
-        let effect_scope = Rc::new(effect_scope);
+        let effect_scope: Rc<EffectScope> = Rc::new(effect_scope);
         self.decoded[id as usize] = Some(effect_scope.clone());
         Ok(effect_scope)
     }

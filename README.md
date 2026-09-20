@@ -263,7 +263,7 @@ for why that check exists.
 Declarations end at a logical newline; indentation delimits suites:
 
 ```blot
-let name :: type         // signature header for the following runtime binding
+let name: type         // signature header for the following runtime binding
 let name = expr          // runtime binding
 const name = expr        // must evaluate at compile time
 open expr                // spread every field into scope
@@ -501,13 +501,13 @@ accessors attached to it, so one binding is both the type and its namespace:
 ```blot
 const Point = struct { .x = I32; .y = I32; }   // Point is (I32, I32)
 
-let p :: Point
+let p: Point
 let p = Point.new { .y = 20; .x = 10; }        // (10, 20)
 let x = Point.x p                              // and so is p.0
 ```
 
 The members are invisible to typing — the bridge, equality, and inhabitation see
-straight through — so `let p :: Point` constrains `p` to the tuple and nothing
+straight through — so `let p: Point` constrains `p` to the tuple and nothing
 about the namespace reaches the lattice. The storage is a tuple rather than an
 array because a tuple keeps one type per slot; `[I32, Text]` collapses to "an
 array of int-or-text" the moment inference looks at it, and storage that is
@@ -559,7 +559,7 @@ why `derive` is a function rather than a macro.
 
 Effects are a shape of operation types handed to one primitive, and performing
 one is an ordinary call, so the row is inferred rather than declared. It is
-still writable: `let report :: Unit -> Text ~ { Console }` is a closed row and a
+still writable: `let report: Unit -> Text ~ { Console }` is a closed row and a
 bare `->` is exactly empty. Higher-order signatures may name the rest of a row
 with a signature-local tail such as
 `(a -> b ~ { ..e }) -> a -> b ~ { Console,

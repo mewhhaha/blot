@@ -175,9 +175,9 @@ and the message `F64 does not flow into Int`:
 ```blot
 open import "blot:prelude"
 
-let sum :: [F64] -> F64
+let sum: [F64] -> F64
 let sum = fn &values => do:
-  let total :: F64
+  let total: F64
   let total = 0.0
   for value in Iter.items (&values):
     total := total + value

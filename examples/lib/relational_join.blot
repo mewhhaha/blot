@@ -11,14 +11,14 @@ const Group = fn (left, right) => {
   .matches = [right];
 }
 
-const flip :: @forall (fn Left => @forall (fn Right => @forall (fn Key => On (Left, Right, Key) -> On (Right, Left, Key))))
+const flip: @forall (fn Left => @forall (fn Right => @forall (fn Key => On (Left, Right, Key) -> On (Right, Left, Key))))
 const flip = fn relation => {
   .left_key = relation.right_key;
   .right_key = relation.left_key;
   .equal = relation.equal;
 }
 
-const group :: @forall (fn Left => @forall (fn Right => @forall (fn Key => (On (Left, Right, Key), [Left], [Right]) -> [Group (Left, Right)])))
+const group: @forall (fn Left => @forall (fn Right => @forall (fn Key => (On (Left, Right, Key), [Left], [Right]) -> [Group (Left, Right)])))
 const group = fn (relation, lefts, rights) => do:
   // This side is captured by a callback that may run for every left row.
   // Freeze it once so repeated read-only traversal does not duplicate authority.

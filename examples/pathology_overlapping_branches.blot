@@ -7,6 +7,6 @@ const Allowed =
     Int,
     fn value => (value >= 0 && value <= 5) || (value >= 3 && value <= 8)
   )
-let chosen :: Allowed
+let chosen: Allowed
 let chosen = 4
 return chosen

@@ -6,12 +6,12 @@ const Checked = fn Value => #Ok Value | #Error Text
 const Observed =
   fn Value => #Ok { .value = Value; .source = Text; } | #Error Text
 
-const require :: Adapter.Natural (Maybe, Checked)
+const require: Adapter.Natural (Maybe, Checked)
 const require = fn candidate => case candidate of
   #Found value => #Ok value
   #Missing => #Error "missing"
 
-const observe :: Adapter.Natural (Checked, Observed)
+const observe: Adapter.Natural (Checked, Observed)
 const observe = fn candidate => case candidate of
   #Ok value => #Ok { .value; .source = "registry"; }
   #Error error => #Error error
@@ -23,6 +23,6 @@ const require_observed =
   Adapter.compose (Maybe, Checked, Observed) (require, observe)
 const observe_endpoint = Adapter.hoist (Maybe, Observed)
 
-const lookup :: Text -> Maybe Text
+const lookup: Text -> Maybe Text
 const lookup = fn _ => #Found "Żaneta"
 return observe_endpoint (require_observed, lookup) "owner"

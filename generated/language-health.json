@@ -793,11 +793,11 @@
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 16815
+      "lines": 16965
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 13405
+      "lines": 13449
     },
     {
       "path": "compiler/src/backend.rs",
@@ -805,7 +805,7 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 8089
+      "lines": 8096
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -817,7 +817,7 @@
     },
     {
       "path": "compiler/src/frontend_plan.rs",
-      "lines": 3780
+      "lines": 3772
     },
     {
       "path": "src/syntax/lower.ts",
@@ -829,11 +829,11 @@
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3580
+      "lines": 3582
     },
     {
       "path": "compiler/src/value.rs",
-      "lines": 2613
+      "lines": 2811
     },
     {
       "path": "compiler/src/primitives.rs",

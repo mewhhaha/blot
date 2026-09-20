@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-let cursor :: Text.Cursor
+let cursor: Text.Cursor
 let cursor = Text.cursor "α🐱"
 
 let head = fn cursor => case Text.next cursor of

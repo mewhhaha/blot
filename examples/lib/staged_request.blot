@@ -24,7 +24,7 @@ const Receipt = {
   .retries = RetryCount;
 }
 
-const begin :: Text -> Request (Missing, Missing)
+const begin: Text -> Request (Missing, Missing)
 const begin = fn endpoint => {
   .endpoint;
   .auth = #Missing;
@@ -35,7 +35,7 @@ const begin = fn endpoint => {
 // Each setter consumes the old stage and returns the next one. The untouched
 // slot remains quantified, so authorization and body construction can happen in
 // either order without duplicating the implementation.
-const authorize :: @forall (fn Body => (Request (Missing, Body), Text) -> Request (Present Text, Body))
+const authorize: @forall (fn Body => (Request (Missing, Body), Text) -> Request (Present Text, Body))
 const authorize = fn (!request, credential) => do:
   let { .endpoint; .auth; .body; .retries; } = request
   return case auth of
@@ -46,7 +46,7 @@ const authorize = fn (!request, credential) => do:
       .retries;
     }
 
-const with_body :: @forall (fn Auth => (Request (Auth, Missing), Text) -> Request (Auth, Present Text))
+const with_body: @forall (fn Auth => (Request (Auth, Missing), Text) -> Request (Auth, Present Text))
 const with_body = fn (!request, payload) => do:
   let { .endpoint; .auth; .body; .retries; } = request
   return case body of
@@ -59,12 +59,12 @@ const with_body = fn (!request, payload) => do:
 
 // A stage-preserving modifier quantifies both slots. It can be applied before,
 // between, or after required setters without weakening the construction state.
-const with_retries :: @forall (fn Auth => @forall (fn Body => (Request (Auth, Body), RetryCount) -> Request (Auth, Body)))
+const with_retries: @forall (fn Auth => @forall (fn Body => (Request (Auth, Body), RetryCount) -> Request (Auth, Body)))
 const with_retries = fn (!request, retries) => do:
   let { .endpoint; .auth; .body; .retries = _; } = request
   return { .endpoint; .auth; .body; .retries; }
 
-const submit :: Ready -> Receipt
+const submit: Ready -> Receipt
 const submit = fn !request => do:
   let { .endpoint; .auth; .body; .retries; } = request
   return case auth, body of

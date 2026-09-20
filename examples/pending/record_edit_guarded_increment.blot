@@ -6,7 +6,7 @@ const Edit = import "../lib/record_edit.blot"
 const Limits = { .burst = range (1, 100); }
 const Burst = Edit.field (Limits, "burst")
 
-let increment :: Burst.Part -> Burst.Part
+let increment: Burst.Part -> Burst.Part
 let increment = fn value => do:
   if value < 100:
     return value + 1

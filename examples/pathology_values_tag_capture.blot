@@ -2,7 +2,7 @@
 open import "blot:prelude"
 const make = fn step => fn number => @int.add number step
 const box = #Some (make 2)
-let result :: Int
+let result: Int
 let result = case box of
   #Some call => call 40
 return result

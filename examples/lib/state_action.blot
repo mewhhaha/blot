@@ -9,16 +9,16 @@ const Step = fn (State, Value) => {
 
 const Action = fn (State, Value) => State -> Step (State, Value)
 
-const run :: @forall (fn State => @forall (fn Value => (Action (State, Value), State) -> Step (State, Value)))
+const run: @forall (fn State => @forall (fn Value => (Action (State, Value), State) -> Step (State, Value)))
 const run = fn (action, state) => action state
 
-const pure :: @forall (fn State => @forall (fn Value => Value -> Action (State, Value)))
+const pure: @forall (fn State => @forall (fn Value => Value -> Action (State, Value)))
 const pure = fn value => fn state => {
   .state;
   .value;
 }
 
-const map :: @forall (fn State => @forall (fn Input => @forall (fn Output => (Action (State, Input), (Input -> Output)) -> Action (State, Output))))
+const map: @forall (fn State => @forall (fn Input => @forall (fn Output => (Action (State, Input), (Input -> Output)) -> Action (State, Output))))
 const map = fn (action, change) => fn state => do:
   const result = action state
   return {
@@ -26,19 +26,19 @@ const map = fn (action, change) => fn state => do:
     .value = change result.value;
   }
 
-const and_then :: @forall (fn State => @forall (fn Input => @forall (fn Output => (Action (State, Input), (Input -> Action (State, Output))) -> Action (State, Output))))
+const and_then: @forall (fn State => @forall (fn Input => @forall (fn Output => (Action (State, Input), (Input -> Action (State, Output))) -> Action (State, Output))))
 const and_then = fn (action, next) => fn state => do:
   const first = action state
   return next first.value first.state
 
-const sequence :: @forall (fn State => @forall (fn Left => @forall (fn Right => (Action (State, Left), Action (State, Right)) -> Action (State, (Left, Right)))))
+const sequence: @forall (fn State => @forall (fn Left => @forall (fn Right => (Action (State, Left), Action (State, Right)) -> Action (State, (Left, Right)))))
 const sequence = fn (left, right) => and_then (
   left,
   fn left_value => map (right, fn right_value => (left_value, right_value))
 )
 
 // Replace the current state and return the previous state as typed evidence.
-const replace :: @forall (fn State => State -> Action (State, State))
+const replace: @forall (fn State => State -> Action (State, State))
 const replace = fn next => fn previous => {
   .state = next;
   .value = previous;
@@ -47,7 +47,7 @@ const replace = fn next => fn previous => {
 // Localize a stateful computation to one lens focus. The same Part appears in
 // the lens and the local action, so a computation for another focus cannot be
 // zoomed through this lens.
-const zoom :: @forall (fn Whole => @forall (fn Part => @forall (fn Value => (L.Lens (Whole, Part), Action (Part, Value)) -> Action (Whole, Value))))
+const zoom: @forall (fn Whole => @forall (fn Part => @forall (fn Value => (L.Lens (Whole, Part), Action (Part, Value)) -> Action (Whole, Value))))
 const zoom = fn (lens, action) => fn whole => do:
   const local = action (lens.view whole)
   return {

@@ -1,5 +1,5 @@
 open import "blot:prelude"
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn count => do:
   let total = 0
   let value = 100

@@ -140,13 +140,28 @@ pub struct SyntaxSnapshot {
 }
 
 impl FrontendState {
+    /// (Parser executed, reported node reuse, retained flat-vector storage).
+    /// These are observations, never authority for semantic reuse. There are no
+    /// recursively owned payloads in the vectors whose capacity is charged.
+    pub(crate) fn observations(&self) -> (bool, usize, usize) {
+        let bytes = std::mem::size_of::<Self>()
+            + self.source.capacity() * std::mem::size_of::<u16>()
+            + self.tokens.capacity() * std::mem::size_of::<Token>()
+            + (self.program.tokens.capacity()
+                + self.program.nodes.capacity()
+                + self.program.edges.capacity())
+                * std::mem::size_of::<i32>()
+            + self.reuse.capacity() * std::mem::size_of::<NodeReuse>();
+        (self.parser_executed, self.reuse.len(), bytes)
+    }
+
     pub(crate) fn snapshot(&self) -> SyntaxSnapshot {
         SyntaxSnapshot {
             tokens: self.program.tokens.clone(),
             nodes: self.program.nodes.clone(),
             edges: self.program.edges.clone(),
             reuse: self.reuse.clone(),
-            parser_executed: self.parser_executed,
+            parser_executed: self.observations().0,
         }
     }
 
@@ -186,14 +201,26 @@ pub fn ingest_incremental(
         Some(previous) => lex_incremental(source, previous, plan),
         None => lex_from(source, 0, 0, plan),
     };
-    let syntax_unchanged =
+    let positioned_syntax_unchanged =
         previous.is_some_and(|previous| same_syntax_tokens(&tokens, &previous.tokens));
-    let semantic_input_unchanged = syntax_unchanged
+    let semantic_input_unchanged = positioned_syntax_unchanged
         && previous.is_some_and(|previous| {
             same_semantic_tokens(source, &tokens, &previous.source, &previous.tokens)
         });
+    let reused_program = previous.and_then(|previous| {
+        if positioned_syntax_unchanged {
+            Some(CompactProgram {
+                tokens: Vec::new(),
+                nodes: previous.program.nodes.clone(),
+                edges: previous.program.edges.clone(),
+            })
+        } else {
+            relocate_same_grammar(previous, &tokens)
+        }
+    });
+    let tree_reused = reused_program.is_some();
     let delimiter_matches = match_delimiters(&tokens, plan.boundaries, &mut diagnostics);
-    let root = if diagnostics.is_empty() && !syntax_unchanged {
+    let root = if diagnostics.is_empty() && !tree_reused {
         execute_root_island(&tokens, &delimiter_matches, plan, &mut diagnostics)
     } else {
         None
@@ -202,19 +229,21 @@ pub fn ingest_incremental(
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
-    let program = if syntax_unchanged {
-        let previous = previous.expect("unchanged syntax requires a previous snapshot");
-        CompactProgram {
-            tokens: materialize_tokens(tokens.clone()),
-            nodes: previous.program.nodes.clone(),
-            edges: previous.program.edges.clone(),
-        }
+    let program = if let Some(mut program) = reused_program {
+        program.tokens = materialize_tokens(tokens.clone());
+        program
     } else {
         let root = root.expect("frontend produced neither a root node nor a diagnostic");
         materialize(tokens.clone(), root, plan)
     };
     let reuse = previous.map_or_else(Vec::new, |previous| {
-        reused_nodes(&previous.source, &previous.program, source, &program)
+        reused_nodes(
+            &previous.source,
+            &previous.program,
+            source,
+            &program,
+            tree_reused,
+        )
     });
     Ok((
         program.clone(),
@@ -223,7 +252,7 @@ pub fn ingest_incremental(
             tokens,
             program,
             reuse,
-            parser_executed: !syntax_unchanged,
+            parser_executed: !tree_reused,
             semantic_input_unchanged,
         },
     ))
@@ -255,6 +284,7 @@ fn same_syntax_tokens(current: &[Token], previous: &[Token]) -> bool {
                 token.start,
                 token.end,
                 token.lexical_identity,
+                token.output_index,
             )
         });
     let previous = previous
@@ -266,9 +296,62 @@ fn same_syntax_tokens(current: &[Token], previous: &[Token]) -> bool {
                 token.start,
                 token.end,
                 token.lexical_identity,
+                token.output_index,
             )
         });
     current.eq(previous)
+}
+
+// Baba's island executor and delimiter decisions depend on the terminal
+// sequence, not source spelling/width. Reuse only a prior successful tree for
+// the identical sequence, then relocate BOTH source spans and token edges.
+// This is not an AST/semantic cache: changed payloads must still be lowered and
+// checked. Unanchored or zero-width nodes conservatively use the island parser.
+fn relocate_same_grammar(previous: &FrontendState, current: &[Token]) -> Option<CompactProgram> {
+    let old = previous.tokens.iter().filter(|t| t.terminal >= 0);
+    let new = current.iter().filter(|t| t.terminal >= 0);
+    if !old
+        .clone()
+        .map(|t| (t.terminal, t.lexical_identity))
+        .eq(new.clone().map(|t| (t.terminal, t.lexical_identity)))
+    {
+        return None;
+    }
+    // Source offsets already form a bounded dense coordinate space. Direct
+    // u32 relocation tables avoid building hash maps for every token merely
+    // to relocate the many nodes sharing those boundaries. They are temporary
+    // and bounded by the previous input length, not the number of tree paths.
+    const MISSING: u32 = u32::MAX;
+    let mut starts = vec![MISSING; previous.source.len().checked_add(1)?];
+    let mut ends = vec![MISSING; starts.len()];
+    let mut token_indices = vec![MISSING; previous.tokens.len()];
+    for (old, new) in old.zip(new) {
+        *starts.get_mut(old.start)? = u32::try_from(new.start).ok()?;
+        *ends.get_mut(old.end)? = u32::try_from(new.end).ok()?;
+        *token_indices.get_mut(old.output_index)? = u32::try_from(new.output_index).ok()?;
+    }
+    let mut nodes = previous.program.nodes.clone();
+    for node in nodes.chunks_exact_mut(8) {
+        let start = usize::try_from(node[2]).ok()?;
+        let end = usize::try_from(node[3]).ok()?;
+        if start == end {
+            return None;
+        }
+        node[2] = i32::try_from(*starts.get(start)?).ok()?;
+        node[3] = i32::try_from(*ends.get(end)?).ok()?;
+    }
+    let mut edges = previous.program.edges.clone();
+    for edge in edges.chunks_exact_mut(4) {
+        if edge[2] == 0 {
+            let old = usize::try_from(edge[3]).ok()?;
+            edge[3] = i32::try_from(*token_indices.get(old)?).ok()?;
+        }
+    }
+    Some(CompactProgram {
+        tokens: Vec::new(),
+        nodes,
+        edges,
+    })
 }
 
 fn identity_reuse(program: &CompactProgram) -> Vec<NodeReuse> {
@@ -285,6 +368,7 @@ fn reused_nodes(
     previous: &CompactProgram,
     source: &[u16],
     current: &CompactProgram,
+    syntax_unchanged: bool,
 ) -> Vec<NodeReuse> {
     let common_prefix = previous_source
         .iter()
@@ -302,6 +386,27 @@ fn reused_nodes(
         .count();
     let previous_suffix_start = previous_source.len() - common_suffix;
     let current_suffix_start = source.len() - common_suffix;
+    if syntax_unchanged {
+        // ingest_incremental retained the exact Baba tree topology, possibly
+        // relocating spans and token-edge indices. Stable node IDs already
+        // prove correspondence outside the edited source region. Do not build
+        // a span index and per-node candidate vectors to rediscover it.
+        debug_assert_eq!(previous.nodes.len(), current.nodes.len());
+        debug_assert_eq!(previous.edges.len(), current.edges.len());
+        return current
+            .nodes
+            .chunks_exact(8)
+            .enumerate()
+            .filter_map(|(id, node)| {
+                let start = node[2] as usize;
+                let end = node[3] as usize;
+                (end <= common_prefix || start >= current_suffix_start).then_some(NodeReuse {
+                    previous: id as u32,
+                    current: id as u32,
+                })
+            })
+            .collect();
+    }
     let mut previous_by_span: HashMap<(i32, usize, usize), Vec<usize>> = HashMap::new();
     for id in 0..previous.nodes.len() / 8 {
         let base = id * 8;
@@ -1028,6 +1133,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn payload_only_edit_reuses_exact_unchanged_nodes_without_a_span_index() {
+        let a = "let first = 111\u{e000}let second = fn x => x\u{e000}return first\u{e000}";
+        let b = a.replace("111", "222");
+        let a = a.encode_utf16().collect::<Vec<_>>();
+        let b = b.encode_utf16().collect::<Vec<_>>();
+        let (previous, state) = ingest_incremental(&a, None).unwrap();
+        let (current, next) = ingest_incremental(&b, Some(&state)).unwrap();
+        let fresh = ingest(&b).unwrap();
+        assert!(!next.parser_executed);
+        assert!(!next.semantic_input_unchanged);
+        assert_eq!(current.nodes, fresh.nodes);
+        assert_eq!(current.tokens, fresh.tokens);
+        assert_eq!(current.edges, fresh.edges);
+        assert!(!next.reuse.is_empty());
+        let changed_start = a.windows(3).position(|s| s == [49, 49, 49]).unwrap();
+        for r in &next.reuse {
+            assert_eq!(r.previous, r.current);
+            let node = &current.nodes[r.current as usize * 8..][..8];
+            assert_eq!(node, &previous.nodes[r.previous as usize * 8..][..8]);
+            assert!(node[3] as usize <= changed_start || node[2] as usize >= changed_start + 3);
+        }
+        let general = reused_nodes(&a, &previous, &b, &current, false);
+        assert_eq!(general.len(), next.reuse.len());
+    }
+
+    #[test]
+    fn grammar_tree_relocation_matches_fresh_spans_and_edges_after_width_and_trivia_edits() {
+        let base = "let first = 1\u{e000}let text = \"a😀b\"\u{e000}let f = fn x => (x, first)\u{e000}return f\u{e000}";
+        let edits = [
+            base.replace("first = 1", "first = 12345678"),
+            base.replace("first", "longer_name"),
+            base.replace("a😀b", "abc😀 long text"),
+            base.replace("let f", "// comment\nlet f"),
+            format!("  {base} // trailing comment"),
+        ];
+        for edited in edits {
+            for (a, b) in [(base, edited.as_str()), (edited.as_str(), base)] {
+                let a = a.encode_utf16().collect::<Vec<_>>();
+                let b = b.encode_utf16().collect::<Vec<_>>();
+                let (_, old) = ingest_incremental(&a, None).unwrap();
+                let (incremental, next) = ingest_incremental(&b, Some(&old)).unwrap();
+                let fresh = ingest(&b).unwrap();
+                assert!(!next.parser_executed);
+                assert!(!next.semantic_input_unchanged);
+                assert_eq!(incremental.tokens, fresh.tokens);
+                assert_eq!(incremental.nodes, fresh.nodes);
+                assert_eq!(incremental.edges, fresh.edges);
+                assert!(next.reuse.iter().all(|r| r.previous == r.current));
+            }
+        }
+    }
+
+    #[test]
+    fn grammar_relocation_does_not_accept_changed_or_invalid_terminal_sequences() {
+        let a = "return (1, 2)\u{e000}".encode_utf16().collect::<Vec<_>>();
+        let (_, old) = ingest_incremental(&a, None).unwrap();
+        for b in ["return (100)\u{e000}", "return [1, 2]\u{e000}"] {
+            let b = b.encode_utf16().collect::<Vec<_>>();
+            let (incremental, next) = ingest_incremental(&b, Some(&old)).unwrap();
+            assert!(next.parser_executed);
+            let fresh = ingest(&b).unwrap();
+            assert_eq!(incremental.nodes, fresh.nodes);
+            assert_eq!(incremental.edges, fresh.edges);
+        }
+        for b in ["return (1, 2]\u{e000}", "return (1, \"bad)\u{e000}"] {
+            let b = b.encode_utf16().collect::<Vec<_>>();
+            let error = match ingest_incremental(&b, Some(&old)) {
+                Err(e) => e,
+                _ => panic!("must reject"),
+            };
+            let fresh = match ingest(&b) {
+                Err(e) => e,
+                _ => panic!("must reject fresh"),
+            };
+            assert_eq!(
+                serde_json::to_value(error).unwrap(),
+                serde_json::to_value(fresh).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn incremental_frontend_matches_fresh_frontend_after_token_edit() {
         assert_incremental_matches_fresh("return 1\u{e000}", "return 22\u{e000}");
     }
@@ -1075,7 +1262,7 @@ mod tests {
     #[test]
     fn changed_syntax_publishes_an_explicit_node_reuse_map() {
         let previous = "let first = 1\u{e000}let second = 2\u{e000}return first\u{e000}";
-        let current = "let first = 100\u{e000}let second = 2\u{e000}return first\u{e000}";
+        let current = "let first = (100)\u{e000}let second = 2\u{e000}return first\u{e000}";
         let previous = previous.encode_utf16().collect::<Vec<_>>();
         let current = current.encode_utf16().collect::<Vec<_>>();
         let (_, state) = ingest_incremental(&previous, None).expect("previous source should parse");

@@ -10,6 +10,26 @@ const libraryPath = "examples/lib/subtyping_witness.blot";
 const expectedType =
   "{ .default = { .endpoint = Text; .route = Text; .degraded = Text; .ready = Text } }";
 
+test("reflected unions check every source alternative in both executions", async () => {
+  const fixture = "src/node/fixtures/reflected_union_refinement.blot";
+  const compiler = await Compiler.create();
+  try {
+    assert.equal((await compiler.check(fixture)).effects, "");
+    const evaluated = await compiler.evaluate(fixture);
+    assert.deepEqual(evaluated.writes, []);
+    assert.equal(
+      evaluated.display,
+      "[#True, #True, #False, #True, #True, #True, #False, #False]",
+    );
+    assert.equal(
+      await runArtifact(await compiler.compile(fixture)),
+      "[true, true, false, true, true, true, false, false]",
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test("subtyping witnesses compose safe static views in both executions", async () => {
   const compiler = await Compiler.create();
   try {

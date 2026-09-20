@@ -18,7 +18,7 @@ open import "blot:prelude"
 // one produced, so a vector is never rebuilt in between — that is the property
 // the opcode assertions are really about, and a chain is the only way to state
 // it in a program.
-let normalize :: F32x4 -> F32x4
+let normalize: F32x4 -> F32x4
 let normalize = fn input => do:
   let gain = F32x4.splat (F32.of_int 10)
   let biased = F32x4.add input gain
@@ -26,7 +26,7 @@ let normalize = fn input => do:
   let centered = F32x4.sub scaled gain
   return F32x4.div centered (F32x4.splat (F32.of_int 2))
 
-let sample :: Int -> Int
+let sample: Int -> Int
 let sample = fn seed => do:
   let normalized =
     normalize (F32x4.of (

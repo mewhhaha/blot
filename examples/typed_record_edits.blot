@@ -45,7 +45,7 @@ let rollout =
     )
   )
 
-let original :: Service
+let original: Service
 let original =
   {
     .host = "api.example";
@@ -58,7 +58,7 @@ let updated = rollout original
 
 // Empty is the identity, and sequential edits are right-biased only because the
 // second endomorphism runs after the first one.
-let no_change :: Edit.Edit Service
+let no_change: Edit.Edit Service
 let no_change = Edit.empty
 let unchanged = no_change original
 let port_override = Edit.then (Port.replace 8080, Port.replace 9443)

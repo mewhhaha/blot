@@ -3,24 +3,24 @@ open import "blot:prelude"
 const shortest_paths = import "../../../examples/lib/dijkstra.blot"
 
 // Keep the affine graph builder outside the nested edge-building loop.
-const star_edges :: (Int, Int) -> [(Int, Int)]
+const star_edges: (Int, Int) -> [(Int, Int)]
 const star_edges = fn (vertex, count) => do:
   let first_neighbor = case vertex == 0 of
     #True => 1
     #False => count
-  let edges :: [(Int, Int)]
+  let edges: [(Int, Int)]
   let edges = []
   for neighbor in Iter.range (first_neighbor, count):
     edges := @array.push edges (neighbor, count - neighbor)
 
   return edges
 
-const star_total :: Int -> Int
+const star_total: Int -> Int
 const star_total = fn count => do:
   if count <= 0:
     return 0
 
-  let rec build_graph ::
+  let rec build_graph:
     (Int, Scratch.of [(Int, Int)]) -> Scratch.of [(Int, Int)]
   let rec build_graph = fn (vertex, ?graph) => do:
     if vertex >= count:

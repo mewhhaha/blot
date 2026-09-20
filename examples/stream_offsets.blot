@@ -12,7 +12,7 @@ const Summary =
     .stale = Int;
   }
 
-let reconcile :: (Int, [Int]) -> Summary
+let reconcile: (Int, [Int]) -> Summary
 let reconcile = fn (start, &offsets) => do:
   let checkpoint = start
   let accepted = 0

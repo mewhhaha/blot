@@ -43,7 +43,7 @@ return factorial
 });
 
 Deno.test("a recursive signature header aligns with its binding", async () => {
-  const parsed = await parse(`let rec factorial :: Int -> Int
+  const parsed = await parse(`let rec factorial: Int -> Int
 let rec factorial = fn n => n
 return factorial
 `);

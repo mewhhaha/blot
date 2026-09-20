@@ -4,10 +4,10 @@ const Retry = import "../../../examples/lib/retry_strategy.blot"
 const OperationError = #Transient Text
 const StrategyError = #Rejected Text
 
-const strategy :: Retry.Strategy (Int, StrategyError)
+const strategy: Retry.Strategy (Int, StrategyError)
 const strategy = Retry.bounded (1, fn _ => True)
 
-let operation :: (Int, Int) -> Result (Int, OperationError)
+let operation: (Int, Int) -> Result (Int, OperationError)
 let operation = fn (value, _) => #Error (#Transient "again")
 
 return Retry.run (strategy, operation, 1)

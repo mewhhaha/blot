@@ -1,9 +1,9 @@
 open import "blot:prelude"
 const Particles = import "./particles.blot"
 
-const unpack :: Particles.Table -> [Particles.Entity]
+const unpack: Particles.Table -> [Particles.Entity]
 const unpack = fn table => do:
-  let rows :: [Particles.Entity]
+  let rows: [Particles.Entity]
   let rows = []
   for index in Iter.range (0, Array.length table.blocks):
     let block = Array.expect_get (table.blocks, index)
@@ -21,6 +21,6 @@ const unpack = fn table => do:
 
   return rows
 
-const roundtrip :: [Particles.Entity] -> [Particles.Entity]
+const roundtrip: [Particles.Entity] -> [Particles.Entity]
 const roundtrip = fn rows => unpack (Particles.pack rows)
 return roundtrip

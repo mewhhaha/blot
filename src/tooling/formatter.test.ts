@@ -222,12 +222,12 @@ return clear
 
 Deno.test("formatting aligns a recursive signature with its binding", async () => {
   await assertStableFormatting(
-    `let rec factorial ::
+    `let rec factorial:
   Int -> Int
 let rec factorial = fn value => value
 return factorial
 `,
-    `let rec factorial :: Int -> Int
+    `let rec factorial: Int -> Int
 let rec factorial = fn value => value
 
 return factorial
@@ -237,13 +237,13 @@ return factorial
 
 Deno.test("formatting moves a multiline signature into its value scope", async () => {
   await assertStableFormatting(
-    `const fold :: @forall (fn T => @forall (fn S => do:
+    `const fold: @forall (fn T => @forall (fn S => do:
     return ([T], S, (S, T) -> S) -> S
   ))
 const fold = fn values => values
 return fold
 `,
-    `const fold ::
+    `const fold:
   @forall (fn T => @forall (fn S => do:
     return ([T], S, (S, T) -> S) -> S
   ))
@@ -255,14 +255,14 @@ return fold
 
 Deno.test("formatting normalizes a signature's nested scope", async () => {
   await assertStableFormatting(
-    `const fold ::
+    `const fold:
   @forall (fn T => @forall (fn S => do:
       return ([T], S, (S, T) -> S) -> S
     ))
 const fold = fn values => values
 return fold
 `,
-    `const fold ::
+    `const fold:
   @forall (fn T => @forall (fn S => do:
     return ([T], S, (S, T) -> S) -> S
   ))
@@ -274,7 +274,7 @@ return fold
 
 Deno.test("formatting indents a signature's expression continuation", async () => {
   await assertStableFormatting(
-    `const replace ::
+    `const replace:
   @forall (fn T => do:
       return T ->
           (#Replaced T |
@@ -283,7 +283,7 @@ Deno.test("formatting indents a signature's expression continuation", async () =
 const replace = fn value => value
 return replace
 `,
-    `const replace ::
+    `const replace:
   @forall (fn T => do:
     return T ->
       (#Replaced T |
@@ -297,13 +297,13 @@ return replace
 
 Deno.test("formatting aligns a closing delimiter before an expression suffix", async () => {
   await assertStableFormatting(
-    `const consume :: ({
+    `const consume: ({
     .value = Int;
     } -> Unit)
 const consume = fn value => ()
 return consume
 `,
-    `const consume ::
+    `const consume:
   ({
     .value = Int;
   } -> Unit)
@@ -315,12 +315,12 @@ return consume
 
 Deno.test("formatting keeps a signature attached to its binding", async () => {
   await assertStableFormatting(
-    `let value :: Int
+    `let value: Int
 
 let value = 1
 return value
 `,
-    `let value :: Int
+    `let value: Int
 let value = 1
 return value
 `,
@@ -329,17 +329,17 @@ return value
 
 Deno.test("formatting separates a recursive group from its following declaration", async () => {
   await assertStableFormatting(
-    `let rec even :: Int -> Bool
+    `let rec even: Int -> Bool
 let rec even = fn value => odd value
 
-let rec odd :: Int -> Bool
+let rec odd: Int -> Bool
 let rec odd = fn value => even value
 let answer = even 0
 return answer
 `,
-    `let rec even :: Int -> Bool
+    `let rec even: Int -> Bool
 let rec even = fn value => odd value
-let rec odd :: Int -> Bool
+let rec odd: Int -> Bool
 let rec odd = fn value => even value
 
 let answer = even 0
@@ -1015,7 +1015,7 @@ Deno.test("formatting many signatures shares layout without changing their trees
   const declarations = Array.from(
     { length: 32 },
     (_, index) =>
-      `const step${index} ::
+      `const step${index}:
   @forall (fn T => @forall (fn S => do:
       return ([T], S, (S, T) -> S) -> S
     ))

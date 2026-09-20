@@ -5,12 +5,12 @@ const { .Shape; } = import "blot:prelude"
 // constructors from a concrete record schema.
 const Edit = fn Whole => Whole -> Whole
 
-const empty :: @forall (fn Whole => Edit Whole)
+const empty: @forall (fn Whole => Edit Whole)
 const empty = fn whole => whole
 
 // Composition is deliberately closed over one Whole. Edits for unrelated
 // record domains cannot be sequenced accidentally.
-const then :: @forall (fn Whole => (Edit Whole, Edit Whole) -> Edit Whole)
+const then: @forall (fn Whole => (Edit Whole, Edit Whole) -> Edit Whole)
 const then = fn (first, second) => fn whole => second (first whole)
 
 // Derive replacement and modification for one compile-time field name. Part is
@@ -19,11 +19,11 @@ const then = fn (first, second) => fn whole => second (first whole)
 const field = fn (Whole, name) => do:
   const Part = @shape.get Whole name
 
-  let replace :: Part -> Edit Whole
+  let replace: Part -> Edit Whole
   let replace =
     fn value => fn whole => Shape.update (whole, { .[name] = value; })
 
-  let modify :: (Part -> Part) -> Edit Whole
+  let modify: (Part -> Part) -> Edit Whole
   let modify = fn change => fn whole => do:
     let part = @shape.get whole name
     return Shape.update (whole, { .[name] = change part; })

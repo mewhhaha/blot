@@ -10,7 +10,7 @@ const Transition = fn spec => {
 // Composition shares both the intermediate state and the value handed from one
 // step to the next. Undo evidence is paired in forward order and consumed in the
 // opposite order, so an invalid protocol adjacency cannot be composed.
-const compose ::
+const compose:
   @forall (fn From => @forall (fn Input => @forall (fn Middle => @forall (fn Through => @forall (fn To => @forall (fn Output => @forall (fn LeftUndo => @forall (fn RightUndo => (
     Transition { .from = From; .input = Input; .to = Middle; .output = Through; .undo = LeftUndo; },
     Transition { .from = Middle; .input = Through; .to = To; .output = Output; .undo = RightUndo; }

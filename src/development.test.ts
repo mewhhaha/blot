@@ -1003,11 +1003,11 @@ const Source = @effect.host {
 use value <- Source.value ()
 use distance <- Source.distance ()
 let incremented = codec.increment value
-let choice :: Choice
+let choice: Choice
 let choice = #Label "oak"
-let scalar :: Scalar
+let scalar: Scalar
 let scalar = #Single (F32.of_int 3)
-let wide :: Wide
+let wide: Wide
 let wide = #Double 4.0
 let payload = codec.reflect {
   .nothing = ();

@@ -1,0 +1,15 @@
+open import "blot:prelude"
+
+const Narrow = #Ready | #Degraded
+const Wide = #Ready | #Degraded | #Offline
+
+return [
+  refines (Narrow, Narrow),
+  refines (Narrow, Wide),
+  refines (Wide, Narrow),
+  refines (Option Text, Option Text),
+  refines ({ .value = Narrow; }, { .value = Wide; }),
+  refines (1 | 2, range (0, 3)),
+  refines (1 | "no", Int),
+  refines (#Value Int | #None, #Value Text | #None)
+]

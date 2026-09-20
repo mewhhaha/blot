@@ -5,13 +5,13 @@ const Quantity = fn Dimension => { .dimension = Dimension; .value = Int; }
 const make = fn spec => do:
   const T = Quantity spec
 
-  let create :: Int -> T
+  let create: Int -> T
   let create = fn value => { .dimension = spec; .value; }
 
-  let value :: T -> Int
+  let value: T -> Int
   let value = fn quantity => quantity.value
 
-  let add :: (T, T) -> T
+  let add: (T, T) -> T
   let add = fn (left, right) => create (value left + value right)
 
   return {
@@ -29,7 +29,7 @@ const multiply = fn (Left, Right) => do:
       .time = Left.spec.time + Right.spec.time;
     }
 
-  let combine :: (Left.type, Right.type) -> Out.type
+  let combine: (Left.type, Right.type) -> Out.type
   let combine = fn (left, right) => Out.of (Left.value left * Right.value right)
 
   return { .result = Out; .apply = combine; }
@@ -41,7 +41,7 @@ const divide = fn (Left, Right) => do:
       .time = Left.spec.time - Right.spec.time;
     }
 
-  let combine :: (Left.type, Right.type) -> #None | #Some Out.type
+  let combine: (Left.type, Right.type) -> #None | #Some Out.type
   let combine = fn (left, right) => do:
     let divisor = Right.value right
     if divisor == 0:

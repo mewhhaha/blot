@@ -5,7 +5,7 @@ const Ticket = { .id = Int; .title = Text; }
 
 // `on` couples the projection result to the order's key type. A Text order
 // cannot consume the Int projected from `.id`.
-const invalid :: O.Order Ticket
+const invalid: O.Order Ticket
 const invalid = O.on (O.text, fn ticket => ticket.id)
 
 return invalid

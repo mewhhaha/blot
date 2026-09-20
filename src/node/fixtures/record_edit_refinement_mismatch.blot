@@ -2,6 +2,6 @@ open import "blot:prelude"
 const Edit = import "../../../examples/lib/record_edit.blot"
 const Service = { .port = range (1, 65535); }
 const Port = Edit.field (Service, "port")
-let service :: Service
+let service: Service
 let service = { .port = 443; }
 return { .default = Port.replace 70000 service; }

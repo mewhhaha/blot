@@ -6,7 +6,7 @@ const Selection =
     .name = Text;
     .status = #Active | #Paused;
   }
-let selections :: [Selection]
+let selections: [Selection]
 let selections =
   [
     { .key = 1; .name = "first"; .status = #Active; },
@@ -21,7 +21,7 @@ let select = fn key => do:
 
   return selected
 
-let run :: Int -> Int
+let run: Int -> Int
 let run = fn key => do:
   let selected = select key
   return case selected.status of

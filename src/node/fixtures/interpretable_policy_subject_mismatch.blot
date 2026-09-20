@@ -4,20 +4,20 @@ const P = import "../../../examples/lib/interpretable_policy.blot"
 const Left = #Left Int
 const Right = #Right Int
 
-let positive_left :: Left -> Bool
+let positive_left: Left -> Bool
 let positive_left = fn value => case value of
   #Left number => number > 0
 
-let positive_right :: Right -> Bool
+let positive_right: Right -> Bool
 let positive_right = fn value => case value of
   #Right number => number > 0
 
-let left :: P.Policy Left
+let left: P.Policy Left
 let left = P.check (positive_left, "left")
 
-let right :: P.Policy Right
+let right: P.Policy Right
 let right = P.check (positive_right, "right")
 
-let invalid :: P.Policy Left
+let invalid: P.Policy Left
 let invalid = P.both (left, right)
 return invalid

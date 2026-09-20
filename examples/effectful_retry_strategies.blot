@@ -5,21 +5,21 @@ const FetchError = #Transient Text | #Rejected Text
 const Request = { .key = Text; .attempt = Int; }
 const Remote = @effect { .fetch = Request -> Result (Int, FetchError); }
 
-let retryable_fetch :: FetchError -> Bool
+let retryable_fetch: FetchError -> Bool
 let retryable_fetch = fn error => case error of
   #Transient _ => True
   #Rejected _ => False
 
-const FetchRetry :: Retry.Strategy (Int, FetchError)
+const FetchRetry: Retry.Strategy (Int, FetchError)
 const FetchRetry = Retry.bounded (2, retryable_fetch)
 
-let fetch :: (Text, Int) -> Result (Int, FetchError) ~ { Remote }
+let fetch: (Text, Int) -> Result (Int, FetchError) ~ { Remote }
 let fetch = fn (key, attempt) => Remote.fetch {
   .key;
   .attempt;
 }
 
-const simulate :: Request -> Result (Int, FetchError)
+const simulate: Request -> Result (Int, FetchError)
 const simulate = fn request => do:
   if request.key == "flaky":
     if request.attempt < 2:
@@ -41,7 +41,7 @@ let remote_handler =
     .return = fn result => result;
   }
 
-let remote_program :: Text -> Result (Int, FetchError) ~ { Remote }
+let remote_program: Text -> Result (Int, FetchError) ~ { Remote }
 let remote_program = fn key => Retry.run (FetchRetry, fetch, key)
 
 let flaky =
@@ -61,15 +61,15 @@ use stable_result <- stable
 
 const ParseError = #Incomplete Text | #Invalid Text
 
-let retryable_parse :: ParseError -> Bool
+let retryable_parse: ParseError -> Bool
 let retryable_parse = fn error => case error of
   #Incomplete _ => True
   #Invalid _ => False
 
-const ParseRetry :: Retry.Strategy (Int, ParseError)
+const ParseRetry: Retry.Strategy (Int, ParseError)
 const ParseRetry = Retry.bounded (1, retryable_parse)
 
-let parse :: (Text, Int) -> Result (Int, ParseError)
+let parse: (Text, Int) -> Result (Int, ParseError)
 let parse = fn (text, attempt) => do:
   if text == "eventual":
     if attempt == 0:
@@ -82,7 +82,7 @@ let parse = fn (text, attempt) => do:
 let pure_retry = Retry.run (ParseRetry, parse, "eventual")
 let pure_stop = Retry.run (ParseRetry, parse, "bad")
 
-const NoRetry :: Retry.Strategy (Int, ParseError)
+const NoRetry: Retry.Strategy (Int, ParseError)
 const NoRetry = Retry.bounded (0, fn _ => True)
 let zero_budget = Retry.run (NoRetry, parse, "eventual")
 

@@ -5,7 +5,7 @@ const Left = #Left Text
 const Right = #Right Text
 const E = #Failure Text
 
-const bridge :: B.Bridge (Left, Right, E, E)
+const bridge: B.Bridge (Left, Right, E, E)
 const bridge =
   {
     .to_right = fn #Left value => #Ok (#Right value);

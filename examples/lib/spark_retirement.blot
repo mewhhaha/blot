@@ -7,10 +7,9 @@ const Probe =
     .retired = Effect.suspends (Int -> Unit);
   }
 
-let run ::
-  { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect, Probe }
+let run: { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect, Probe }
 let run = fn io => fn count => do:
-  let body :: Spark.Scope -> Int ~ { Spark.Effect, Probe }
+  let body: Spark.Scope -> Int ~ { Spark.Effect, Probe }
   let body = fn scope => do:
     let total = 0
     for index in Iter.range (0, count):

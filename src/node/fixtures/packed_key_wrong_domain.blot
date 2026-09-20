@@ -6,6 +6,6 @@ const Window = { .channel = U 8; .sequence = U 8; }
 const HeaderKey = PackedKey.derive ("example.header.v1", Header)
 const WindowKey = PackedKey.derive ("example.window.v1", Window)
 
-let window :: Window
+let window: Window
 let window = { .channel = 141; .sequence = 0; }
 return HeaderKey.raw (WindowKey.pack window)

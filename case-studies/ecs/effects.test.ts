@@ -18,7 +18,7 @@ test("merged stateful computations keep their effects and execute on every row",
   try {
     const path = "case-studies/ecs/stateful.blot";
     const source = await readFile(path, "utf8");
-    const prefix = source.slice(0, source.indexOf("let apply ::"));
+    const prefix = source.slice(0, source.indexOf("let apply:"));
     const observation = "case-studies/ecs/state-effect.test.blot";
     const computation = await compiler.checkSource(
       observation,

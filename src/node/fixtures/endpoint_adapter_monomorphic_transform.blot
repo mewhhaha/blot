@@ -4,12 +4,12 @@ const Adapter = import "../../../examples/lib/endpoint_adapter.blot"
 const Maybe = fn Value => #Found Value | #Missing
 const Checked = fn Value => #Ok Value | #Error Text
 
-const int_only :: Maybe Int -> Checked Int
+const int_only: Maybe Int -> Checked Int
 const int_only = fn candidate => case candidate of
   #Found value => #Ok value
   #Missing => #Error "missing"
 
 // A natural adapter must preserve every payload type, not only Int.
-const invalid :: Adapter.Natural (Maybe, Checked)
+const invalid: Adapter.Natural (Maybe, Checked)
 const invalid = int_only
 return invalid

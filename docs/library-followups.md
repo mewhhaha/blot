@@ -92,14 +92,14 @@ covers a float record accumulator with multiple exits.
 Every component can be omitted independently, while `fn` remains explicit:
 
 ```blot
-const first = fn (a :: Int, b) => a
-const second = fn (a, b :: Int) => b
+const first = fn (a: Int, b) => a
+const second = fn (a, b: Int) => b
 const integer = fn (a, b) -> Int => a
-const mixed = fn (a :: Int, b) -> Int => a
+const mixed = fn (a: Int, b) -> Int => a
 ```
 
 Omitted components generalize with the binding. In particular,
-`fn (a :: Int, b) => b` can return Text in one call and Bool in another without
+`fn (a: Int, b) => b` can return Text in one call and Bool in another without
 joining both calls' result types. A written result also specifies a pure effect
 row unless effects are explicitly admitted. Partial-header tests assert
 principal result types, mismatches, formatting, and evaluator/Wasm agreement.

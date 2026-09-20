@@ -4,14 +4,14 @@ const lower = Int.add 2 3
 const bounds = { .upper = 25; }
 const Window = range (5, 25)
 
-let admit :: Int -> Option Window
+let admit: Int -> Option Window
 let admit = fn value => do:
   if value >= lower && value <= bounds.upper:
     return #Some value
 
   return None
 
-let mirrored :: Int -> Option Window
+let mirrored: Int -> Option Window
 let mirrored = fn value => do:
   if lower <= value && bounds.upper >= value:
     return #Some value

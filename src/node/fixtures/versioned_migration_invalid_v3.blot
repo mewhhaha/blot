@@ -4,6 +4,6 @@ const RetryLimit = range (1, 5)
 const V3 =
   #V3 { .endpoint = Text; .timeout_ms = Int; .retry_limit = RetryLimit; }
 
-let invalid :: V3
+let invalid: V3
 let invalid = #V3 { .endpoint = "api"; .timeout_ms = 30000; .retry_limit = 8; }
 return invalid

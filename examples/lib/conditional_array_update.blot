@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-const case_update :: Int -> [Int]
+const case_update: Int -> [Int]
 const case_update = fn count => do:
   let heads = [0, 1]
   for index in Iter.range (0, count):
@@ -10,7 +10,7 @@ const case_update = fn count => do:
 
   return heads
 
-const statement_update :: Int -> [Int]
+const statement_update: Int -> [Int]
 const statement_update = fn count => do:
   let heads = [0, 1]
   for index in Iter.range (0, count):

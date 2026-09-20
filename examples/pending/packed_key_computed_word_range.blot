@@ -13,7 +13,7 @@ const make_word = fn bits => do:
   const Word = U bits
   let maximum = pow2 bits - 1
 
-  let narrow :: Int -> Word
+  let narrow: Int -> Word
   let narrow = fn value => do:
     if value < 0:
       return @panic "negative word"

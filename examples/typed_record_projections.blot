@@ -21,7 +21,7 @@ const no_fields = Projection.fields (Deployment, [])
 
 const Network = network.Part
 
-let initial :: Deployment
+let initial: Deployment
 let initial =
   {
     .host = "api.internal";
@@ -30,7 +30,7 @@ let initial =
     .owner = "Ada";
   }
 
-let before :: Network
+let before: Network
 let before = network.projection.get initial
 let relocated =
   network.projection.put (
@@ -47,7 +47,7 @@ let scaled =
 // The same generator is independent of the deployment domain.
 const Profile = { .name = Text; .locale = Text; .revision = Int; }
 const identity = Projection.fields (Profile, ["name", "locale"])
-let profile :: Profile
+let profile: Profile
 let profile = { .name = "Grace"; .locale = "pl-PL"; .revision = 7; }
 let identity_view = identity.projection.get profile
 

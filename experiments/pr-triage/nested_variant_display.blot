@@ -1,8 +1,8 @@
 open import "blot:prelude"
 const Nested = #User (#Registered Text | #Deleted) | #System Text
 const Flat = #User (#Registered Text) | #Deleted | #System Text
-const nested :: Nested -> Nested
+const nested: Nested -> Nested
 const nested = fn value => value
-const flat :: Flat -> Flat
+const flat: Flat -> Flat
 const flat = fn value => value
 return { .nested = nested; .flat = flat; }

@@ -6,7 +6,7 @@ const Domain = Nominal.domain ("example.pending.projected-eliminator.v1", Int)
 // Pain point: specialization preserves the concrete branch when this member is
 // called, but a direct projection retains an extra top-to-bottom arrow and
 // cannot satisfy the exact public signature without a trivial forwarding call.
-const raw :: Domain.type -> Int
+const raw: Domain.type -> Int
 const raw = Domain.value
 
 return raw (Domain.of 1)

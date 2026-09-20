@@ -12,7 +12,7 @@ const Jump =
   }
 
 // Suppress consecutive duplicates while remembering the last raw value.
-let distinct_step :: (Option Int, Raw) -> (Option Int, Option Distinct)
+let distinct_step: (Option Int, Raw) -> (Option Int, Option Distinct)
 let distinct_step = fn (previous, raw) => case raw of
   #Raw value => case previous of
     #None => (Some value, Some (#Distinct value))
@@ -33,7 +33,7 @@ const distinct =
 
 // Emit only jumps whose absolute delta is at least five. The first distinct
 // reading establishes the baseline and intentionally emits nothing.
-let large_jump_step :: (Option Int, Distinct) -> (Option Int, Option Jump)
+let large_jump_step: (Option Int, Distinct) -> (Option Int, Option Jump)
 let large_jump_step = fn (previous, current) => case current of
   #Distinct value => case previous of
     #None => (Some value, None)
@@ -65,20 +65,20 @@ const large_jumps =
 // the downstream jump detector.
 const alerts = P.compose (distinct, large_jumps)
 
-let observed :: P.Run (P.PairState (Option Int, Option Int), Jump)
+let observed: P.Run (P.PairState (Option Int, Option Int), Jump)
 let observed =
   P.run alerts [#Raw 10, #Raw 10, #Raw 12, #Raw 20, #Raw 20, #Raw 15, #Raw 16]
 
-let deduped :: P.Run (Option Int, Distinct)
+let deduped: P.Run (Option Int, Distinct)
 let deduped = P.run distinct [#Raw 2, #Raw 2, #Raw 3]
 
-let downstream_reused :: P.Run (Option Int, Jump)
+let downstream_reused: P.Run (Option Int, Jump)
 let downstream_reused = P.run large_jumps [#Distinct 1, #Distinct 10]
 
-let duplicate_only :: P.Run (P.PairState (Option Int, Option Int), Jump)
+let duplicate_only: P.Run (P.PairState (Option Int, Option Int), Jump)
 let duplicate_only = P.run alerts [#Raw 7, #Raw 7, #Raw 7]
 
-let empty :: P.Run (P.PairState (Option Int, Option Int), Jump)
+let empty: P.Run (P.PairState (Option Int, Option Int), Jump)
 let empty = P.run alerts []
 
 return {

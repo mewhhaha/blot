@@ -5,6 +5,6 @@ open import "blot:prelude"
 const Low = 3
 const High = 9
 const Allowed = refine (Int, fn value => Low <= value && High > value)
-let chosen :: Allowed
+let chosen: Allowed
 let chosen = 8
 return chosen

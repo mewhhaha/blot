@@ -95,7 +95,7 @@ Deno.test("development graph cache survives restarts and never restores a browse
     try {
       await invalid.setOverlay(
         workload.editedProviderPath,
-        'open import "blot:prelude"\nconst run :: Int -> Int\nconst run = fn value => "wrong"\nreturn { .run = run; }\n',
+        'open import "blot:prelude"\nconst run: Int -> Int\nconst run = fn value => "wrong"\nreturn { .run = run; }\n',
       );
       await assertRejects(() => invalid.prepareBuild());
     } finally {
@@ -177,7 +177,7 @@ Deno.test("changing an attached operator invalidates cached scalar graphs", asyn
       join(directory, "main.blot"),
       `
 const number = import "./number.blot"
-const run :: @type.int -> @type.int
+const run: @type.int -> @type.int
 const run = fn value => number.run value
 return { .run = run; }
 `,
@@ -185,10 +185,10 @@ return { .run = run; }
     const source = (increment: number) => `
 infixl 60 (+) = Op.add
 const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }
-const add :: @type.int -> @type.int -> @type.int
+const add: @type.int -> @type.int -> @type.int
 const add = fn left => fn right => @int.add (@int.add left right) ${increment}
 const Int = @type.attach @type.int "add" add
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn value => value + 2
 return { .run = run; }
 `;
@@ -272,9 +272,9 @@ Deno.test("development links distinguish static captures and survive shifted dec
       `open import "blot:prelude"
 ${earlier}
 const make = fn offset => fn value => value + offset
-const left :: Int -> Int
+const left: Int -> Int
 const left = make ${offset}
-const right :: Int -> Int
+const right: Int -> Int
 const right = make 2
 return { .left = left; .right = right; }
 `;
@@ -283,7 +283,7 @@ return { .left = left; .right = right; }
       join(directory, "main.blot"),
       `open import "blot:prelude"
 const provider = import "./provider.blot"
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn value => provider.left value + provider.right value
 return { .run = run; }
 `,

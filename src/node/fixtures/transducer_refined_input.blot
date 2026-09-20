@@ -4,15 +4,15 @@ const T = import "../../../examples/lib/transducer.blot"
 
 const Score = refine (Int, fn value => value >= 0 && value <= 100)
 const Reading = { .score = Score; }
-const count :: R.Reducer (Reading, Int, Int)
+const count: R.Reducer (Reading, Int, Int)
 const count =
   {
     .initial = 0;
     .step = fn (total, _) => total + 1;
     .finish = fn total => total;
   }
-const pass :: T.Transducer (Reading, Reading)
+const pass: T.Transducer (Reading, Reading)
 const pass = T.identity
-const analyze :: [Reading] -> Int
+const analyze: [Reading] -> Int
 const analyze = fn values => R.run (pass count, values)
 return analyze [{ .score = 101; }]

@@ -30,10 +30,12 @@ does not prove a business conversion such as seconds to milliseconds. Named
 more useful source/target information than inferred bindings; the example keeps
 those explicit rather than weakening either side of the relation.
 
-The earlier reflection-based derivation also rejected a valid union widening:
-`refines (#A | #B, #A | #B | #C)` evaluates to `False` on this compiler/prelude.
-Delegating the identity proof directly to the checked arrow removes that
-incomplete predicate from the abstraction's trust boundary.
+The earlier reflection-based derivation rejected valid union widening. The
+prelude now checks every narrow alternative against the complete wide type:
+`refines (#A | #B, #A | #B | #C)` evaluates to `True`, and the reverse direction
+remains `False`. Regression coverage includes option fields, nested records,
+integer unions and incompatible payloads. The abstraction continues to delegate
+its identity proof directly to the checked arrow.
 
 The three distinct record/union instantiations intentionally exercise reuse.
 Blot's lint therefore reports `BLOT_LINT_SPECIALIZATION_COUNT` for `derive` and

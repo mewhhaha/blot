@@ -2,13 +2,13 @@ open import "blot:prelude"
 const R = import "../../../examples/lib/reducer.blot"
 const T = import "../../../examples/lib/transducer.blot"
 
-const stage :: T.Transducer (#Raw Int, #Alert Int)
+const stage: T.Transducer (#Raw Int, #Alert Int)
 const stage =
   T.map (fn value => case value of
     #Raw number => #Alert number
   )
 
-const text_count :: R.Reducer (Text, Int, Int)
+const text_count: R.Reducer (Text, Int, Int)
 const text_count =
   {
     .initial = 0;

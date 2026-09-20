@@ -6,7 +6,7 @@ const CounterCommand = #Deposit Amount | #Withdraw Amount
 const CounterEvent = #Deposited Amount | #Withdrawn Amount
 const CounterError = #Insufficient Amount
 
-const counter :: A.Aggregate (Int, CounterCommand, CounterEvent, CounterError)
+const counter: A.Aggregate (Int, CounterCommand, CounterEvent, CounterError)
 const counter =
   {
     .initial = 0;
@@ -29,7 +29,7 @@ const GateCommand = #OpenGate | #CloseGate
 const GateEvent = #Opened | #ClosedEvent
 const GateError = #AlreadyOpen | #AlreadyClosed
 
-const gate :: A.Aggregate (GateState, GateCommand, GateEvent, GateError)
+const gate: A.Aggregate (GateState, GateCommand, GateEvent, GateError)
 const gate =
   {
     .initial = #Closed;
@@ -59,7 +59,7 @@ const system_left_error =
 const system_right_error =
   A.execute (system, (0, #Open), #Right #OpenGate)
 
-const history :: [SystemEvent]
+const history: [SystemEvent]
 const history =
   [#Left (#Deposited 8), #Right #Opened, #Left (#Withdrawn 3)]
 

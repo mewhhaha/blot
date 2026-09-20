@@ -4,10 +4,10 @@ const Phantom = fn Dimension => { .value = Int; }
 const Length = Phantom { .length = 1; .time = 0; }
 const Time = Phantom { .length = 0; .time = 1; }
 
-let observe_length :: Length -> Int
+let observe_length: Length -> Int
 let observe_length = fn value => value.value
 
-let elapsed :: Time
+let elapsed: Time
 let elapsed = { .value = 4; }
 
 return { .default = observe_length elapsed; }

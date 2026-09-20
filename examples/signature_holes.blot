@@ -3,10 +3,10 @@
 
 open import "blot:prelude"
 
-let increment :: _ -> _
+let increment: _ -> _
 let increment = fn value => value + 1
 
-let answer :: _
+let answer: _
 let answer = increment 41
 
 return answer

@@ -77,7 +77,7 @@ test("a scalar event fold reuses request slots over 100000 suspensions", async (
       path,
       `open import "blot:prelude"
 const Counter = @effect.host { .next = Effect.suspends (Int -> Int); }
-let run :: Int -> Int ~ { Counter }
+let run: Int -> Int ~ { Counter }
 let run = fn count => do:
   let total = 0
   for index in Iter.range (0, count):

@@ -10,15 +10,15 @@ const bounded = fn T => do:
 
     _ => @fail "bounded requires a range type"
 
-  const low :: T
+  const low: T
   const low = info.low
-  const high :: T
+  const high: T
   const high = info.high
 
-  let contains :: Int -> Bool
+  let contains: Int -> Bool
   let contains = fn value => value >= low && value <= high
 
-  let admit :: Int -> Option T
+  let admit: Int -> Option T
   let admit = fn value => do:
     if value < low:
       return None
@@ -27,7 +27,7 @@ const bounded = fn T => do:
     else:
       return #Some value
 
-  let clamp :: Int -> T
+  let clamp: Int -> T
   let clamp = fn value => do:
     if value < low:
       return low

@@ -24,7 +24,7 @@ Deferred designs and deliberate restrictions remain as triaged.
 
 ## Syntax and presentation
 
-Functions accept `fn (a :: Int, b :: Int) -> Int => do:` headers, including
+Functions accept `fn (a: Int, b: Int) -> Int => do:` headers, including
 qualifiers, destructuring, recursion, deferred arrows, and written effect rows.
 Separate signatures remain available and constrain the same definition. `do:`
 remains explicit for statement bodies. Record `.name` fields elaborate to

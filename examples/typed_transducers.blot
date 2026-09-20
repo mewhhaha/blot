@@ -28,14 +28,14 @@ const Summary =
     .total_excess = Int;
   }
 
-const classify :: T.Transducer (Reading, Classified)
+const classify: T.Transducer (Reading, Classified)
 const classify =
   T.map (fn reading => {
     ...reading;
     .over = reading.score > reading.limit;
   })
 
-const select_alerts :: T.Transducer (Classified, Alert)
+const select_alerts: T.Transducer (Classified, Alert)
 const select_alerts =
   T.choose_map (fn reading => case reading.over of
     #True => #Some {
@@ -46,10 +46,10 @@ const select_alerts =
     #False => #None
   )
 
-const alerts :: T.Transducer (Reading, Alert)
+const alerts: T.Transducer (Reading, Alert)
 const alerts = T.compose (classify, select_alerts)
 
-const count_alerts :: R.Reducer (Alert, Int, Int)
+const count_alerts: R.Reducer (Alert, Int, Int)
 const count_alerts =
   {
     .initial = 0;
@@ -57,7 +57,7 @@ const count_alerts =
     .finish = fn count => count;
   }
 
-const sum_excess :: R.Reducer (Alert, Int, Int)
+const sum_excess: R.Reducer (Alert, Int, Int)
 const sum_excess =
   {
     .initial = 0;
@@ -65,7 +65,7 @@ const sum_excess =
     .finish = fn total => total;
   }
 
-const summarize :: R.Reducer (Alert, { .left = Int; .right = Int; }, Summary)
+const summarize: R.Reducer (Alert, { .left = Int; .right = Int; }, Summary)
 const summarize =
   R.zip_with (
     count_alerts,
@@ -76,7 +76,7 @@ const summarize =
     }
   )
 
-const analyze :: [Reading] -> Summary
+const analyze: [Reading] -> Summary
 const analyze = fn readings => R.run (alerts summarize, readings)
 
 const raw =

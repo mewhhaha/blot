@@ -219,7 +219,7 @@ function source(values: readonly number[], quicksort: boolean): string {
   return `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
 
-const rec checksum :: ([Int], Int, Int) -> Int
+const rec checksum: ([Int], Int, Int) -> Int
 const rec checksum = fn (values, index, total) => do:
   if index >= Array.length (&values):
     return total

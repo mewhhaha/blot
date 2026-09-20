@@ -1,5 +1,5 @@
 open import "blot:prelude"
 const simulation = import "../simulation.blot"
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn count => simulation.checksum (simulation.direct (simulation.seed (count, 6)))
 return run

@@ -3,6 +3,6 @@
 open import "blot:prelude"
 
 const Allowed = refine (Int, fn value => value <= -9223372036854775808)
-let chosen :: Allowed
+let chosen: Allowed
 let chosen = -9223372036854775808
 return chosen

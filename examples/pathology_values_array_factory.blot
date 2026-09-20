@@ -2,7 +2,7 @@
 open import "blot:prelude"
 const increment = fn number => @int.add number 1
 const callbacks = (fn callback => [callback]) increment
-let result :: Int
+let result: Int
 let result = do:
   if @array.len callbacks > 0:
     const call = @array.get callbacks 0

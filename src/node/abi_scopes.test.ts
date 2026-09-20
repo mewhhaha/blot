@@ -16,9 +16,9 @@ async function fixture(operation: HostOperation) {
       path,
       `open import "blot:prelude"
 const Echo = @effect.host { .wait = Effect.suspends (Text -> Text); }
-let run :: Text -> Text ~ { Echo }
+let run: Text -> Text ~ { Echo }
 let run = fn text => Echo.wait text
-let direct :: Text -> Text
+let direct: Text -> Text
 let direct = fn text => text
 return { .run = run; .direct = direct; }
 `,

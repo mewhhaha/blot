@@ -24,22 +24,22 @@ export async function writeActiveDevelopmentWorkload(options: {
     for (let index = 0; index < options.helpersPerUnit; index += 1) {
       let argument = "value";
       if (index > 0) argument = `step_${index - 1} value`;
-      helpers.push(`const step_${index} :: Int -> Int
+      helpers.push(`const step_${index}: Int -> Int
 const step_${index} = fn value => (${argument}) + 1`);
     }
     return `open import "blot:prelude"
 const identity = fn value => value
-const rec countdown :: Int -> Int
+const rec countdown: Int -> Int
 const rec countdown = fn value => do:
   if value < 1:
     return 0
   return 1 + countdown (value - 1)
 ${helpers.join("\n")}
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn value => step_${
       options.helpersPerUnit - 1
     } (identity value) + countdown (value % 4) + ${increment}
-const float_identity :: F32 -> F32
+const float_identity: F32 -> F32
 const float_identity = fn value => identity value
 return { .run = run; .float_identity = float_identity; }
 `;
@@ -56,9 +56,9 @@ return { .run = run; .float_identity = float_identity; }
     join(options.directory, "main.blot"),
     `open import "blot:prelude"
 ${imports.join("\n")}
-const run :: Int -> Int
+const run: Int -> Int
 const run = fn value => ${calls.join(" + ")}
-const float_run :: F32 -> F32
+const float_run: F32 -> F32
 const float_run = fn value => ${
       Array.from(
         { length: options.unitCount },

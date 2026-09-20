@@ -14,7 +14,7 @@ test("last-use borrow suspension agrees in the evaluator and emitted Wasm", asyn
   const compiler = await Compiler.create();
   const program = `open import "blot:prelude"
 const Device = @effect.host { .read = Effect.suspends (Int -> Int); }
-const run :: [Int] -> Int ~ { Device }
+const run: [Int] -> Int ~ { Device }
 const run = fn &values => do:
   let length = Array.length (&values)
   use answer <- Device.read length

@@ -44,18 +44,18 @@ const Systems = fn Row => do:
 
           _ => False
         )
-      let execute :: Work
+      let execute: Work
       let execute = fn selected => checked selected
-      let apply :: Apply
+      let apply: Apply
       let apply = fn (row, patch) => row
       for name in Iter.items writes:
         let previous = apply
-        let replace :: Apply
+        let replace: Apply
         let replace =
           fn (row, patch) => { ...previous (row, patch); .[name] = @shape.get patch name; }
         apply := replace
 
-      let step :: Step
+      let step: Step
       let step = fn row => do:
         let patch = execute (Reflect.pick (row, reads))
         return apply (row, patch)

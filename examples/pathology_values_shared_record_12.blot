@@ -13,7 +13,7 @@ const node9 = { .left = node8; .right = node8; }
 const node10 = { .left = node9; .right = node9; }
 const node11 = { .left = node10; .right = node10; }
 const node12 = { .left = node11; .right = node11; }
-let result :: Int
+let result: Int
 let result =
   node12.left.left.left.left.left.left.left.left.left.left.left.left.value
 return result

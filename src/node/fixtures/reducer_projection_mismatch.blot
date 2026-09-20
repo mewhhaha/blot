@@ -2,7 +2,7 @@ open import "blot:prelude"
 const R = import "../../../examples/lib/reducer.blot"
 
 const Line = { .sku = Text; .quantity = Int; }
-const sum_int :: R.Reducer (Int, Int, Int)
+const sum_int: R.Reducer (Int, Int, Int)
 const sum_int =
   {
     .initial = 0;
@@ -10,6 +10,6 @@ const sum_int =
     .finish = fn state => state;
   }
 
-const invalid :: R.Reducer (Line, Int, Int)
+const invalid: R.Reducer (Line, Int, Int)
 const invalid = R.contramap (sum_int, fn line => line.sku)
 return invalid

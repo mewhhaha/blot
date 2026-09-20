@@ -4,7 +4,7 @@ const Nominal = import "../../../examples/lib/nominal_domain.blot"
 const First = Nominal.domain ("example.collision.v1", Int)
 const Second = Nominal.domain ("example.collision.v1", Int)
 
-const accept :: First.type -> Int
+const accept: First.type -> Int
 const accept = fn value => First.value value
 
 // Pain point: identical public name + carrier intentionally reconstructs one

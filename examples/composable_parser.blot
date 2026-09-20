@@ -4,7 +4,7 @@ const P = import "./lib/parser.blot"
 const Route =
   (#Health | #User { .name = Text; } | #Asset { .name = Text; .extension = Text; })
 
-const segment :: P.Parser Text
+const segment: P.Parser Text
 const segment =
   P.take_while1 (
     "path segment",
@@ -43,7 +43,7 @@ const asset =
 
 // The public boundary closes the common Route carrier while the parser pieces
 // remain reusable for other result types.
-const route :: P.Parser Route
+const route: P.Parser Route
 const route = P.or_else (health, P.or_else (user, asset))
 
 const parse_route = fn text => P.run (route, text)

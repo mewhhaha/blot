@@ -33,7 +33,7 @@ async function withArtifact(
 
 test("host calls typed scalar exports and copies indirect results", async () => {
   await withArtifact(
-    `let score :: Int -> Int
+    `let score: Int -> Int
 let score = fn quantity => quantity * 2
 return { .score = score; .heading = "\uFEFFWarehouse A"; }`,
     async (artifact) => {
@@ -194,7 +194,7 @@ test("host marshals indirect parameter blocks in source argument order", async (
   const body = parameters.map((name) => `fn ${name} => `).join("") +
     "@int.add value0 value16";
   await withArtifact(
-    `let run :: ${signature}\nlet run = ${body}\nreturn run`,
+    `let run: ${signature}\nlet run = ${body}\nreturn run`,
     async (artifact) => {
       const hosted = await instantiateArtifact(artifact);
       try {
@@ -227,7 +227,7 @@ for (const mode of ["synchronous", "suspending"]) {
     await withArtifact(
       `const Payload = { ${fields} .a = Bool; .b = Text; .c = [Int]; .d = F32; .e = F64; .f = #Some Int | #None; }
 const Echo = @effect.host { .reply = ${operation}; }
-let run :: Payload -> Payload ~ { Echo }
+let run: Payload -> Payload ~ { Echo }
 let run = fn payload => do:
   use result <- Echo.reply payload
   return result
@@ -287,7 +287,7 @@ test("wide export adapters trap on null, misaligned, truncated, and overflowing 
     .join(" ");
   await withArtifact(
     `const Wide = { ${fields} }
-let run :: Wide -> Int
+let run: Wide -> Int
 let run = fn row => row.n16
 return run`,
     async (artifact) => {
@@ -318,7 +318,7 @@ test("resumable adapters validate wide parameters before frame allocation grows 
   await withArtifact(
     `const Wide = { ${fields} }
 const Gate = @effect.host { .wait = Effect.suspends (Int -> Int); }
-let run :: Wide -> Int ~ { Gate }
+let run: Wide -> Int ~ { Gate }
 let run = fn row => Gate.wait row.n16
 return run`,
     async (artifact) => {

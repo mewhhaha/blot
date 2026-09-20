@@ -22,21 +22,21 @@ const Config =
 const ConfigError =
   #InvalidPort Int | #InvalidReplicas Int | #InvalidTimeout Int
 
-let port :: V.Validator (RawConfig, Port, #InvalidPort Int)
+let port: V.Validator (RawConfig, Port, #InvalidPort Int)
 let port = fn raw => do:
   if raw.port >= 1 && raw.port <= 65535:
     return #Ok raw.port
 
   return #Error [#InvalidPort raw.port]
 
-let replicas :: V.Validator (RawConfig, Replicas, #InvalidReplicas Int)
+let replicas: V.Validator (RawConfig, Replicas, #InvalidReplicas Int)
 let replicas = fn raw => do:
   if raw.replicas >= 1 && raw.replicas <= 32:
     return #Ok raw.replicas
 
   return #Error [#InvalidReplicas raw.replicas]
 
-let timeout :: V.Validator (RawConfig, TimeoutMs, #InvalidTimeout Int)
+let timeout: V.Validator (RawConfig, TimeoutMs, #InvalidTimeout Int)
 let timeout = fn raw => do:
   if raw.timeout_ms >= 100 && raw.timeout_ms <= 60000:
     return #Ok raw.timeout_ms
@@ -46,7 +46,7 @@ let timeout = fn raw => do:
 const Core = { .port = Port; .replicas = Replicas; }
 const CoreError = #InvalidPort Int | #InvalidReplicas Int
 
-let core :: V.Validator (RawConfig, Core, CoreError)
+let core: V.Validator (RawConfig, Core, CoreError)
 let core =
   V.zip_with (
     fn (valid_port, valid_replicas) => {
@@ -57,7 +57,7 @@ let core =
     replicas
   )
 
-let config :: V.Validator (RawConfig, Config, ConfigError)
+let config: V.Validator (RawConfig, Config, ConfigError)
 let config =
   V.zip_with (
     fn (valid_core, valid_timeout) => {
@@ -70,7 +70,7 @@ let config =
   )
 
 
-let capacity :: V.Validator (RawConfig, Int, ConfigError)
+let capacity: V.Validator (RawConfig, Int, ConfigError)
 let capacity =
   V.map (
     fn valid => valid.replicas * valid.timeout_ms,
@@ -90,13 +90,13 @@ const Summary =
     .timeout_ms = Int;
   }
 
-let error_name :: ConfigError -> Text
+let error_name: ConfigError -> Text
 let error_name = fn error => case error of
   #InvalidPort _ => "port"
   #InvalidReplicas _ => "replicas"
   #InvalidTimeout _ => "timeout_ms"
 
-let summarize :: V.Validation (Config, ConfigError) -> Summary
+let summarize: V.Validation (Config, ConfigError) -> Summary
 let summarize = fn result => case result of
   #Ok valid => {
     .ok = True;

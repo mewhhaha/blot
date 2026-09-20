@@ -2,7 +2,7 @@
 // every haystack byte. The exported function also exercises runtime search;
 // the opening results preserve first-match and Unicode scalar-index semantics.
 open import "blot:prelude"
-let search :: (Text, Text) -> Int
+let search: (Text, Text) -> Int
 let search = fn (text, query) => @text.find_from text query 0
 return {
   .absent = search ("aaaaaaaaaaaaaaaa", "aaaab");

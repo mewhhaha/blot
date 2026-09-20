@@ -30,15 +30,15 @@ const selected = fn values => ECS.Stream.choose (Iter.items values, fn value => 
   use ECS.Query.guard (value > 0)
   return 100 / value
 ))
-const collect :: ([Int], [Int], [Int]) -> [Int]
+const collect: ([Int], [Int], [Int]) -> [Int]
 const collect = fn (first, second, third) => Iter.collect (
   ECS.Stream.append (ECS.Stream.append (selected first, selected second), selected third)
 )
-const regrouped :: ([Int], [Int], [Int]) -> [Int]
+const regrouped: ([Int], [Int], [Int]) -> [Int]
 const regrouped = fn (first, second, third) => Iter.collect (
   ECS.Stream.append (selected first, ECS.Stream.append (selected second, selected third))
 )
-const sum :: ([Int], [Int]) -> Int
+const sum: ([Int], [Int]) -> Int
 const sum = fn (first, second) => Iter.fold_with (fn (total, value) => total + value) 7 (
   ECS.Stream.append (selected first, selected second)
 )
@@ -78,7 +78,7 @@ return { .collect; .regrouped; .sum; }
       `
 open import "blot:prelude"
 const ECS = import "./ecs.blot"
-const sum :: ([Int], [Int]) -> Int
+const sum: ([Int], [Int]) -> Int
 const sum = fn (first, second) => Iter.fold_with (fn (total, value) => total + value) 0 (
   ECS.Stream.append (Iter.items first, Iter.items second)
 )
@@ -110,14 +110,14 @@ test("typed delivery merges outboxes in FIFO order and returns unknown destinati
 open import "blot:prelude"
 const ECS = import "./ecs.blot"
 const Mail = ECS.Messages Text
-const route :: (Int, [Mail.Envelope], [Mail.Envelope]) -> { .inboxes = [[Mail.Envelope]]; .undelivered = [Mail.Envelope]; }
+const route: (Int, [Mail.Envelope], [Mail.Envelope]) -> { .inboxes = [[Mail.Envelope]]; .undelivered = [Mail.Envelope]; }
 const route = fn (count, first, second) => do:
   let delivery = Mail.deliver (count, ECS.Stream.append (Iter.items first, Iter.items second))
   return {
     .inboxes = Iter.collect (Iter.map (Iter.range (0, count), fn recipient => Iter.collect (Mail.expect_inbox (delivery, recipient))));
     .undelivered = Iter.collect (Mail.undelivered delivery);
   }
-const bulk :: Int -> Int
+const bulk: Int -> Int
 const bulk = fn count => do:
   let first = Iter.map (Iter.range (0, count), fn sender => { .sender; .recipient = 0; .payload = "first"; })
   let second = Iter.map (Iter.range (0, count), fn sender => { .sender; .recipient = 0; .payload = "second"; })
@@ -198,13 +198,13 @@ test("archetype selection and messages compose across an explicit phase boundary
       `
 open import "blot:prelude"
 const a = import "./arena.blot"
-const run :: Int -> { .before = a.Summary; .after = a.Summary; .again = a.Summary; }
+const run: Int -> { .before = a.Summary; .after = a.Summary; .again = a.Summary; }
 const run = fn health => do:
   let world = a.seed health
   let next = a.tick (world, [])
   let again = a.tick (next.world, [])
   return { .before = a.summary world; .after = a.summary next.world; .again = a.summary again.world; }
-const empty :: Unit -> a.Summary
+const empty: Unit -> a.Summary
 const empty = fn () => a.summary { .fighters = []; .medics = []; .sleepers = []; .scenery = []; }
 return { .default = run; .empty; }
 `,

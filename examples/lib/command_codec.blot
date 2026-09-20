@@ -3,12 +3,12 @@ const Parse = import "blot:parse"
 
 const Command = #Reset | #Move { .x = Int; .y = Int; }
 
-const encode :: Command -> Text
+const encode: Command -> Text
 const encode = fn command => case command of
   #Reset => "reset"
   #Move { .x; .y; } => @text.join ["move ", Text.of_int x, " ", Text.of_int y]
 
-const decode :: Text -> Result (Command, Text)
+const decode: Text -> Result (Command, Text)
 const decode = fn text => case Text.split (text, " ") of
   ["reset"] => #Ok #Reset
   ["move", x, y] => case Parse.integer x, Parse.integer y of

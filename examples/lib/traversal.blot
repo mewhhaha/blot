@@ -9,7 +9,7 @@ const Traversal = fn (whole, part) => {
 }
 
 // Lift an exactly-one focus into the same zero-or-more interface.
-const one :: @forall (fn Whole => @forall (fn Part => ((Whole -> Part), ((Whole, Part) -> Whole)) -> Traversal (Whole, Part)))
+const one: @forall (fn Whole => @forall (fn Part => ((Whole -> Part), ((Whole, Part) -> Whole)) -> Traversal (Whole, Part)))
 const one = fn (view, set) => {
   .collect = fn whole => [view whole];
   .modify = fn (whole, change) => set (whole, change (view whole));
@@ -17,7 +17,7 @@ const one = fn (view, set) => {
 
 // Every element of a homogeneous array is a focus. This single traversal is
 // reusable for arrays at any level once composition establishes the element type.
-const each :: @forall (fn Part => Traversal ([Part], Part))
+const each: @forall (fn Part => Traversal ([Part], Part))
 const each = {
   .collect = fn values => values;
   .modify = fn (values, change) => map (values, change);
@@ -25,7 +25,7 @@ const each = {
 
 // The outer part and inner whole share one Middle type. Collection flattens the
 // nested focus arrays; modification delegates rebuilding to both traversals.
-const compose :: @forall (fn Whole => @forall (fn Middle => @forall (fn Part => (Traversal (Whole, Middle), Traversal (Middle, Part)) -> Traversal (Whole, Part))))
+const compose: @forall (fn Whole => @forall (fn Middle => @forall (fn Part => (Traversal (Whole, Middle), Traversal (Middle, Part)) -> Traversal (Whole, Part))))
 const compose = fn (outer, inner) => {
   .collect = fn whole => do:
     let middles = outer.collect whole
@@ -43,7 +43,7 @@ const compose = fn (outer, inner) => {
   );
 }
 
-const over :: @forall (fn Whole => @forall (fn Part => (Traversal (Whole, Part), Whole, (Part -> Part)) -> Whole))
+const over: @forall (fn Whole => @forall (fn Part => (Traversal (Whole, Part), Whole, (Part -> Part)) -> Whole))
 const over = fn (traversal, whole, change) => traversal.modify (whole, change)
 
 return {

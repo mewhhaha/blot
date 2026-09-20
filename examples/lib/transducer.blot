@@ -5,13 +5,13 @@ const R = import "./reducer.blot"
 // the reducer's accumulator or final result type.
 const Transducer = fn (Input, Output) => @forall (fn State => @forall (fn Final => R.Reducer (Output, State, Final) -> R.Reducer (Input, State, Final)))
 
-const identity :: @forall (fn Value => Transducer (Value, Value))
+const identity: @forall (fn Value => Transducer (Value, Value))
 const identity = fn reducer => reducer
 
-const map :: @forall (fn Input => @forall (fn Output => (Input -> Output) -> Transducer (Input, Output)))
+const map: @forall (fn Input => @forall (fn Output => (Input -> Output) -> Transducer (Input, Output)))
 const map = fn project => fn reducer => R.contramap (reducer, project)
 
-const choose_map :: @forall (fn Input => @forall (fn Output => (Input -> Option Output) -> Transducer (Input, Output)))
+const choose_map: @forall (fn Input => @forall (fn Output => (Input -> Option Output) -> Transducer (Input, Output)))
 const choose_map = fn project => fn reducer => {
   .initial = reducer.initial;
   .step = fn (state, value) => (
@@ -22,7 +22,7 @@ const choose_map = fn project => fn reducer => {
   .finish = reducer.finish;
 }
 
-const compose :: @forall (fn Input => @forall (fn Middle => @forall (fn Output => (Transducer (Input, Middle), Transducer (Middle, Output)) -> Transducer (Input, Output))))
+const compose: @forall (fn Input => @forall (fn Middle => @forall (fn Output => (Transducer (Input, Middle), Transducer (Middle, Output)) -> Transducer (Input, Output))))
 const compose = fn (left, right) => fn reducer => left (right reducer)
 
 return {

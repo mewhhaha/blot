@@ -10,7 +10,7 @@ const Result =
     .edge_restored = Article.Draft;
   }
 
-let run :: Result
+let run: Result
 let run = do:
   let draft =
     #Draft {

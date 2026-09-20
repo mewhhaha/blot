@@ -3,12 +3,12 @@ open import "blot:prelude"
 const Graph = import "./graph.blot"
 const VertexMarks = import "./vertex_marks.blot"
 
-const search :: ([[Int]], Int) -> [(Int, Int)]
+const search: ([[Int]], Int) -> [(Int, Int)]
 const search = fn (&graph, start) => do:
   let vertex_count = Array.length (&graph)
   let discovered = VertexMarks.create vertex_count
   let (_, discovered) = VertexMarks.mark (?discovered, (&start))
-  let rec visit :: ([(Int, Int)], Int, [Bool], [(Int, Int)]) -> [(Int, Int)]
+  let rec visit: ([(Int, Int)], Int, [Bool], [(Int, Int)]) -> [(Int, Int)]
   let rec visit = fn (queue, cursor, discovered, traversal) => case Array.get (
     (&queue),
     cursor
@@ -16,7 +16,7 @@ const search = fn (&graph, start) => do:
     #None => traversal
     #Some (vertex, depth) => do:
       let neighbors = Graph.outgoing ((&graph), (&vertex))
-      let rec enqueue_neighbors ::
+      let rec enqueue_neighbors:
         (Int, [Bool], [(Int, Int)]) -> ([Bool], [(Int, Int)])
       let rec enqueue_neighbors =
         fn (index, discovered, queue) => case Array.get (

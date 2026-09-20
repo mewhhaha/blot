@@ -1,12 +1,12 @@
 open import "blot:prelude"
 
 const Count = { .count = Int; }
-const increment :: Count -> Count
+const increment: Count -> Count
 const increment = fn view => { .count = view.count + 1; }
-const render :: Count -> { .count = Text; }
+const render: Count -> { .count = Text; }
 const render = fn view => { .count = Text.of_int view.count; }
 
-const run :: Int -> (Count, { .count = Text; })
+const run: Int -> (Count, { .count = Text; })
 const run = fn count => do:
   let wider = { .count; .label = "input only"; }
   return (increment wider, render wider)

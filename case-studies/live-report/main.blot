@@ -4,7 +4,7 @@ const heading = import "./heading.blot"
 let item = { .name = "widgets"; .quantity = 21; .sku = "W-21"; }
 
 // The public scalar ABI is explicit; the two library views remain inferred.
-let runtime_score :: @type.int -> @type.int
+let runtime_score: @type.int -> @type.int
 let runtime_score = fn quantity => score {
   .quantity = quantity;
   .sku = "runtime";

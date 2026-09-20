@@ -22,23 +22,23 @@ const PathRequest = { .path = Text; }
 // Named Witness boundaries retain the source/target types when independently
 // derived values are passed into quantified composition. Refinement weakening
 // and record width subtyping compose through one exact intermediate type.
-const internal_to_public :: W.Witness (InternalRequest, PublicRequest)
+const internal_to_public: W.Witness (InternalRequest, PublicRequest)
 const internal_to_public = W.derive (InternalRequest, PublicRequest)
-const public_to_path :: W.Witness (PublicRequest, PathRequest)
+const public_to_path: W.Witness (PublicRequest, PathRequest)
 const public_to_path = W.derive (PublicRequest, PathRequest)
-const internal_to_path :: W.Witness (InternalRequest, PathRequest)
+const internal_to_path: W.Witness (InternalRequest, PathRequest)
 const internal_to_path = W.compose (internal_to_public, public_to_path)
 
-let endpoint :: PublicRequest -> Text
+let endpoint: PublicRequest -> Text
 let endpoint = fn request => request.path <> ":" <> Text.of_int request.port
 
-let route_name :: PathRequest -> Text
+let route_name: PathRequest -> Text
 let route_name = fn request => request.path
 
 let endpoint_from_internal = W.adapt (internal_to_public, endpoint)
 let route_from_internal = W.adapt (internal_to_path, route_name)
 
-let request :: InternalRequest
+let request: InternalRequest
 let request =
   {
     .path = "/v1/🐱";
@@ -51,10 +51,10 @@ let request =
 // to records. `Healthy` values can be consumed by APIs that handle every status.
 const Healthy = #Ready | #Degraded Text
 const Status = Healthy | #Failed Text
-const healthy_to_status :: W.Witness (Healthy, Status)
+const healthy_to_status: W.Witness (Healthy, Status)
 const healthy_to_status = W.derive (Healthy, Status)
 
-let describe_status :: Status -> Text
+let describe_status: Status -> Text
 let describe_status = fn status => case status of
   #Ready => "ready"
   #Degraded reason => "degraded: " <> reason

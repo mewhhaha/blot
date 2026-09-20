@@ -13,7 +13,7 @@ let pollen_centre = C.rgb (105, 67, 38)
 let golden_petals = C.rgb (255, 188, 74)
 let coral_petals = C.rgb (244, 113, 111)
 
-let flowers :: FlowerRecipe
+let flowers: FlowerRecipe
 let flowers =
   {
     .stem = fresh_stem;

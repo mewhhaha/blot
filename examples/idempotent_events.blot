@@ -15,7 +15,7 @@ const Summary =
 
 // Return per-event counter changes instead of hiding control transfer in a
 // helper. An invalid delivery does not claim its id; a corrected retry may pass.
-let classify :: (Event, Option Int) -> (Int, Int, Int, Int)
+let classify: (Event, Option Int) -> (Int, Int, Int, Int)
 let classify = fn (event, previous) => do:
   if event.quantity <= 0:
     return (0, 0, 0, 1)
@@ -26,11 +26,11 @@ let classify = fn (event, previous) => do:
       #True => (0, 1, 0, 0)
       #False => (0, 0, 1, 0)
 
-let process :: [Event] -> Summary
+let process: [Event] -> Summary
 let process = fn &events => do:
   // Pain point: Dict is an array-backed map, not a hash table. Lookups and
   // persistent copies make this small-batch baseline quadratic in distinct ids.
-  let seen :: [(Text, Int)]
+  let seen: [(Text, Int)]
   let seen = []
   let total = 0
   let accepted = 0
@@ -62,7 +62,7 @@ let process = fn &events => do:
     .invalid = invalid;
   }
 
-let events :: [Event]
+let events: [Event]
 let events =
   [
     { .id = "a"; .quantity = 3; },

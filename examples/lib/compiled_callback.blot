@@ -13,9 +13,9 @@ const Executor =
     };
   }
 
-let run :: Int -> Int ~ { Executor, Clock }
+let run: Int -> Int ~ { Executor, Clock }
 let run = fn initial => do:
-  let work :: Unit -> Int ~ { Clock }
+  let work: Unit -> Int ~ { Clock }
   let ?work = fn () => do:
     let total = initial
     for index in Iter.range (0, 4):

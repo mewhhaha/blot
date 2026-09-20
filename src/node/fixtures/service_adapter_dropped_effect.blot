@@ -2,9 +2,9 @@ open import "blot:prelude"
 const A = import "../../../examples/lib/service_adapter.blot"
 const Tick = @effect { .next = Unit -> Text; }
 
-let service :: Int -> Text ~ { Tick }
+let service: Int -> Text ~ { Tick }
 let service = fn _ => Tick.next ()
-let hidden :: Int -> Text
+let hidden: Int -> Text
 let hidden = A.adapt (A.identity, service)
 
 return hidden 1

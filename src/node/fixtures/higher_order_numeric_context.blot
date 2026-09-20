@@ -4,6 +4,6 @@ const apply = fn (function, value) => function value
 const identity = fn value => value
 
 // The higher-order call must leave an ambiguous literal for the enclosing type.
-let value :: F64
+let value: F64
 let value = apply (identity, 1)
 return value

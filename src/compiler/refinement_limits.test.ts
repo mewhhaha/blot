@@ -50,7 +50,7 @@ test("connected affine and predicate exhaustion retain their public limit class"
   }
   const source = `open import "blot:prelude"
 const Allowed = refine (Int, fn value => ${predicates[0]})
-let answer :: Allowed
+let answer: Allowed
 let answer = 0
 return answer
 `;

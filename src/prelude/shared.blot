@@ -39,13 +39,13 @@ const SharedRuntime = @effect.host {
   };
 }
 
-const read :: @forall (fn T => Partition T -> Int -> T ~ { SharedAccess })
+const read: @forall (fn T => Partition T -> Int -> T ~ { SharedAccess })
 const read = fn partition => fn index => SharedAccess.read (partition, index)
-const write :: @forall (fn T => Partition T -> Int -> T -> Unit ~ { SharedAccess })
+const write: @forall (fn T => Partition T -> Int -> T -> Unit ~ { SharedAccess })
 const write = fn partition => fn index => fn value => SharedAccess.write (partition, index, value)
-const split :: @forall (fn T => Int -> Partition T -> { .left = Partition T; .right = Partition T; .rejoin = Rejoin T; } ~ { SharedRuntime })
+const split: @forall (fn T => Int -> Partition T -> { .left = Partition T; .right = Partition T; .rejoin = Rejoin T; } ~ { SharedRuntime })
 const split = fn boundary => fn ?partition => SharedRuntime.split (?partition, boundary)
-const run :: @forall (fn T => @forall (fn R => Scope -> T -> (T -> R ~ { SharedAccess }) -> R ~ { SharedAccess, SharedRuntime }))
+const run: @forall (fn T => @forall (fn R => Scope -> T -> (T -> R ~ { SharedAccess }) -> R ~ { SharedAccess, SharedRuntime }))
 const run = fn scope => fn ?argument => fn ?work => SharedRuntime.run (scope, ?argument, ?work)
 
 return {

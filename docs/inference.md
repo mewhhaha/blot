@@ -45,7 +45,7 @@ explicit row is written after the arrow:
 
 ```blot
 const Console = @effect { .write = Text -> Unit; }
-let greet :: Text -> Unit ~ { Console }
+let greet: Text -> Unit ~ { Console }
 let greet = fn name => do:
   use result <- Console.write name
   return result
@@ -74,7 +74,7 @@ Checking can execute compile-time code and is not an untrusted-code sandbox.
 
 ```blot
 const Bit = 0 | 1
-let bit :: Bit
+let bit: Bit
 let bit = 1
 ```
 

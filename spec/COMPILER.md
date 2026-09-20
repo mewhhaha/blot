@@ -12,6 +12,17 @@ The compiler implements one language judgment. A fast path, cache hit, resident
 server, batch scheduler, auxiliary evaluator, or target backend may validate or
 memoize that judgment; it cannot define a weaker semantic mode.
 
+## Opt-in research boundary
+
+The separate `experiments/staged-core/native` Rust crate exposes the laboratory
+in [`STAGED_PROTOTYPE.md`](STAGED_PROTOTYPE.md). Its checked pure core and
+explicitly experimental Wasm artifact implement only a restricted research
+fragment. They are not production typed artifacts, certificates, validated
+Runtime HIR, or the canonical ABI. No production entry point, query or backend
+consumes them. Baba's existing frontend is reused; there is no alternate
+lexer/parser or host semantic implementation. Feature tests and an additive
+execution workflow check this experiment without weakening any production gate.
+
 ## 1. Whole-compiler judgment
 
 Let:
@@ -154,6 +165,20 @@ capsule, and Runtime HIR. The module-snapshot and value-capsule versions
 describe nested compiler artifacts. They change independently from the public
 ABI, compiler-host ABI, certificate, and Runtime-HIR versions unless a
 representation change crosses one of those separate boundaries.
+
+## Source annotation migration
+
+The surface type-annotation delimiter is `:`. Changing this delimiter updates
+Baba's grammar, generated lexer/parser plan, Rust frontend tables, and source
+fixtures together. It changes no type/effect/ownership judgment or public ABI.
+The original source bytes and generated parser identity remain revision inputs;
+old checked facts and source snapshots cannot be reused under the new grammar
+without their ordinary identity validation. Regenerate the distributed prelude
+snapshot from the migrated prelude rather than accepting an old source image.
+The compact AST rule/field schema and compiler-host ABI are unchanged.
+
+The [staged compiler proposal](../docs/staged-compiler-proposal.md) is an
+experimental design direction only. It replaces no production pass below.
 
 ## 3. Pass graph
 
@@ -322,6 +347,22 @@ shorter chains retain the ordinary fixity tree.
 
 An incremental frontend result must equal a fresh result, including diagnostics,
 spans, compact edges, and resolved identities.
+
+A prior successful Baba tree may be reused when the significant terminal and
+lexical-identity sequence is unchanged. Reuse must relocate both source spans
+and token-edge indices when widths or trivia counts change. Lexical acceptance,
+layout and delimiter checks remain mandatory. Unanchored or zero-width nodes may
+conservatively force the normal island executor, as must changes to the
+significant terminal sequence. This is syntax reuse only: changed spelling,
+values, fixity inputs and mapped source locations still require fresh AST
+lowering and normal semantic invalidation. A syntax correspondence map cannot
+establish checked-fact reuse.
+
+The rebinding validator may share inherited immutable binding-name sets across
+lexical layers. Writes must detach aliases. Entering a function still creates a
+distinct rebinding frame; branch-local names and later writes cannot leak into
+an earlier snapshot. Sharing removes copies of growing visible-name prefixes,
+not the lineage or stable-type checks that consume the resulting bindings.
 
 ## 5. Demand facts
 
@@ -1198,6 +1239,34 @@ must remain below 128 MiB across the 20 edits, so the benchmark rejects a reload
 path that retains one compiler working set per revision. This benchmark is a
 named development-mode boundary; it does not claim the same latency when an edit
 changes the demanded graph or a public unit interface.
+
+### 15.1 Whole-program latency observations
+
+A whole-program latency sample distinguishes the first complete
+`Compiler.compile` in a fresh process/session, compilation after an actual
+source edit in that session, and an unchanged revision-cache hit. These are
+separate operations, not interchangeable evidence for a 100 ms goal. The cold
+and edited results must report `compiled`; only the unchanged control may report
+`revision-cache`. An edited result with unchanged executable bytes must be
+identified as such rather than presented as a changed executable.
+
+An editor-supplied entry-buffer benchmark starts the edited timer before
+`setOverlay`, including synchronization/invalidation, and stops only after the
+complete compilation returns the emitted artifact. Loading the supplied buffer,
+input fingerprinting, and post-compilation validation are outside this interval
+and must be disclosed. Compiler initialization is reported separately and may
+not conceal application checking or staging. Full process wall time and the
+first cold compilation remain visible alongside edited and unchanged timings. A
+source edit which changes imports or dependencies is a different workload from
+the entry-only edit and must not inherit its latency claim.
+
+A changed-artifact regression compares the edited result to a fresh compilation
+of the same changed source at the same path. Both Wasm and ABI bytes must agree.
+Timing comparisons keep compiler build settings, runtime, source snapshot, and
+artifact provenance explicit. Profiles and instrumented builds are diagnostic
+observations, not production latency samples. No latency goal changes the
+required checking, exact identity, invalidation, or output-equivalence
+contracts.
 
 ## 16. Artifact production
 

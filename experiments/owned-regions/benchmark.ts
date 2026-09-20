@@ -170,7 +170,7 @@ ${checksumSource()}
 }
 
 function checksumSource(): string {
-  return `let rec ordered_checksum :: ([Int], Int, Int) -> Int
+  return `let rec ordered_checksum: ([Int], Int, Int) -> Int
 let rec ordered_checksum = fn (values, index, total) => do:
   if index >= Array.length values:
     return total

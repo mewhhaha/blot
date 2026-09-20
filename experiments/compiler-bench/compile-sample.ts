@@ -6,7 +6,7 @@ import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Compiler } from "../../src/compiler.ts";
 
-export type CompilationMode = "cold" | "split" | "resident";
+export type CompilationMode = "cold" | "split" | "resident" | "edited";
 
 export interface CompilationSampleOptions {
   readonly entry: string;
@@ -14,13 +14,21 @@ export interface CompilationSampleOptions {
   readonly wasm?: string;
   readonly snapshot?: string;
   readonly output?: string;
+  readonly edit?: string;
 }
 
 export function parseCompilationSampleOptions(
   args: readonly string[],
 ): CompilationSampleOptions {
   const values = new Map<string, string>();
-  const names = new Set(["entry", "mode", "wasm", "snapshot", "output"]);
+  const names = new Set([
+    "entry",
+    "mode",
+    "wasm",
+    "snapshot",
+    "output",
+    "edit",
+  ]);
   for (const argument of args) {
     const match = /^--([a-z]+)=(.+)$/.exec(argument);
     if (match === null || !names.has(match[1])) {
@@ -38,8 +46,8 @@ export function parseCompilationSampleOptions(
   let mode: CompilationMode = "cold";
   const requestedMode = values.get("mode");
   if (requestedMode !== undefined) {
-    if (!["cold", "split", "resident"].includes(requestedMode)) {
-      throw new Error("--mode must be cold, split, or resident");
+    if (!["cold", "split", "resident", "edited"].includes(requestedMode)) {
+      throw new Error("--mode must be cold, split, resident, or edited");
     }
     mode = requestedMode as CompilationMode;
   }
@@ -48,7 +56,14 @@ export function parseCompilationSampleOptions(
   if ((wasm === undefined) !== (snapshot === undefined)) {
     throw new Error("Custom compiler bytes require both --wasm and --snapshot");
   }
+  const edit = values.get("edit");
+  if ((mode === "edited") !== (edit !== undefined)) {
+    throw new Error(
+      "--mode=edited requires --edit=replacement.blot; other modes reject --edit",
+    );
+  }
   return {
+    edit,
     entry: resolve(entry),
     mode,
     wasm,
@@ -62,6 +77,11 @@ function digest(bytes: Uint8Array): string {
 }
 
 export async function sampleCompilation(options: CompilationSampleOptions) {
+  if ((options.mode === "edited") !== (options.edit !== undefined)) {
+    throw new Error(
+      "Edited mode requires replacement source, and other modes reject it",
+    );
+  }
   if ((options.wasm === undefined) !== (options.snapshot === undefined)) {
     throw new Error("Custom compiler bytes require both --wasm and --snapshot");
   }
@@ -132,6 +152,71 @@ export async function sampleCompilation(options: CompilationSampleOptions) {
       inputs.update(JSON.stringify([path, bytes.length]));
       inputs.update(bytes);
     }
+    let editedCompilation: {
+      sourceSha256: string;
+      setOverlayMs: number;
+      compileMs: number;
+      totalCompilationMs: number;
+      artifactSource: string;
+      wasmBytes: number;
+      wasmSha256: string;
+      abiSha256: string;
+      wasmChanged: boolean;
+      wasmValidated: boolean;
+    } | null = null;
+    if (options.mode === "edited" && options.edit !== undefined) {
+      // The editor supplies a replacement buffer. Reading that separate buffer
+      // is not compiler work; applying it, invalidation, parsing, checking, and
+      // complete emission are all INSIDE the edited-compilation interval.
+      const source = await readFile(resolve(options.edit), "utf8");
+      if (source === await readFile(options.entry, "utf8")) {
+        throw new Error("Edited mode requires different source bytes");
+      }
+      const editStarted = performance.now();
+      await compiler.setOverlay(options.entry, source, 1);
+      const overlaid = performance.now();
+      const changed = await compiler.compile(options.entry);
+      const editFinished = performance.now();
+      if (changed.artifactSource !== "compiled") {
+        throw new Error(
+          "An edited compilation must not be an unchanged artifact-cache hit",
+        );
+      }
+      if (!WebAssembly.validate(new Uint8Array(changed.wasm))) {
+        throw new Error("Edited compilation produced invalid Wasm");
+      }
+      editedCompilation = {
+        sourceSha256: digest(new TextEncoder().encode(source)),
+        setOverlayMs: overlaid - editStarted,
+        compileMs: editFinished - overlaid,
+        totalCompilationMs: editFinished - editStarted,
+        artifactSource: changed.artifactSource,
+        wasmBytes: changed.wasm.length,
+        wasmSha256: digest(changed.wasm),
+        abiSha256: digest(changed.manifestBytes),
+        wasmChanged: digest(changed.wasm) !== digest(artifact.wasm),
+        wasmValidated: true,
+      };
+      const repeatStarted = performance.now();
+      const repeated = await compiler.compile(options.entry);
+      unchangedArtifactHitMs = performance.now() - repeatStarted;
+      if (
+        repeated.artifactSource !== "revision-cache" ||
+        digest(repeated.wasm) !== digest(changed.wasm) ||
+        digest(repeated.manifestBytes) !== digest(changed.manifestBytes)
+      ) {
+        throw new Error(
+          "Unchanged edited revision did not retain its exact artifact",
+        );
+      }
+      if (options.output !== undefined) {
+        await writeFile(`${options.output}.edited.wasm`, changed.wasm);
+        await writeFile(
+          `${options.output}.edited.abi.json`,
+          changed.manifestBytes,
+        );
+      }
+    }
     if (options.output !== undefined) {
       await writeFile(`${options.output}.wasm`, artifact.wasm);
       await writeFile(`${options.output}.abi.json`, artifact.manifestBytes);
@@ -146,6 +231,7 @@ export async function sampleCompilation(options: CompilationSampleOptions) {
       compileMs: compiled - prepared,
       totalCompilationMs: compiled - initialized,
       unchangedArtifactHitMs,
+      editedCompilation,
       artifactSource: artifact.artifactSource,
       wasmValidated: true,
       inputFiles: paths.length,

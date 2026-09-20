@@ -17,7 +17,7 @@ const SecondsError = #InvalidSeconds Int
 const RetryError = #InvalidRetryLimit Int
 const UpgradeError = #First SecondsError | #Second RetryError
 
-let seconds_to_millis :: M.Migration (V1, V2, SecondsError)
+let seconds_to_millis: M.Migration (V1, V2, SecondsError)
 let seconds_to_millis = fn source => case source of
   #V1 value => do:
     if value.timeout < 0 || value.timeout > 60:
@@ -29,7 +29,7 @@ let seconds_to_millis = fn source => case source of
       .retry_limit = value.retry_limit;
     })
 
-let finalize :: M.Migration (V2, V3, RetryError)
+let finalize: M.Migration (V2, V3, RetryError)
 let finalize = fn source => case source of
   #V2 value => do:
     if value.retry_limit < 1 || value.retry_limit > 5:
@@ -43,12 +43,12 @@ let finalize = fn source => case source of
 
 // `and_then` shares V2 between the first result and the second input. Reversing
 // the two migrations is therefore rejected before execution.
-let upgrade :: M.Migration (V1, V3, UpgradeError)
+let upgrade: M.Migration (V1, V3, UpgradeError)
 let upgrade = M.and_then (seconds_to_millis, finalize)
 
 const Summary = { .status = Text; .timeout_ms = Int; .retry_limit = Int; }
 
-let summarize :: Result (V3, UpgradeError) -> Summary
+let summarize: Result (V3, UpgradeError) -> Summary
 let summarize = fn result => case result of
   #Ok (#V3 value) => {
     .status = "ok";

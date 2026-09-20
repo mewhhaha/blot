@@ -16,7 +16,7 @@ const LegacyBackwardError = #NotLegacyRole P.Text
 const PartnerForwardError = #PartnerRejectsService P.Text
 const PartnerBackwardError = #UnknownPartnerRole P.Text
 
-const legacy ::
+const legacy:
   B.Bridge (LegacyRole, Role, LegacyForwardError, LegacyBackwardError)
 const legacy =
   {
@@ -34,7 +34,7 @@ const legacy =
     ;
   }
 
-const partner ::
+const partner:
   B.Bridge (Role, PartnerRole, PartnerForwardError, PartnerBackwardError)
 const partner =
   {
@@ -59,7 +59,7 @@ const reversed = B.reverse combined
 
 // Explicitly pin the otherwise-uninhabited error positions of identity to the
 // domain errors already used by this boundary.
-const legacy_identity ::
+const legacy_identity:
   B.Bridge (LegacyRole, LegacyRole, LegacyForwardError, LegacyBackwardError)
 const legacy_identity = B.identity
 

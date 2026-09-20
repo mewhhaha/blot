@@ -5,7 +5,7 @@ open import "blot:prelude"
 const R = import "../lib/reducer.blot"
 const T = import "../lib/transducer.blot"
 
-const transduce ::
+const transduce:
   @forall (fn Input => @forall (fn Output => @forall (fn State => @forall (fn Result => (
     T.Transducer (Input, Output),
     R.Reducer (Output, State, Result),

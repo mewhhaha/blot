@@ -3,6 +3,6 @@ const Dimension = import "../../../examples/lib/dimensional_quantity.blot"
 const Length = Dimension.make { .length = 1; .time = 0; }
 const Time = Dimension.make { .length = 0; .time = 1; }
 const speed_from = Dimension.divide (Length, Time)
-let wrong :: Option Length.type
+let wrong: Option Length.type
 let wrong = speed_from.apply (Length.of 10, Time.of 2)
 return wrong

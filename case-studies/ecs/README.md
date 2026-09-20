@@ -222,19 +222,19 @@ preventing accidental replay remain explicit application responsibilities.
 ```blot
 const Schedule = ECS.Schedule Entity
 
-const integrate :: Entity -> Entity
+const integrate: Entity -> Entity
 const integrate = fn row => C.Position.replace (row, resolve (row, next_position))
 
-const bounce :: Entity -> Entity
+const bounce: Entity -> Entity
 const bounce = fn row => C.Velocity.replace (row, resolve (row, next_velocity))
 
-const age :: Entity -> Entity
+const age: Entity -> Entity
 const age = fn row => C.Age.replace (row, row.Age + 1)
 
 const physics = Schedule.merge (integrate, bounce)
 const bookkeeping = Schedule.merge (Schedule.empty, age)
 const tick = Schedule.merge (physics, bookkeeping)
-const fused :: [Entity] -> [Entity]
+const fused: [Entity] -> [Entity]
 const fused = Schedule.each tick
 ```
 
@@ -324,7 +324,7 @@ const graph = P.then (
   observers
 )
 const plan = P.compile (Entity, registry, graph)
-const tick :: [Entity] -> [Entity]
+const tick: [Entity] -> [Entity]
 const tick = plan.each
 ```
 

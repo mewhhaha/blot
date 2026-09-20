@@ -627,7 +627,7 @@ static ISLAND_14_STATE_1_TRANSITIONS: &[IslandTransition] = &[
 
 static ISLAND_14_STATE_2_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Island, input: 15, target: 4, emit: IslandEmit { field: 16 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 37, target: 5, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 28, target: 5, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_14_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -635,7 +635,7 @@ static ISLAND_14_STATE_3_TRANSITIONS: &[IslandTransition] = &[
 ];
 
 static ISLAND_14_STATE_4_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 37, target: 5, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 28, target: 5, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_14_STATE_5_TRANSITIONS: &[IslandTransition] = &[
@@ -662,7 +662,7 @@ static ISLAND_14_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_15_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 38, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 37, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_15_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -680,7 +680,7 @@ static ISLAND_15_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_16_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 39, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 38, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_16_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -698,7 +698,7 @@ static ISLAND_16_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_17_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 40, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 39, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_17_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -716,7 +716,7 @@ static ISLAND_17_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_18_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 41, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 40, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_18_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -739,7 +739,7 @@ static ISLAND_18_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_19_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 41, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_19_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -881,7 +881,7 @@ static ISLAND_23_STATE_1_TRANSITIONS: &[IslandTransition] = &[
 
 static ISLAND_23_STATE_2_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Terminal, input: 22, target: 3, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 4, emit: IslandEmit { field: 56 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 4, emit: IslandEmit { field: 56 } },
 ];
 
 static ISLAND_23_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -894,7 +894,7 @@ static ISLAND_23_STATE_4_TRANSITIONS: &[IslandTransition] = &[
 
 static ISLAND_23_STATE_5_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Terminal, input: 22, target: 3, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 6, emit: IslandEmit { field: 46 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 6, emit: IslandEmit { field: 46 } },
 ];
 
 static ISLAND_23_STATE_6_TRANSITIONS: &[IslandTransition] = &[
@@ -922,7 +922,7 @@ static ISLAND_24_STATE_1_TRANSITIONS: &[IslandTransition] = &[
 
 static ISLAND_24_STATE_2_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Terminal, input: 31, target: 3, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 4, emit: IslandEmit { field: 19 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 4, emit: IslandEmit { field: 19 } },
 ];
 
 static ISLAND_24_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -942,7 +942,7 @@ static ISLAND_24_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_25_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 44, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_25_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -965,17 +965,17 @@ static ISLAND_25_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_26_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 44, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_26_STATE_1_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Island, input: 27, target: 2, emit: IslandEmit { field: 23 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 3, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 3, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_26_STATE_2_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Island, input: 27, target: 2, emit: IslandEmit { field: 23 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 3, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 3, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_26_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -990,7 +990,7 @@ static ISLAND_26_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_27_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 47, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_27_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -1327,7 +1327,7 @@ static ISLAND_38_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_39_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 47, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_39_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -1388,17 +1388,17 @@ static ISLAND_41_STATE_0_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Terminal, input: 33, target: 10, emit: IslandEmit { field: -1 } },
     IslandTransition { input_kind: InputKind::Terminal, input: 35, target: 11, emit: IslandEmit { field: -1 } },
     IslandTransition { input_kind: InputKind::Terminal, input: 36, target: 12, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 38, target: 13, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 39, target: 14, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 40, target: 15, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 41, target: 16, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 17, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 48, target: 18, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 49, target: 19, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 50, target: 20, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 51, target: 21, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 52, target: 22, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 53, target: 23, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 37, target: 13, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 38, target: 14, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 39, target: 15, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 40, target: 16, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 41, target: 17, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 47, target: 18, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 48, target: 19, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 49, target: 20, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 50, target: 21, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 51, target: 22, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 52, target: 23, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_41_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -1618,7 +1618,7 @@ static ISLAND_42_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_43_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 48, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 47, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_43_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -1646,17 +1646,17 @@ static ISLAND_43_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_44_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 44, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_44_STATE_1_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Island, input: 28, target: 2, emit: IslandEmit { field: 24 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 54, target: 3, emit: IslandEmit { field: 24 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 53, target: 3, emit: IslandEmit { field: 24 } },
 ];
 
 static ISLAND_44_STATE_2_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 4, emit: IslandEmit { field: 46 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 5, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 4, emit: IslandEmit { field: 46 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 5, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_44_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -1665,7 +1665,7 @@ static ISLAND_44_STATE_3_TRANSITIONS: &[IslandTransition] = &[
 
 static ISLAND_44_STATE_4_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Island, input: 28, target: 7, emit: IslandEmit { field: 58 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 54, target: 8, emit: IslandEmit { field: 58 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 53, target: 8, emit: IslandEmit { field: 58 } },
 ];
 
 static ISLAND_44_STATE_5_TRANSITIONS: &[IslandTransition] = &[
@@ -1673,13 +1673,13 @@ static ISLAND_44_STATE_5_TRANSITIONS: &[IslandTransition] = &[
 ];
 
 static ISLAND_44_STATE_6_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 4, emit: IslandEmit { field: 46 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 5, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 4, emit: IslandEmit { field: 46 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 5, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_44_STATE_7_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 4, emit: IslandEmit { field: 46 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 5, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 4, emit: IslandEmit { field: 46 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 5, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_44_STATE_8_TRANSITIONS: &[IslandTransition] = &[
@@ -1687,8 +1687,8 @@ static ISLAND_44_STATE_8_TRANSITIONS: &[IslandTransition] = &[
 ];
 
 static ISLAND_44_STATE_9_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 4, emit: IslandEmit { field: 46 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 5, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 4, emit: IslandEmit { field: 46 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 5, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_44_STATES: &[IslandState] = &[
@@ -1778,7 +1778,7 @@ static ISLAND_45_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_46_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 44, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_46_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -1823,7 +1823,7 @@ static ISLAND_48_STATE_1_TRANSITIONS: &[IslandTransition] = &[
 
 static ISLAND_48_STATE_2_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Terminal, input: 22, target: 3, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 4, emit: IslandEmit { field: 56 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 4, emit: IslandEmit { field: 56 } },
 ];
 
 static ISLAND_48_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -1836,7 +1836,7 @@ static ISLAND_48_STATE_4_TRANSITIONS: &[IslandTransition] = &[
 
 static ISLAND_48_STATE_5_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Terminal, input: 22, target: 3, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 6, emit: IslandEmit { field: 46 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 6, emit: IslandEmit { field: 46 } },
 ];
 
 static ISLAND_48_STATE_6_TRANSITIONS: &[IslandTransition] = &[
@@ -1864,7 +1864,7 @@ static ISLAND_49_STATE_1_TRANSITIONS: &[IslandTransition] = &[
 
 static ISLAND_49_STATE_2_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Terminal, input: 31, target: 3, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 4, emit: IslandEmit { field: 19 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 4, emit: IslandEmit { field: 19 } },
 ];
 
 static ISLAND_49_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -1885,7 +1885,7 @@ static ISLAND_49_STATES: &[IslandState] = &[
 
 static ISLAND_50_STATE_0_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Island, input: 51, target: 1, emit: IslandEmit { field: 58 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 55, target: 2, emit: IslandEmit { field: 51 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 54, target: 2, emit: IslandEmit { field: 51 } },
 ];
 
 static ISLAND_50_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -1922,17 +1922,17 @@ static ISLAND_51_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_52_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 44, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_52_STATE_1_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Island, input: 53, target: 2, emit: IslandEmit { field: 32 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 3, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 3, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_52_STATE_2_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Island, input: 53, target: 2, emit: IslandEmit { field: 32 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 3, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 45, target: 3, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_52_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -1972,7 +1972,7 @@ static ISLAND_53_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_54_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 55, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 54, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_54_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -1995,7 +1995,7 @@ static ISLAND_54_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_55_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 47, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_55_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -2036,7 +2036,7 @@ static ISLAND_55_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_56_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 47, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_56_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -2104,7 +2104,7 @@ static ISLAND_57_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_58_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 53, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 52, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_58_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -2113,11 +2113,11 @@ static ISLAND_58_STATE_1_TRANSITIONS: &[IslandTransition] = &[
 
 static ISLAND_58_STATE_2_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Island, input: 72, target: 3, emit: IslandEmit { field: 47 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 56, target: 4, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 55, target: 4, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_58_STATE_3_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 56, target: 4, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 55, target: 4, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_58_STATE_4_TRANSITIONS: &[IslandTransition] = &[
@@ -2133,7 +2133,7 @@ static ISLAND_58_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_59_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 49, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 48, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_59_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -2178,11 +2178,11 @@ static ISLAND_60_STATE_3_TRANSITIONS: &[IslandTransition] = &[
 ];
 
 static ISLAND_60_STATE_4_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 50, target: 5, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 49, target: 5, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_60_STATE_5_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 37, target: 6, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 28, target: 6, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_60_STATE_6_TRANSITIONS: &[IslandTransition] = &[
@@ -2209,7 +2209,7 @@ static ISLAND_61_STATE_0_TRANSITIONS: &[IslandTransition] = &[
 ];
 
 static ISLAND_61_STATE_1_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 37, target: 2, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 28, target: 2, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_61_STATE_2_TRANSITIONS: &[IslandTransition] = &[
@@ -2253,7 +2253,7 @@ static ISLAND_62_STATE_2_TRANSITIONS: &[IslandTransition] = &[
 ];
 
 static ISLAND_62_STATE_3_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 37, target: 4, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 28, target: 4, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_62_STATE_4_TRANSITIONS: &[IslandTransition] = &[
@@ -2275,15 +2275,15 @@ static ISLAND_62_STATES: &[IslandState] = &[
 
 static ISLAND_63_STATE_0_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Terminal, input: 11, target: 1, emit: IslandEmit { field: -1 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 50, target: 2, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 49, target: 2, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_63_STATE_1_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 50, target: 2, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 49, target: 2, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_63_STATE_2_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 37, target: 3, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 28, target: 3, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_63_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -2311,8 +2311,8 @@ static ISLAND_64_STATE_1_TRANSITIONS: &[IslandTransition] = &[
 ];
 
 static ISLAND_64_STATE_2_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 3, emit: IslandEmit { field: 63 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 51, target: 4, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 3, emit: IslandEmit { field: 63 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 50, target: 4, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_64_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -2364,12 +2364,12 @@ static ISLAND_65_STATE_0_TRANSITIONS: &[IslandTransition] = &[
 
 static ISLAND_65_STATE_1_TRANSITIONS: &[IslandTransition] = &[
     IslandTransition { input_kind: InputKind::Island, input: 66, target: 2, emit: IslandEmit { field: 25 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 43, target: 3, emit: IslandEmit { field: 64 } },
-    IslandTransition { input_kind: InputKind::Terminal, input: 56, target: 4, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 42, target: 3, emit: IslandEmit { field: 64 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 55, target: 4, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_65_STATE_2_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 56, target: 4, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 55, target: 4, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_65_STATE_3_TRANSITIONS: &[IslandTransition] = &[
@@ -2399,7 +2399,7 @@ static ISLAND_65_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_66_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 49, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 48, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_66_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -2417,11 +2417,11 @@ static ISLAND_66_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_67_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 52, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 51, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_67_STATE_1_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 37, target: 2, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 28, target: 2, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_67_STATE_2_TRANSITIONS: &[IslandTransition] = &[
@@ -2517,7 +2517,7 @@ static ISLAND_69_STATES: &[IslandState] = &[
 ];
 
 static ISLAND_70_STATE_0_TRANSITIONS: &[IslandTransition] = &[
-    IslandTransition { input_kind: InputKind::Terminal, input: 47, target: 1, emit: IslandEmit { field: -1 } },
+    IslandTransition { input_kind: InputKind::Terminal, input: 46, target: 1, emit: IslandEmit { field: -1 } },
 ];
 
 static ISLAND_70_STATE_1_TRANSITIONS: &[IslandTransition] = &[
@@ -2676,9 +2676,9 @@ static BOUNDARIES: &[Boundary] = &[
     Boundary::Root,
     Boundary::Root,
     Boundary::Paired { open_terminal: 21, close_terminal: 22 },
-    Boundary::Separated { open_terminal: 30, close_terminal: 31, _separator_terminal: 43 },
+    Boundary::Separated { open_terminal: 30, close_terminal: 31, _separator_terminal: 42 },
     Boundary::Root,
-    Boundary::Paired { open_terminal: 45, close_terminal: 46 },
+    Boundary::Paired { open_terminal: 44, close_terminal: 45 },
     Boundary::Terminated { _terminal: 24 },
     Boundary::Root,
     Boundary::Root,
@@ -2696,15 +2696,15 @@ static BOUNDARIES: &[Boundary] = &[
     Boundary::Root,
     Boundary::Root,
     Boundary::Root,
-    Boundary::Separated { open_terminal: 45, close_terminal: 46, _separator_terminal: 43 },
+    Boundary::Separated { open_terminal: 44, close_terminal: 45, _separator_terminal: 42 },
     Boundary::Root,
     Boundary::Root,
     Boundary::Root,
     Boundary::Paired { open_terminal: 21, close_terminal: 22 },
-    Boundary::Separated { open_terminal: 30, close_terminal: 31, _separator_terminal: 43 },
+    Boundary::Separated { open_terminal: 30, close_terminal: 31, _separator_terminal: 42 },
     Boundary::Root,
     Boundary::Root,
-    Boundary::Paired { open_terminal: 45, close_terminal: 46 },
+    Boundary::Paired { open_terminal: 44, close_terminal: 45 },
     Boundary::Root,
     Boundary::Root,
     Boundary::Root,
@@ -2731,7 +2731,7 @@ static TERMINAL_CLASSIFICATION: &[i32] = &[
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, -1, -1,
     15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
     31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
-    47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
+    47, 48, 49, 50, 51, 52, 53, 54, 55,
 ];
 
 static ASCII_TRANSITIONS: &[i32] = &[
@@ -2834,7 +2834,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, 2, -1, -1, 2, 2, 2, -1, -1, -1, 2, 2, -1, 2, -1, 2,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 49, -1, 2, 50, 2, 2,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, 49, 2, 2,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2849,7 +2849,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, 2, -1, -1, 2, 2, 2, -1, -1, -1, 2, 2, -1, 51, -1, -1,
+    -1, 2, -1, -1, 2, 2, 2, -1, -1, -1, 2, 2, -1, 50, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, 2, 2, 2,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, -1,
@@ -2858,7 +2858,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, 2, -1, -1, 2, 2, 2, -1, -1, -1, 2, 2, -1, 2, -1, 2,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, 2, 52, 2,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, 2, 51, 2,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2884,9 +2884,9 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 53,
-    -1, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53,
-    53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 52,
+    -1, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+    52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2926,14 +2926,14 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 54, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 53, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 55, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 56,
+    -1, 54, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 55,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2941,7 +2941,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 57,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 56,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2949,7 +2949,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 58, 22, 22, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 57, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2957,7 +2957,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 59, 60,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 58, 59,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2965,7 +2965,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 61, 22, 22, 22, 22, 22, 22, 62, 63, 22,
+    -1, 22, 22, 22, 22, 22, 60, 22, 22, 22, 22, 22, 22, 61, 62, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2973,7 +2973,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 64, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 63, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2981,7 +2981,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 65,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 64,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2989,8 +2989,8 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 66, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    67, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 65, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    66, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -2998,14 +2998,14 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 68, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 67, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 69, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 68, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3014,14 +3014,14 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 70, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 22, 69, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 71, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 70, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3081,7 +3081,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, -1, 3, -1, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 72, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 71, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3098,26 +3098,26 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    73, 73, 73, 73, 73, 73, 73, 73, 73, 73, -1, -1, -1, -1, -1, -1,
+    72, 72, 72, 72, 72, 72, 72, 72, 72, 72, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 74, -1, 74, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 73, -1, 73, -1, -1,
+    74, 74, 74, 74, 74, 74, 74, 74, 74, 74, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     75, 75, 75, 75, 75, 75, 75, 75, 75, 75, -1, -1, -1, -1, -1, -1,
+    -1, 75, 75, 75, 75, 75, 75, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    76, 76, 76, 76, 76, 76, 76, 76, 76, 76, -1, -1, -1, -1, -1, -1,
-    -1, 76, 76, 76, 76, 76, 76, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, 76, 76, 76, 76, 76, 76, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, 75, 75, 75, 75, 75, 75, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3153,27 +3153,19 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, 2, -1, -1, 2, 2, 2, -1, -1, -1, 2, 2, -1, 2, -1, 2,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, 2, 2, 2,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, 2, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 77, -1,
-    53, 53, 53, 53, 53, 53, 53, 53, 53, 53, -1, -1, -1, -1, -1, -1,
-    -1, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53,
-    53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, -1, -1, -1, -1, 53,
-    -1, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53,
-    53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 76, -1,
+    52, 52, 52, 52, 52, 52, 52, 52, 52, 52, -1, -1, -1, -1, -1, -1,
+    -1, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+    52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, -1, -1, -1, -1, 52,
+    -1, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+    52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 78, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 77, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3182,31 +3174,15 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 79, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 22, 78, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 80, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 79, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 81, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3222,7 +3198,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 82, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 22, 80, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3238,14 +3214,14 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    83, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 81, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 84, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3254,14 +3230,14 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 85, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    82, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 86, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 22, 83, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3270,6 +3246,30 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 84, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 85, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 86, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3285,23 +3285,15 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 88, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, 22, 22, 88, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 89, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 89, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 90, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 91, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 90, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3310,7 +3302,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 92, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 91, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3322,7 +3314,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    73, 73, 73, 73, 73, 73, 73, 73, 73, 73, -1, -1, -1, -1, -1, -1,
+    72, 72, 72, 72, 72, 72, 72, 72, 72, 72, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, 46, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 45,
     -1, -1, -1, -1, -1, 46, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3330,42 +3322,42 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    74, 74, 74, 74, 74, 74, 74, 74, 74, 74, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    74, 74, 74, 74, 74, 74, 74, 74, 74, 74, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 73,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     75, 75, 75, 75, 75, 75, 75, 75, 75, 75, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    75, 75, 75, 75, 75, 75, 75, 75, 75, 75, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 74,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    76, 76, 76, 76, 76, 76, 76, 76, 76, 76, -1, -1, -1, -1, -1, -1,
-    -1, 76, 76, 76, 76, 76, 76, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, 75, 75, 75, 75, 75, 75, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 47,
-    -1, 76, 76, 76, 76, 76, 76, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, 75, 75, 75, 75, 75, 75, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 53,
-    -1, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53,
-    53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 52,
+    -1, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52,
+    52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 93, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 92, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3373,23 +3365,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 94, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 95, 96, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 97, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 93, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3398,22 +3374,14 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 22, 94, 95, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 98,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 99, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 96, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3429,15 +3397,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 100, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 101, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 97,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3445,7 +3405,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 102, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 98, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3462,14 +3422,14 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 103, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 99, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 100, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3477,15 +3437,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 104, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 105, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 22, 101, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3502,18 +3454,10 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 106, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 102, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 107, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, 108, 108, -1, -1, 108, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    108, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
@@ -3525,23 +3469,15 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 109, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 103, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 110, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 111, 22, 22, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 104, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3557,7 +3493,23 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 112, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 105, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 106, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, 107, 107, -1, -1, 107, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    107, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3566,7 +3518,23 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 113, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 108, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 109, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 110, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3575,6 +3543,22 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 111, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 112, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3597,39 +3581,7 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 114, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, 108, 108, -1, -1, 108, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    108, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, 115, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 116, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 117, 22, 22, 22,
-    22, 22, 118, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 119, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3637,15 +3589,39 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 120, 22, 22, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 113, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, 107, 107, -1, -1, 107, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    107, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, 114, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 121, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 115, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 116, 22, 22, 22,
+    22, 22, 117, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 118, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3654,15 +3630,15 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 122, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 119, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, 123, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 120, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3670,7 +3646,15 @@ static ASCII_TRANSITIONS: &[i32] = &[
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
-    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 121, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, 122, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3717,7 +3701,15 @@ static ASCII_TRANSITIONS: &[i32] = &[
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
     -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
-    -1, 22, 22, 22, 22, 124, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1, -1,
+    -1, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, 22,
+    -1, 22, 22, 22, 22, 123, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
     22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -3745,7 +3737,7 @@ static TRANSITION_ROWS: &[i32] = &[
     5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
     5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
     5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
-    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
 ];
 
 static TRANSITIONS: &[i32] = &[
@@ -3753,14 +3745,14 @@ static TRANSITIONS: &[i32] = &[
 ];
 
 static ACCEPT_SPEC_BY_STATE: &[i32] = &[
-    -1, 14, 13, -1, 45, 22, 23, 44, 48, 13, 2, 2, 38, 25, 7, 24,
+    -1, 14, 13, -1, 44, 22, 23, 43, 47, 13, 2, 2, 29, 25, 7, 24,
     8, 9, 30, 1, 31, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 46, 47, 10, 11, 12, 4, -1, 55, 15, -1, -1, -1,
-    -1, 29, 33, 35, 57, 6, 0, 0, 0, 53, 0, 54, 0, 50, 0, 39,
-    0, 0, 52, 0, 0, 0, 0, 0, 56, 3, -1, 3, 2, -1, 0, 0,
-    0, 0, 36, 0, 0, 26, 0, 0, 0, 28, 0, 34, 0, 0, 37, 0,
-    0, 51, 0, 0, 0, 42, 0, 0, 17, 40, 27, 0, -1, 0, 20, 0,
-    0, 0, 0, -1, 49, 18, 19, 16, 21, 43, 0, 5, 41,
+    0, 0, 0, 0, 45, 46, 10, 11, 12, 4, -1, 54, 15, -1, -1, -1,
+    -1, 33, 35, 56, 6, 0, 0, 0, 52, 0, 53, 0, 49, 0, 38, 0,
+    0, 51, 0, 0, 0, 0, 0, 55, 3, -1, 3, 2, -1, 0, 0, 0,
+    0, 36, 0, 0, 26, 0, 0, 0, 28, 0, 34, 0, 0, 37, 0, 0,
+    50, 0, 0, 0, 41, 0, 0, 17, 39, 27, 0, -1, 0, 20, 0, 0,
+    0, 0, -1, 48, 18, 19, 16, 21, 42, 0, 5, 40,
 ];
 
 static GENERATED_FRONTEND_PLAN: FrontendPlan = FrontendPlan {
@@ -3769,7 +3761,7 @@ static GENERATED_FRONTEND_PLAN: FrontendPlan = FrontendPlan {
     boundaries: BOUNDARIES,
     islands: ISLANDS,
     lexer: Lexer {
-        state_count: 125,
+        state_count: 124,
         start_state: 0,
         ascii_transitions: ASCII_TRANSITIONS,
         transition_rows: TRANSITION_ROWS,

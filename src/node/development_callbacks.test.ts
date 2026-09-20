@@ -24,7 +24,7 @@ test("development callbacks pin sync and async providers until consumption or sc
     writeFile(
       formula,
       `open import "blot:prelude"
-const apply :: Int -> Int = fn value => value * ${multiplier}
+const apply: Int -> Int = fn value => value * ${multiplier}
 return { .apply = apply; }
 `,
     );
@@ -34,8 +34,8 @@ return { .apply = apply; }
       `open import "blot:prelude"
 const formula = import "./formula.blot"
 const Gate = @effect.host { .wait = Effect.suspends (Int -> Int); }
-const sync :: Int -> Int = fn value => formula.apply value
-const wait :: Int -> Int ~ { Gate } = fn value => do:
+const sync: Int -> Int = fn value => formula.apply value
+const wait: Int -> Int ~ { Gate } = fn value => do:
   use answer <- Gate.wait value
   return formula.apply answer + ${offset}
 return { .sync = sync; .wait = wait; .Gate = Gate; }
@@ -69,8 +69,8 @@ const Capture = @effect.host {
     .suspends = True;
   };
 }
-const save :: Int -> Unit ~ { Capture, provider.Gate } = fn value => do:
-  let ?work :: Unit -> Int ~ { provider.Gate } = fn () => provider.wait (provider.sync value)
+const save: Int -> Unit ~ { Capture, provider.Gate } = fn value => do:
+  let ?work: Unit -> Int ~ { provider.Gate } = fn () => provider.wait (provider.sync value)
   return Capture.save (?work)
 return { .save = save; }
 `,
@@ -176,7 +176,7 @@ test("pure development links validate resource tokens inside copied records", as
     `open import "blot:prelude"
 const Spark = import "blot:spark"
 const Carried = { .label = Text; .scope = Spark.Scope; }
-const keep :: Spark.Scope -> Carried = fn scope => { .label = "carried"; .scope = scope; }
+const keep: Spark.Scope -> Carried = fn scope => { .label = "carried"; .scope = scope; }
 return { .keep = keep; }
 `,
   );
@@ -185,8 +185,8 @@ return { .keep = keep; }
     `open import "blot:prelude"
 const Spark = import "blot:spark"
 const provider = import "./provider.blot"
-const run :: Spark.Executor -> Int ~ { Spark.Effect } = fn executor => do:
-  let body :: Spark.Scope -> Int ~ { Spark.Effect } = fn scope => do:
+const run: Spark.Executor -> Int ~ { Spark.Effect } = fn executor => do:
+  let body: Spark.Scope -> Int ~ { Spark.Effect } = fn scope => do:
     let carried = provider.keep scope
     use () <- Spark.yield carried.scope
     return Text.length carried.label

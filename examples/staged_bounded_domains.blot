@@ -12,10 +12,10 @@ const TemperatureC = Domain.bounded (range (-40, 85))
 
 // The narrower generated carrier is an ordinary subtype of the wider one.
 // No conversion or unchecked cast is required.
-let as_percent :: CanaryPercent.Type -> Percent.Type
+let as_percent: CanaryPercent.Type -> Percent.Type
 let as_percent = fn value => value
 
-let render_percent :: Percent.Type -> Text
+let render_percent: Percent.Type -> Text
 let render_percent = fn value => Text.of_int value <> "%"
 
 const canary = CanaryPercent.clamp 99

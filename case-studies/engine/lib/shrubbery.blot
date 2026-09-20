@@ -45,7 +45,7 @@ const Voxel =
   }
 const Shrubbery = #Mixed | #Oak | #Fir | #FlowerPatch | #RockCluster
 const Selection = { .key = Int; .name = Text; .shrubbery = Shrubbery; }
-let selections :: [Selection]
+let selections: [Selection]
 let selections =
   [
     { .key = 1; .name = "mixed shrubbery"; .shrubbery = #Mixed; },
@@ -54,7 +54,7 @@ let selections =
     { .key = 4; .name = "flower patch"; .shrubbery = #FlowerPatch; },
     { .key = 5; .name = "rock cluster"; .shrubbery = #RockCluster; }
   ]
-const point :: (Int, Int, Int) -> Point
+const point: (Int, Int, Int) -> Point
 const point = fn (x, y, z) => { .x = x; .y = y; .z = z; }
 
 const placement = fn (x, y, z) => point (x * DETAIL, y * DETAIL, z * DETAIL)
@@ -69,7 +69,7 @@ let selection_of = fn key => do:
 
 const render_voxels_with_simd = fn &voxels => do:
   let count = Array.length (&voxels)
-  let paint :: R.Paint
+  let paint: R.Paint
   let paint = fn draw => do:
     for index in Iter.range (0, count):
       let voxel = Array.expect_get ((&voxels), index)
@@ -121,7 +121,7 @@ const push_voxel = fn (?voxels, position, color) => do:
   }
 
 const start_voxels = fn () => do:
-  let voxels :: [Voxel]
+  let voxels: [Voxel]
   let voxels = []
   use accelerated <- VoxelCanvas.enabled ()
   if accelerated:

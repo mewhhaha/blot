@@ -9,7 +9,7 @@ const Prism = fn (whole, part) => {
 
 // The shared `Middle` type is the composition invariant: only adjacent partial
 // focuses compose. The implementation is ordinary Option/case plumbing.
-const compose :: @forall (fn Whole => @forall (fn Middle => @forall (fn Part => (Prism (Whole, Middle), Prism (Middle, Part)) -> Prism (Whole, Part))))
+const compose: @forall (fn Whole => @forall (fn Middle => @forall (fn Part => (Prism (Whole, Middle), Prism (Middle, Part)) -> Prism (Whole, Part))))
 const compose = fn (outer, inner) => {
   .preview = fn whole => case outer.preview whole of
     #None => #None
@@ -20,7 +20,7 @@ const compose = fn (outer, inner) => {
 
 // Apply a change only when the prism matches. A miss preserves the original
 // whole value, so callers do not need a parallel branch at every use site.
-const over :: @forall (fn Whole => @forall (fn Part => (Prism (Whole, Part), Whole, (Part -> Part)) -> Whole))
+const over: @forall (fn Whole => @forall (fn Part => (Prism (Whole, Part), Whole, (Part -> Part)) -> Whole))
 const over = fn (prism, whole, change) => case prism.preview whole of
   #None => whole
   #Some part => prism.review (change part)

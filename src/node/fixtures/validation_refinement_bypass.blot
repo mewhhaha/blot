@@ -11,7 +11,7 @@ const Config =
   }
 
 let raw_port = 0
-let invalid :: Config
+let invalid: Config
 let invalid =
   {
     .port = raw_port;

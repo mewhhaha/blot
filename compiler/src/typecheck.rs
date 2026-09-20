@@ -12046,7 +12046,7 @@ impl Checker {
                 requirements
                     .iter()
                     .map(|requirement| format!(
-                        "{}.{} :: {}",
+                        "{}.{}: {}",
                         self.show_type(&requirement.subject, next_quantifier),
                         requirement.name,
                         self.show_type(&requirement.member, next_quantifier)
@@ -15833,12 +15833,12 @@ fn signature_target_diagnostic(
     let expected = declaration_header(expected_kind, expected_recursive, expected_name);
     let message = match actual {
         Some((kind, recursive, name)) => format!(
-            "Signature header `{expected} ::` must be followed by `{}`, found `{}`.",
+            "Signature header `{expected}:` must be followed by `{}`, found `{}`.",
             declaration_header(expected_kind, expected_recursive, expected_name),
             declaration_header(kind, recursive, name),
         ),
         None => format!(
-            "Signature header `{expected} ::` must be immediately followed by its matching binding."
+            "Signature header `{expected}:` must be immediately followed by its matching binding."
         ),
     };
     Diagnostic::new("BLOT_SIGNATURE_TARGET", message, span)

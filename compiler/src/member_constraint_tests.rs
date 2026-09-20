@@ -39,7 +39,7 @@ fn qualified_scheme_instantiates_independently_without_source_specialization() {
     let principal = checker.residual_signature(body.clone());
     assert_eq!(
         checker.show_settled(&principal),
-        "forall 'q0 'q1 'q2. ('q0.add :: 'q0 -> 'q1 -> 'q2) => 'q0 -> 'q1 -> 'q2"
+        "forall 'q0 'q1 'q2. ('q0.add: 'q0 -> 'q1 -> 'q2) => 'q0 -> 'q1 -> 'q2"
     );
     assert!(closed_checked_type(&principal, &mut HashSet::new()));
     assert!(

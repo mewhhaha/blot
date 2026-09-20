@@ -1,6 +1,6 @@
 open import "blot:prelude"
 const Space = import "../../../examples/lib/coordinate_space.blot"
 const Model = Space.space #Model
-let point :: Model.Point
+let point: Model.Point
 let point = { .frame = #World; .x = 1; .y = 2; }
 return point

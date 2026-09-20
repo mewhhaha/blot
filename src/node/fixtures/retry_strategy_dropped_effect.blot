@@ -4,13 +4,13 @@ const Retry = import "../../../examples/lib/retry_strategy.blot"
 const Failure = #Failure Text
 const Remote = @effect { .call = Int -> Result (Int, Failure); }
 
-const strategy :: Retry.Strategy (Int, Failure)
+const strategy: Retry.Strategy (Int, Failure)
 const strategy = Retry.bounded (1, fn _ => True)
 
-let operation :: (Int, Int) -> Result (Int, Failure) ~ { Remote }
+let operation: (Int, Int) -> Result (Int, Failure) ~ { Remote }
 let operation = fn (value, _) => Remote.call value
 
-let supposedly_pure :: Int -> Result (Int, Failure)
+let supposedly_pure: Int -> Result (Int, Failure)
 let supposedly_pure = fn value => Retry.run (strategy, operation, value)
 
 return supposedly_pure 1

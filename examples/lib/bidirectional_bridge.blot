@@ -13,13 +13,13 @@ const Bridge = fn (Left, Right, ForwardError, BackwardError) => {
 // bridge cannot spell Result (Value, Never). Quantifying the otherwise-unused
 // error carriers keeps identity composable without inventing a fake runtime
 // error constructor.
-const identity :: @forall (fn Value => @forall (fn ForwardError => @forall (fn BackwardError => Bridge (Value, Value, ForwardError, BackwardError))))
+const identity: @forall (fn Value => @forall (fn ForwardError => @forall (fn BackwardError => Bridge (Value, Value, ForwardError, BackwardError))))
 const identity = {
   .to_right = fn value => #Ok value;
   .to_left = fn value => #Ok value;
 }
 
-const reverse :: @forall (fn Left => @forall (fn Right => @forall (fn ForwardError => @forall (fn BackwardError => Bridge (Left, Right, ForwardError, BackwardError) -> Bridge (Right, Left, BackwardError, ForwardError)))))
+const reverse: @forall (fn Left => @forall (fn Right => @forall (fn ForwardError => @forall (fn BackwardError => Bridge (Left, Right, ForwardError, BackwardError) -> Bridge (Right, Left, BackwardError, ForwardError)))))
 const reverse = fn bridge => {
   .to_right = bridge.to_left;
   .to_left = bridge.to_right;
@@ -29,7 +29,7 @@ const reverse = fn bridge => {
 // Middle carrier occurs on both adjacent sides. Backward execution visits the
 // second bridge first, but errors keep #First/#Second labels referring to the
 // bridges' declaration order.
-const compose :: @forall (fn Left => @forall (fn Middle => @forall (fn Right => @forall (fn FirstForwardError => @forall (fn FirstBackwardError => @forall (fn SecondForwardError => @forall (fn SecondBackwardError => (Bridge (Left, Middle, FirstForwardError, FirstBackwardError), Bridge (Middle, Right, SecondForwardError, SecondBackwardError)) -> Bridge (Left, Right, #First FirstForwardError | #Second SecondForwardError, #First FirstBackwardError | #Second SecondBackwardError))))))))
+const compose: @forall (fn Left => @forall (fn Middle => @forall (fn Right => @forall (fn FirstForwardError => @forall (fn FirstBackwardError => @forall (fn SecondForwardError => @forall (fn SecondBackwardError => (Bridge (Left, Middle, FirstForwardError, FirstBackwardError), Bridge (Middle, Right, SecondForwardError, SecondBackwardError)) -> Bridge (Left, Right, #First FirstForwardError | #Second SecondForwardError, #First FirstBackwardError | #Second SecondBackwardError))))))))
 const compose = fn (first, second) => {
   .to_right = fn left => case first.to_right left of
     #Error error => #Error (#First error)

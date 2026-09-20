@@ -22,10 +22,12 @@ use crate::value::{
     RecursiveBindings, Resume, RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature,
     capture_env, child_env, contains_type_variables, declaration_env, equal, lookup,
     lookup_signature, opened_members, recursive_env, reusable_across_module_instances, show, tuple,
+    with_lookup,
 };
 use crate::value_capsule::ValueCapsule;
 
 mod bytecode;
+#[path = "effect_scope.rs"]
 mod effect_scope;
 pub use effect_scope::EffectScope;
 
@@ -205,16 +207,6 @@ pub struct ClosureApplication {
     pub(crate) creation_scope: Rc<EffectScope>,
 }
 
-impl ClosureApplication {
-    fn references_module(&self, module: &str) -> bool {
-        self.application.references_module(module)
-            || self
-                .creation_scope
-                .iter()
-                .any(|frame| frame.references_module(module))
-    }
-}
-
 pub(crate) const MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT: usize = 64;
 const MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT: usize = 32;
 const MODULE_RESULT_TEMPLATE_PROVENANCE_NODE_LIMIT: usize = 256;
@@ -331,10 +323,7 @@ impl ModuleResultTemplateInstance {
         self.module_instances
             .iter()
             .any(|instance| instance.references_module(module))
-            || self
-                .effect_scope
-                .iter()
-                .any(|frame| frame.references_module(module))
+            || self.effect_scope.references_module(module)
     }
 
     fn cacheable(&self) -> bool {
@@ -479,7 +468,7 @@ impl ModuleInstanceSite {
 struct EffectIdentity {
     module: String,
     source: ApplicationSite,
-    scope: EffectScope,
+    scope: Rc<EffectScope>,
     instances: ModuleInstanceScope,
     host: bool,
 }
@@ -488,10 +477,7 @@ impl EffectIdentity {
     fn references_module(&self, module: &str) -> bool {
         self.module == module
             || self.source.references_module(module)
-            || self
-                .scope
-                .iter()
-                .any(|frame| frame.references_module(module))
+            || self.scope.references_module(module)
             || self
                 .instances
                 .iter()
@@ -1208,7 +1194,7 @@ impl Context {
         let key = EffectIdentity {
             module: runtime.module.as_ref().clone(),
             source,
-            scope: runtime.effect_scope.as_ref().clone(),
+            scope: runtime.effect_scope.clone(),
             instances: runtime.module_instances.as_ref().clone(),
             host,
         };
@@ -1243,7 +1229,7 @@ impl Context {
         let occurrence = EffectIdentity {
             module: runtime.module.as_ref().clone(),
             source,
-            scope: runtime.effect_scope.as_ref().clone(),
+            scope: runtime.effect_scope.clone(),
             instances: runtime.module_instances.as_ref().clone(),
             host: false,
         };
@@ -1866,6 +1852,23 @@ fn recognition_argument_type(runtime: &Runtime, span: Span) -> Option<Value> {
         )
         .ok(),
     }
+}
+
+// Runtime argument evidence cannot be consumed without a residual trace. Test
+// that premise before looking up or inspecting an arbitrarily large value.
+fn residual_argument_type(
+    runtime: &Runtime,
+    environment: &Environment,
+    name: &str,
+) -> Option<Value> {
+    let trace = runtime.residual.as_ref()?;
+    with_lookup(environment, name, |value| {
+        let value = value?;
+        if !crate::hir::contains_runtime(value) {
+            return None;
+        }
+        trace.borrow().conservative_value_type(value)
+    })
 }
 
 fn runtime_value_type(value: Value) -> Option<Value> {
@@ -3235,15 +3238,7 @@ fn prepare_application(
         .expression_type(context, module_path.as_str(), argument)
         .map(|type_| substitute_signature(&type_, environment));
     let runtime_argument = match &loaded_module.arena.expressions[argument.0 as usize] {
-        Expression::Var { name, .. } => runtime
-            .load(module_path, argument, environment, name)
-            .filter(crate::hir::contains_runtime)
-            .and_then(|value| {
-                runtime
-                    .residual
-                    .as_ref()
-                    .and_then(|trace| trace.borrow().conservative_value_type(&value))
-            }),
+        Expression::Var { name, .. } => residual_argument_type(runtime, environment, name),
         _ => None,
     };
     let expected_argument = runtime_argument
@@ -6992,6 +6987,18 @@ mod select_type_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn absent_residual_trace_does_not_inspect_argument_bindings() {
+        let environment = crate::value::child_env(None);
+        // A lookup would panic on this live mutable borrow. Neither phase may
+        // inspect an argument for trace evidence when there is no trace.
+        let _borrow = environment.names.borrow_mut();
+        for phase in [super::Phase::Comptime, super::Phase::Runtime] {
+            let runtime = super::Runtime::new(phase, "demand-test.blot".into());
+            assert!(super::residual_argument_type(&runtime, &environment, "unused").is_none());
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -7053,7 +7060,7 @@ mod tests {
     fn shared_text_large_uncached_arguments_still_evaluate() {
         let text = "β🐱\u{feff}".repeat(COMPTIME_ARGUMENT_BYTE_LIMIT);
         let program = format!(
-            "let count :: @type.text -> @type.int\n\
+            "let count: @type.text -> @type.int\n\
              let count = fn text => @text.len text\n\
              let text = \"{text}\"\n\
              return (count text, count text)\n"

@@ -16,7 +16,7 @@ const Matrix2 = fn value => {
   .m11 = value;
 }
 
-const multiply :: @forall (fn Value => (Semiring Value, Matrix2 Value, Matrix2 Value) -> Matrix2 Value)
+const multiply: @forall (fn Value => (Semiring Value, Matrix2 Value, Matrix2 Value) -> Matrix2 Value)
 const multiply = fn (semiring, left, right) => {
   .m00 = semiring.add (
     semiring.multiply (left.m00, right.m00),
@@ -36,7 +36,7 @@ const multiply = fn (semiring, left, right) => {
   );
 }
 
-const identity :: @forall (fn Value => Semiring Value -> Matrix2 Value)
+const identity: @forall (fn Value => Semiring Value -> Matrix2 Value)
 const identity = fn semiring => {
   .m00 = semiring.one;
   .m01 = semiring.zero;

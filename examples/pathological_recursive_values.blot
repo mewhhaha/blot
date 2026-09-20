@@ -14,7 +14,7 @@ let rec total = fn values => case values of
   #Nil => 0
   #Cons node => node.0 + total node.1
 
-let sum_list :: Int -> Int
+let sum_list: Int -> Int
 let sum_list = fn count => total (build count)
 
 let rec build_even = fn count => do:
@@ -34,7 +34,7 @@ let rec total_odd = fn values => case values of
   #OddDone => 0
   #Odd node => node.0 + total_even node.1
 
-let mutual_sum :: Int -> Int
+let mutual_sum: Int -> Int
 let mutual_sum = fn count => total_even (build_even count)
 
 return {

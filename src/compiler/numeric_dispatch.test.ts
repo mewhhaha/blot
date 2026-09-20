@@ -94,7 +94,7 @@ test("chained F32 arithmetic retains the type of intermediate results", async ()
     await compiler.setOverlay(
       path,
       'open import "blot:prelude"\n' +
-        "const run :: (F32, F32) -> F32\n" +
+        "const run: (F32, F32) -> F32\n" +
         "const run = fn (x, y) => (x + y) * 2.0 / 4.0 - 0.5\n" +
         "return { .run = run; }\n",
     );

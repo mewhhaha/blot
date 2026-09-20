@@ -20,17 +20,26 @@ benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
-| `lexerStates`               |     125 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |     124 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      25 | worst-case island candidates allocated per token   |
 | `islandCount`               |      73 | one island for every grammar rule                  |
 | `islandStates`              |     435 |                                                    |
 | `islandTransitions`         |     453 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 678,600 | immutable device table                             |
-| `packedBytes`               | 527,584 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 673,380 | immutable device table                             |
+| `packedBytes`               | 524,101 | version-3 runtime section                          |
 | `scratch.summaries`         |      24 | summaries retained per scratch region              |
 | `rootLoopIsland`            |    null | no root loop proof in the current general plan     |
 | `parallelLongRegionIslands` |       7 | islands admitted to parallel long-region execution |
+
+Single-colon type annotations reuse the existing suite-colon terminal. Baba
+9.0.1 generation passes the version-3 general profile with all 73 rules as
+islands and no parser resolutions. Relative to the preceding double-colon
+grammar, lexer states fall from 125 to 124, dense-transition bytes from 678,600
+to 673,380, and packed bytes from 527,584 to 524,101. Island states/transitions,
+candidate multiplicity, contraction rounds, scratch summaries, and parallel
+long-region admission are unchanged. Historical spelling changes below describe
+their original grammar versions.
 
 Deep field and indexed rebinding add two islands, eight states, eight
 transitions, 22,728 dense-transition bytes, and 16,565 packed bytes. Every one
