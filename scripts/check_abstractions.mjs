@@ -45,6 +45,7 @@ const suites = [
   "src/node/versioned_schema_migrations.test.ts",
   "src/node/shared_service_contracts.test.ts",
   "src/node/stateful_processors.test.ts",
+  "src/node/reversible_protocols.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 

@@ -62,6 +62,7 @@ const abstractionExamples = [
   "staged_bounded_domains.blot",
   "shared_service_contracts.blot",
   "stateful_processors.blot",
+  "reversible_protocols.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

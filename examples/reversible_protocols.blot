@@ -1,0 +1,60 @@
+const Article = import "./lib/article_protocol.blot"
+
+const Result =
+  {
+    .reviewed = Article.Reviewed;
+    .review_restored = Article.Draft;
+    .published = Article.Published;
+    .receipt = Article.Receipt;
+    .restored = Article.Draft;
+    .edge_restored = Article.Draft;
+  }
+
+let run :: Result
+let run = do:
+  let draft =
+    #Draft {
+      .title = "Compiler notes";
+      .body = "rough";
+    }
+  let request =
+    {
+      .reviewer = "Ada";
+      .approved_body = "polished ✓";
+      .slug = "compiler-notes";
+    }
+
+  // The first step is independently useful; the same value also participates in
+  // the composed workflow below.
+  let (reviewed, _, review_undo) = Article.Review.forward (draft, request)
+  let review_restored = Article.Review.backward (reviewed, review_undo)
+
+  let (published, receipt, undo) = Article.Workflow.forward (draft, request)
+  let restored = Article.Workflow.backward (published, undo)
+
+  // Empty payloads and Unicode text do not alter the protocol relationship.
+  let edge_draft =
+    #Draft {
+      .title = "Δ";
+      .body = "";
+    }
+  let edge_request =
+    {
+      .reviewer = "Zoë";
+      .approved_body = "✓";
+      .slug = "δ";
+    }
+  let (edge_published, _, edge_undo) =
+    Article.Workflow.forward (edge_draft, edge_request)
+  let edge_restored = Article.Workflow.backward (edge_published, edge_undo)
+
+  return {
+    .reviewed;
+    .review_restored;
+    .published;
+    .receipt;
+    .restored;
+    .edge_restored;
+  }
+
+return { .default = run; }
