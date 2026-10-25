@@ -145,6 +145,7 @@ def build(args: argparse.Namespace, goose: str) -> None:
                    f"-sSTACK_SIZE={args.call_stack_size}", "-sSTACK_OVERFLOW_CHECK=2",
                    "-sASSERTIONS=1", "-sEXIT_RUNTIME=1", "-sENVIRONMENT=node,web,worker",
                    "-sERROR_ON_UNDEFINED_SYMBOLS=1",
+                   "--extern-pre-js", str(HERE / "host_paths.js.in"),
                    "--extern-post-js", str(HERE / "node_entry.js.in"), "-o", str(module)]
         headers = [Path(goose).parent / "include", Path(goose).parent.parent / "src" / "runtime"]
         for header_dir in headers:

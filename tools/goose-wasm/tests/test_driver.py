@@ -140,6 +140,118 @@ class Driver(unittest.TestCase):
         self.assertEqual(imported.returncode, 0, imported.stderr)
         self.assertEqual(imported.stdout, "loader ok\n")
 
+    def test_preloaded_files_resolve_beside_module_and_honor_locator(self):
+        folder = self.root / "preloaded program żółć"
+        folder.mkdir()
+        asset = folder / "source payload λ.txt"
+        asset.write_text("preloaded żółć", encoding="utf-8")
+        self.output = folder / "program λ.mjs"
+        self.source.write_text(
+            "import os;\n"
+            "fn main() {\n"
+            "    var bytes: u8[>..] = [];\n"
+            '    assert(read_file("/assets/message żółć.txt", bytes));\n'
+            "    print(bytes);\n"
+            "}\n", encoding="utf-8",
+        )
+        result = self.build(extra=("--preload-file", str(asset) + "@/assets/message żółć.txt"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data_file = self.output.with_suffix(".data")
+        self.assertTrue(data_file.is_file())
+        elsewhere = self.root / "unrelated working directory"
+        elsewhere.mkdir()
+        direct = subprocess.run(
+            [NODE, str(self.output)], cwd=elsewhere,
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        self.assertEqual(direct.returncode, 0, direct.stderr)
+        self.assertEqual(direct.stdout, "preloaded żółć\n")
+
+        module_url = json.dumps(self.output.as_uri())
+        code = (
+            "const {default: create} = await import(" + module_url + ");\n"
+            "const lines = [];\n"
+            "await create({print: (line) => lines.push(line)});\n"
+            'if (JSON.stringify(lines) !== JSON.stringify(["preloaded żółć"])) {\n'
+            '    throw new Error("preloaded factory output mismatch: " + JSON.stringify(lines));\n'
+            "}\n"
+            'process.stdout.write("preload import ok\\n");\n'
+        )
+        imported = subprocess.run(
+            [NODE, "--input-type=module", "-"], cwd=elsewhere, input=code,
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        self.assertEqual(imported.returncode, 0, imported.stderr)
+        self.assertEqual(imported.stdout, "preload import ok\n")
+
+        # With the default .data location gone, success requires honoring the
+        # caller's locator rather than replacing it with the built-in locator.
+        relocated = elsewhere / "custom payload λ.bin"
+        data_file.rename(relocated)
+        code = (
+            'import {fileURLToPath} from "node:url";\n'
+            "const moduleUrl = " + module_url + ";\n"
+            "const {default: create} = await import(moduleUrl);\n"
+            "const lines = [];\n"
+            "let locatedData = false;\n"
+            "await create({\n"
+            "    print: (line) => lines.push(line),\n"
+            "    locateFile: (name) => {\n"
+            '        if (name.endsWith(".data")) {\n'
+            "            locatedData = true;\n"
+            "            return " + json.dumps(str(relocated)) + ";\n"
+            "        }\n"
+            "        return fileURLToPath(new URL(name, moduleUrl));\n"
+            "    },\n"
+            "});\n"
+            'if (!locatedData || JSON.stringify(lines) !== JSON.stringify(["preloaded żółć"])) {\n'
+            '    throw new Error("custom locator was not honored");\n'
+            "}\n"
+            'process.stdout.write("custom locator ok\\n");\n'
+        )
+        custom = subprocess.run(
+            [NODE, "--input-type=module", "-"], cwd=elsewhere, input=code,
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        self.assertEqual(custom.returncode, 0, custom.stderr)
+        self.assertEqual(custom.stdout, "custom locator ok\n")
+
+    def test_custom_include_and_saved_c_are_independently_buildable(self):
+        include_dir = self.root / "custom headers λ"
+        include_dir.mkdir()
+        header = include_dir / "answer.h"
+        header.write_text(
+            '#include "constant.h"\n'
+            "int64_t custom_answer(void) { return ANSWER; }\n", encoding="utf-8",
+        )
+        (include_dir / "constant.h").write_text("#define ANSWER 42\n", encoding="utf-8")
+        self.source.write_text(
+            "extern fn custom_answer() -> i64;\n"
+            "fn main() { print(custom_answer()); }\n", encoding="utf-8",
+        )
+        self.output = self.root / "module output" / "answer.mjs"
+        saved = self.root / "saved C elsewhere" / "answer.c"
+        result = self.build(extra=("--include", str(header), "--emit-c", str(saved)))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(saved.is_file())
+        # The driver's temporary compilation directory no longer exists.
+        # Compiling the saved file exercises its own relative header paths.
+        rebuilt = self.root / "rebuilt.cjs"
+        compiled = subprocess.run(
+            [EMCC, str(saved), "-O0", "-sMEMORY64=2", "-sALLOW_MEMORY_GROWTH=1",
+             "-sEXIT_RUNTIME=1", "-sENVIRONMENT=node", "-o", str(rebuilt)],
+            cwd=self.root, capture_output=True, text=True, timeout=180, check=False,
+        )
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        for executable in (self.output, rebuilt):
+            with self.subTest(executable=executable):
+                ran = subprocess.run(
+                    [NODE, str(executable)], cwd=include_dir,
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertEqual(ran.stdout, "42\n")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
