@@ -1,0 +1,23 @@
+// Emscripten's generated factory is a hoisted function declaration. Wrap it
+// before the default export is evaluated. Its preload loader runs before
+// --pre-js, so asset resolution must already be part of the factory argument.
+const instantiateGooseModule = createGooseModule;
+createGooseModule = async function (options = {}) {
+  if (typeof options.locateFile === "undefined") {
+    let fileURLToPath;
+    if (
+      typeof process !== "undefined" &&
+      process.versions &&
+      process.versions.node &&
+      process.type !== "renderer"
+    ) {
+      ({ fileURLToPath } = await import("node:url"));
+    }
+    options.locateFile = (name) => {
+      const location = new URL(name, import.meta.url);
+      if (fileURLToPath) return fileURLToPath(location);
+      return location.href;
+    };
+  }
+  return instantiateGooseModule(options);
+};

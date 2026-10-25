@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/aardappel/goose.git",
+  "revision": "2e2bedef5b980bf013cac5aaa0095bfea64e5569",
+  "emscripten": "6.0.13",
+  "emsdk_revision": "d7b4130688bfa348392b921ab04015aa15c4f154",
+  "patch": "patches/0001-webassembly-target.patch"
+}

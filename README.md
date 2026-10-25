@@ -59,6 +59,14 @@ development. [Release qualification](docs/release-qualification.md) records
 exact-commit validation rather than treating an uploaded artifact as a
 successful release.
 
+## Goose programs on WebAssembly
+
+The independent [Goose/Wasm toolchain](tools/goose-wasm/README.md) builds the
+complete pinned Goose compiler with a checked WebAssembly runtime. It compiles
+`.goose` programs to `.wasm` plus an executable/importable ES module, with
+native-output comparisons, capacity-boundary tests, and a dedicated CI job. Its
+README covers setup, the supported target profile, C interop, and memory limits.
+
 ## Direct definitions should stay viable
 
 Blot's performance goal is not to make programmers translate the clear version

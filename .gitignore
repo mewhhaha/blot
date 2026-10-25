@@ -10,3 +10,5 @@ dist/
 **/.blot/cache/
 node_modules/
 .pnp.cjs
+/build/
+tools/goose-wasm/**/__pycache__/
