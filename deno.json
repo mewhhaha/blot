@@ -30,6 +30,7 @@
     ".*",
     "case-studies/engine/desktop.ts",
     "compiler/target",
+    "build",
     "dist",
     "experiments/rust-middle/target",
     "node_modules",

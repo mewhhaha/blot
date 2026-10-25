@@ -23,6 +23,15 @@ consumes them. Baba's existing frontend is reused; there is no alternate
 lexer/parser or host semantic implementation. Feature tests and an additive
 execution workflow check this experiment without weakening any production gate.
 
+## Independent Goose toolchain
+
+`tools/goose-wasm/` compiles the separate Goose language from a pinned upstream
+compiler and target patch. Its C++ frontend and Emscripten output belong to that
+toolchain's documented target contract. They do not consume or produce Blot AST,
+Runtime HIR, compiler certificates, package capsules, or the Blot Core Wasm ABI.
+No Blot compiler entry point delegates semantics to Goose. Its own qualification
+workflow checks `.goose` source and emitted Wasm.
+
 ## 1. Whole-compiler judgment
 
 Let:
